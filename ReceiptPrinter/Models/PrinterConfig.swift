@@ -24,17 +24,26 @@ struct AppSettings: Codable {
     var hasCompletedSetup: Bool = false
     var gmailClientID: String = ""
     var gmailClientSecret: String = ""
-    var gmailRedirectURI: String = "com.receiptprinter:/oauth2redirect"
+    var gmailRedirectURI: String = GmailOAuthConfig.defaultRedirectURI
     var gmailSyncEnabled: Bool = false
     var gmailSyncInterval: TimeInterval = 300
-    var gmailSearchQuery: String = "is:unread newer_than:7d"
+    var gmailSearchQuery: String = ""
 
     private static let key = "ReceiptPrinter.AppSettings"
 
     static func load() -> AppSettings {
         guard let data = UserDefaults.standard.data(forKey: key),
-              let settings = try? JSONDecoder().decode(AppSettings.self, from: data) else {
+              var settings = try? JSONDecoder().decode(AppSettings.self, from: data) else {
             return AppSettings()
+        }
+        let migrated = GmailOAuthConfig.normalizedRedirectURI(settings.gmailRedirectURI)
+        if migrated != settings.gmailRedirectURI {
+            settings.gmailRedirectURI = migrated
+            settings.save()
+        }
+        if ["is:unread newer_than:7d", "newer_than:30d"].contains(settings.gmailSearchQuery) {
+            settings.gmailSearchQuery = ""
+            settings.save()
         }
         return settings
     }

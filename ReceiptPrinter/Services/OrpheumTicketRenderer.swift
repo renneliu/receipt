@@ -4,14 +4,6 @@ import Foundation
 enum OrpheumTicketRenderer {
     static func renderESCPOS(data: [String: String], config: PrinterConfig) -> Data {
         let builder = ESCPOSBuilder(config: config).initialize()
-        // #region agent log
-        DebugLog.write(
-            hypothesisId: "F",
-            location: "OrpheumTicketRenderer.renderESCPOS",
-            message: "dedicated renderer start",
-            data: ["venue": data["venueName"] ?? "", "movie": data["movieTitle"] ?? ""]
-        )
-        // #endregion
         renderTicket(builder, data: data, includeBarcode: false)
         builder.align(.center).text("--------------------------").newline()
         renderTicket(builder, data: data, includeBarcode: true)
@@ -42,14 +34,6 @@ enum OrpheumTicketRenderer {
             .newline()
             .bold(false)
             .applyTextSize(.normal)
-        // #region agent log
-        DebugLog.write(
-            hypothesisId: "G",
-            location: "OrpheumTicketRenderer.renderTicket",
-            message: "movie title size",
-            data: ["title": String(movie.prefix(40)), "size": "double", "gsMode": "0x11"]
-        )
-        // #endregion
 
         builder.align(.left)
             .text(when)

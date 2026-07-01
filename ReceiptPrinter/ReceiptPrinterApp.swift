@@ -9,7 +9,7 @@ struct ReceiptPrinterApp: App {
         WindowGroup {
             MainView()
                 .environmentObject(appState)
-                .frame(minWidth: 1100, minHeight: 700)
+                .frame(minWidth: 1200, minHeight: 720)
                 .onAppear {
                     appState.bootstrap()
                 }
@@ -44,6 +44,13 @@ final class AppState: ObservableObject {
         gmailSync = GmailSyncService(auth: gmailAuth)
         gmailSync.rulesProvider = { [weak self] in self?.cinemaRules ?? [] }
         gmailSync.settingsProvider = { [weak self] in self?.settings ?? AppSettings.load() }
+        gmailSync.templatesProvider = { [weak self] in self?.templates ?? [] }
+        gmailSync.hasOrderForMessageId = { [weak self] messageId in
+            self?.orderStore.hasOrder(messageId: messageId) ?? false
+        }
+        gmailSync.hasProcessedMessageId = { [weak self] messageId in
+            self?.orderStore.hasProcessed(messageId: messageId) ?? false
+        }
         gmailSync.onNewOrder = { [weak self] order in
             Task { @MainActor in
                 self?.handleNewOrder(order)
@@ -122,15 +129,30 @@ final class AppState: ObservableObject {
             lastError = "找不到关联模板"
             return
         }
-        var data = order.fields
-        for (key, value) in order.manualFields {
-            data[key] = value
-        }
+        let data = OrderPrintData.merged(for: order, templates: templates)
         await printTemplate(template, data: data)
         var updated = order
         updated.status = .printed
         updated.printedAt = Date()
         orderStore.save(updated)
+        reloadOrders()
+    }
+
+    func reprintOrder(order: PendingOrder) async {
+        guard let template = templates.first(where: { $0.id == order.templateId }) else {
+            lastError = "找不到关联模板"
+            return
+        }
+        let data = OrderPrintData.merged(for: order, templates: templates)
+        await printTemplate(template, data: data)
+        var updated = order
+        updated.printedAt = Date()
+        orderStore.save(updated)
+        reloadOrders()
+    }
+
+    func saveOrderEdits(_ order: PendingOrder) {
+        orderStore.save(order)
         reloadOrders()
     }
 

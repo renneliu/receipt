@@ -21,7 +21,7 @@ enum DebugLog {
             handle.write((line + "\n").data(using: .utf8)!)
             try? handle.close()
         } else {
-            try? (line + "\n").write(to: url, atomically: true, encoding: .utf8)
+            try? (line + "\n").write(to: url, atomically: false, encoding: .utf8)
         }
         // #endregion
     }

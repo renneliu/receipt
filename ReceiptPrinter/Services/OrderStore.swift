@@ -72,6 +72,10 @@ final class OrderStore {
         markProcessed(order.messageId)
     }
 
+    func hasOrder(messageId: String) -> Bool {
+        loadAll().contains { $0.messageId == messageId }
+    }
+
     func hasProcessed(messageId: String) -> Bool {
         processedMessageIds.contains(messageId)
     }

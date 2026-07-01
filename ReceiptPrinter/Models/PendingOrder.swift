@@ -27,10 +27,11 @@ struct PendingOrder: Codable, Identifiable, Equatable, Hashable {
     var missingFields: [String] = []
     var manualFields: [String: String] = [:]
     var emailSnippet: String = ""
+    var emailPlainBody: String = ""
     var status: OrderStatus = .pending
     var printedAt: Date?
 
     var displayTitle: String {
-        fields["movieName"] ?? subject
+        fields["movieTitle"] ?? fields["movieName"] ?? subject
     }
 }

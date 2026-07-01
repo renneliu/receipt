@@ -45,6 +45,17 @@ struct GmailSettingsView: View {
                 Text(appState.gmailSyncStatus)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                Text("额外过滤：\(appState.settings.gmailSearchQuery.isEmpty ? "无（不限制时间）" : appState.settings.gmailSearchQuery)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                if let preview = previewSearchQuery {
+                    Text("实际 Gmail 搜索：\(preview)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
                 Button("立即同步") {
                     Task { await appState.syncGmailNow() }
                 }
@@ -52,13 +63,28 @@ struct GmailSettingsView: View {
             }
 
             Section("配置说明") {
-                Text("请先在「设置」中填写 Google Cloud OAuth Client ID 和 Secret，并启用 Gmail API。测试阶段请将你的 Google 账号添加为 OAuth 测试用户。")
+                Text(GmailOAuthConfig.googleConsoleSteps)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                Text("当前 Redirect URI：\(appState.settings.gmailRedirectURI)")
+                    .font(.caption)
+                    .textSelection(.enabled)
+                Text(GmailOAuthConfig.testUserAccessDeniedMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
             }
         }
         .padding()
         .navigationTitle("Gmail")
+    }
+
+    private var previewSearchQuery: String? {
+        switch GmailSearchQueryBuilder.build(rules: appState.cinemaRules, baseQuery: appState.settings.gmailSearchQuery) {
+        case .success(let query, _): return query
+        case .failure: return nil
+        }
     }
 
     private func connect() {

@@ -7,6 +7,8 @@ enum GmailAuthError: LocalizedError {
     case cancelled
     case tokenExchangeFailed(String)
     case noRefreshToken
+    case redirectURIMismatch(expected: String)
+    case testUserAccessDenied
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +16,16 @@ enum GmailAuthError: LocalizedError {
         case .cancelled: return "授权已取消"
         case .tokenExchangeFailed(let msg): return "获取 Token 失败: \(msg)"
         case .noRefreshToken: return "无 Refresh Token，请重新授权"
+        case .testUserAccessDenied: return GmailOAuthConfig.testUserAccessDeniedMessage
+        case .redirectURIMismatch(let expected):
+            return """
+            Google 报错 redirect_uri_mismatch：重定向 URI 与 OAuth 客户端类型不匹配。
+
+            本应用使用回环地址：\(expected)
+            请在 Google Cloud 创建「桌面应用」OAuth 客户端（Web 应用只接受 http/https，不能填自定义 scheme）。
+
+            \(GmailOAuthConfig.googleConsoleSteps)
+            """
         }
     }
 }
@@ -41,21 +53,96 @@ final class GmailAuthService: NSObject, ObservableObject {
 
     func signIn(clientID: String, clientSecret: String, redirectURI: String) async throws {
         guard !clientID.isEmpty else { throw GmailAuthError.notConfigured }
+        let normalizedRedirect = GmailOAuthConfig.normalizedRedirectURI(redirectURI)
+        let callbackScheme = GmailOAuthConfig.callbackURLScheme(for: normalizedRedirect)
         let scope = "https://www.googleapis.com/auth/gmail.readonly"
         let authURL = URL(string:
-            "https://accounts.google.com/o/oauth2/v2/auth?client_id=\(clientID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? clientID)&redirect_uri=\(redirectURI.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? redirectURI)&response_type=code&scope=\(scope.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? scope)&access_type=offline&prompt=consent"
+            "https://accounts.google.com/o/oauth2/v2/auth?client_id=\(clientID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? clientID)&redirect_uri=\(normalizedRedirect.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? normalizedRedirect)&response_type=code&scope=\(scope.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? scope)&access_type=offline&prompt=consent"
         )!
 
-        let code = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-            let session = ASWebAuthenticationSession(url: authURL, callbackURLScheme: URL(string: redirectURI)?.scheme) { [weak self] callbackURL, error in
+        let code: String
+        if GmailOAuthConfig.isLoopbackRedirect(normalizedRedirect) {
+            code = try await signInWithLoopbackServer(
+                authURL: authURL,
+                port: GmailOAuthConfig.loopbackPort(from: normalizedRedirect),
+                normalizedRedirect: normalizedRedirect
+            )
+        } else {
+            code = try await signInWithWebSession(
+                authURL: authURL,
+                callbackScheme: callbackScheme,
+                normalizedRedirect: normalizedRedirect
+            )
+        }
+
+        try await exchangeCode(code, clientID: clientID, clientSecret: clientSecret, redirectURI: normalizedRedirect)
+    }
+
+    private func signInWithLoopbackServer(authURL: URL, port: UInt16, normalizedRedirect: String) async throws -> String {
+        let server = OAuthLoopbackServer(port: port)
+        return try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                try await server.waitForAuthorizationCode()
+            }
+            group.addTask { @MainActor in
+                try await self.presentWebAuthSession(
+                    authURL: authURL,
+                    callbackScheme: GmailOAuthConfig.callbackURLScheme(for: normalizedRedirect),
+                    normalizedRedirect: normalizedRedirect
+                )
+            }
+            defer {
+                group.cancelAll()
+                server.stop()
+                authSession?.cancel()
+            }
+            guard let code = try await group.next() else {
+                throw GmailAuthError.cancelled
+            }
+            return code
+        }
+    }
+
+    private func signInWithWebSession(authURL: URL, callbackScheme: String, normalizedRedirect: String) async throws -> String {
+        try await presentWebAuthSession(
+            authURL: authURL,
+            callbackScheme: callbackScheme,
+            normalizedRedirect: normalizedRedirect
+        )
+    }
+
+    private func presentWebAuthSession(authURL: URL, callbackScheme: String, normalizedRedirect: String) async throws -> String {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            let session = ASWebAuthenticationSession(url: authURL, callbackURLScheme: callbackScheme) { [weak self] callbackURL, error in
                 self?.authSession = nil
                 if let error {
-                    continuation.resume(throwing: error)
+                    let desc = error.localizedDescription
+                    if desc.localizedCaseInsensitiveContains("redirect_uri_mismatch")
+                        || desc.localizedCaseInsensitiveContains("invalid request") {
+                        continuation.resume(throwing: GmailAuthError.redirectURIMismatch(expected: normalizedRedirect))
+                    } else if (error as NSError).domain == ASWebAuthenticationSessionErrorDomain,
+                              (error as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
+                        continuation.resume(throwing: GmailAuthError.cancelled)
+                    } else {
+                        continuation.resume(throwing: error)
+                    }
                     return
                 }
                 guard let callbackURL,
                       let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
                       let code = components.queryItems?.first(where: { $0.name == "code" })?.value else {
+                    if let callbackURL,
+                       let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
+                       let oauthError = components.queryItems?.first(where: { $0.name == "error" })?.value {
+                        if oauthError == "redirect_uri_mismatch" {
+                            continuation.resume(throwing: GmailAuthError.redirectURIMismatch(expected: normalizedRedirect))
+                            return
+                        }
+                        if oauthError == "access_denied" {
+                            continuation.resume(throwing: GmailAuthError.testUserAccessDenied)
+                            return
+                        }
+                    }
                     continuation.resume(throwing: GmailAuthError.cancelled)
                     return
                 }
@@ -63,10 +150,10 @@ final class GmailAuthService: NSObject, ObservableObject {
             }
             session.presentationContextProvider = self
             self.authSession = session
-            session.start()
+            if !session.start() {
+                continuation.resume(throwing: GmailAuthError.cancelled)
+            }
         }
-
-        try await exchangeCode(code, clientID: clientID, clientSecret: clientSecret, redirectURI: redirectURI)
     }
 
     func signOut() {

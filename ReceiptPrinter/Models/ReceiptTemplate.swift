@@ -5,6 +5,8 @@ struct ReceiptTemplate: Codable, Identifiable, Equatable {
     var name: String
     var paperWidth: Int = 80
     var blocks: [TemplateBlock] = []
+    /// Default field values for preview / test print (e.g. movie ticket form data).
+    var defaultData: [String: String] = [:]
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
 
@@ -13,12 +15,18 @@ struct ReceiptTemplate: Codable, Identifiable, Equatable {
     }
 
     func placeholders() -> [String] {
+        allPlaceholderKeys().sorted()
+    }
+
+    func allPlaceholderKeys() -> [String] {
         var keys = Set<String>()
         for block in blocks {
             keys.formUnion(extractPlaceholders(from: block.content))
+            keys.formUnion(extractPlaceholders(from: block.rightContent))
+            keys.formUnion(extractPlaceholders(from: block.rightHighlight))
             if let ds = block.dataSource { keys.insert(ds) }
         }
-        return keys.sorted()
+        return Array(keys)
     }
 
     private func extractPlaceholders(from text: String) -> [String] {

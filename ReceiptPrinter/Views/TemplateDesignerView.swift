@@ -7,19 +7,35 @@ struct TemplateDesignerView: View {
     @State private var previewDataJSON: String = ""
     @State private var previewImage: NSImage?
     @State private var showPreview = false
+    @State private var movieTicket = MovieTicketData.sample
+    @State private var showAdvancedJSON = false
+    @State private var inspectorTab: DesignerInspectorTab = .ticket
+    @State private var previewUpdateTask: Task<Void, Never>?
+    private enum DesignerInspectorTab: String, CaseIterable, Identifiable {
+        case ticket = "票券内容"
+        case block = "块格式"
+        var id: String { rawValue }
+    }
 
     var body: some View {
-        HSplitView {
+        HStack(alignment: .top, spacing: 0) {
             toolbox
+                .frame(width: 160)
+            Divider()
             canvas
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
             inspector
+                .frame(width: 420)
+                .frame(maxHeight: .infinity)
         }
         .navigationTitle("模板设计: \(template.name)")
         .toolbar {
             ToolbarItemGroup {
                 TextField("模板名称", text: $template.name)
+                    .textFieldStyle(.roundedBorder)
                     .frame(width: 180)
-                Button("保存") { appState.saveTemplate(template) }
+                Button("保存") { saveTemplate() }
                 Button("预览") { updatePreview(); showPreview = true }
                 Button("测试打印") { Task { await testPrint() } }
             }
@@ -28,13 +44,25 @@ struct TemplateDesignerView: View {
             PrintPreviewView(template: template, previewData: parsedPreviewData())
         }
         .onAppear {
-            if previewDataJSON.isEmpty {
-                previewDataJSON = defaultPreviewJSON()
-            }
+            loadPreviewData()
             updatePreview()
         }
+        .onDisappear {
+            previewUpdateTask?.cancel()
+        }
         .onChange(of: template.blocks) { _, _ in updatePreview() }
-        .onChange(of: previewDataJSON) { _, _ in updatePreview() }
+        .onChange(of: previewDataJSON) { _, _ in
+            if !isMovieTicketTemplate { updatePreview() }
+        }
+        .onChange(of: selectedBlockID) { _, id in
+            if id != nil, isMovieTicketTemplate {
+                inspectorTab = .block
+            }
+        }
+    }
+
+    private var isMovieTicketTemplate: Bool {
+        MovieTicketData.isMovieTicketTemplate(template)
     }
 
     private var toolbox: some View {
@@ -78,20 +106,55 @@ struct TemplateDesignerView: View {
 
     private var inspector: some View {
         Form {
-            if let idx = template.blocks.firstIndex(where: { $0.id == selectedBlockID }) {
-                blockEditor(template.blocks[idx], index: idx)
-            } else {
-                Text("选择一个块进行编辑")
-                    .foregroundStyle(.secondary)
+            if isMovieTicketTemplate {
+                Picker("编辑", selection: $inspectorTab) {
+                    ForEach(DesignerInspectorTab.allCases) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
             }
-            Section("预览数据 JSON") {
-                TextEditor(text: $previewDataJSON)
-                    .frame(minHeight: 100)
-                    .font(.system(.caption, design: .monospaced))
-                Button("刷新预览") { updatePreview() }
+
+            if !isMovieTicketTemplate || inspectorTab == .ticket {
+                if isMovieTicketTemplate {
+                    MovieTicketDataEditorView(
+                        data: $movieTicket,
+                        templateId: template.id,
+                        onFieldEdit: schedulePreviewUpdate
+                    )
+                }
+
+                if isMovieTicketTemplate {
+                    Toggle("显示高级 JSON", isOn: $showAdvancedJSON)
+                }
+
+                if !isMovieTicketTemplate || showAdvancedJSON {
+                    Section(isMovieTicketTemplate ? "高级预览数据 JSON" : "预览数据 JSON") {
+                        TextEditor(text: $previewDataJSON)
+                            .frame(minHeight: 100)
+                            .font(.system(.caption, design: .monospaced))
+                            .disabled(isMovieTicketTemplate)
+                        if isMovieTicketTemplate {
+                            Text("电影票内容请在上方表单编辑，JSON 由系统自动生成")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
+
+            if !isMovieTicketTemplate || inspectorTab == .block {
+                if let idx = template.blocks.firstIndex(where: { $0.id == selectedBlockID }) {
+                    blockEditor(template.blocks[idx], index: idx)
+                } else {
+                    Text(isMovieTicketTemplate ? "在左侧列表选择一个块以调整排版" : "选择一个块进行编辑")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Button("刷新预览") { refreshPreviewJSON(); updatePreview() }
         }
-        .frame(minWidth: 260, idealWidth: 300)
+        .formStyle(.grouped)
     }
 
     @ViewBuilder
@@ -321,6 +384,9 @@ struct TemplateDesignerView: View {
     }
 
     private func parsedPreviewData() -> [String: String] {
+        if isMovieTicketTemplate {
+            return movieTicket.renderedDictionary()
+        }
         guard let data = previewDataJSON.data(using: .utf8),
               let dict = try? JSONDecoder().decode([String: String].self, from: data) else {
             return defaultPreviewData()
@@ -328,9 +394,52 @@ struct TemplateDesignerView: View {
         return dict
     }
 
+    private func loadPreviewData() {
+        if isMovieTicketTemplate {
+            if !template.defaultData.isEmpty {
+                movieTicket = MovieTicketData.from(dictionary: template.defaultData)
+            } else {
+                movieTicket = MovieTicketData.from(dictionary: defaultPreviewData())
+            }
+            refreshPreviewJSON()
+            return
+        }
+        if previewDataJSON.isEmpty {
+            previewDataJSON = defaultPreviewJSON()
+        }
+    }
+
+    private func refreshPreviewJSON() {
+        guard isMovieTicketTemplate else { return }
+        let rendered = movieTicket.renderedDictionary()
+        if let data = try? JSONEncoder().encode(rendered),
+           let str = String(data: data, encoding: .utf8) {
+            previewDataJSON = prettyJSON(str) ?? str
+        }
+    }
+
+    private func schedulePreviewUpdate() {
+        previewUpdateTask?.cancel()
+        previewUpdateTask = Task {
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                if showAdvancedJSON { refreshPreviewJSON() }
+                updatePreview()
+            }
+        }
+    }
+
+    private func saveTemplate() {
+        if isMovieTicketTemplate {
+            template.defaultData = movieTicket.storageDictionary()
+        }
+        appState.saveTemplate(template)
+    }
+
     private func defaultPreviewData() -> [String: String] {
-        if template.name.contains("Orpheum") {
-            return SampleTemplates.previewDataMovieTicket
+        if isMovieTicketTemplate {
+            return MovieTicketData.sample.renderedDictionary()
         }
         return SampleTemplates.previewDataOrder
     }
@@ -360,7 +469,9 @@ struct TemplateDesignerView: View {
     }
 
     private func testPrint() async {
-        appState.saveTemplate(template)
+        saveTemplate()
+        refreshPreviewJSON()
+        updatePreview()
         await appState.printTemplate(template, data: parsedPreviewData())
     }
 }

@@ -143,16 +143,6 @@ enum SampleTemplates {
     }
 
     static var previewDataMovieTicket: [String: String] {
-        [
-            "venueName": "Orpheum",
-            "hallNumber": "4",
-            "movieTitle": "Dunkirk 70mm",
-            "showDateTime": "Sun Jun 28, 2026 06:00 PM Until 7:57 PM",
-            "ticketType": "Adult",
-            "ticketPrice": "$28.00",
-            "ticketCode": "DEBI 00687743/001",
-            "barcode": "00687743001",
-            "barcodeLabel": "* 0 0 6 8 7 7 4 3 / 0 0 1 *"
-        ]
+        MovieTicketData.sample.renderedDictionary()
     }
 }

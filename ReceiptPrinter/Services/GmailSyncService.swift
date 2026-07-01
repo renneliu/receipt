@@ -38,9 +38,11 @@ final class GmailSyncService {
     var onStatusChange: ((String) -> Void)?
     var rulesProvider: (() -> [CinemaRule])?
     var settingsProvider: (() -> AppSettings)?
+    var templatesProvider: (() -> [ReceiptTemplate])?
+    var hasOrderForMessageId: ((String) -> Bool)?
+    var hasProcessedMessageId: ((String) -> Bool)?
 
     private let auth: GmailAuthService
-    private let orderStore = OrderStore()
     private var timer: Timer?
     private var isSyncing = false
 
@@ -78,14 +80,73 @@ final class GmailSyncService {
 
         do {
             let token = try await auth.validAccessToken(clientID: settings.gmailClientID, clientSecret: settings.gmailClientSecret)
-            let messages = try await fetchMessageList(token: token, query: settings.gmailSearchQuery)
+            let enabledRules = rules.filter(\.enabled)
+            let buildResult = GmailSearchQueryBuilder.build(rules: rules, baseQuery: settings.gmailSearchQuery)
+            guard case .success(let searchQuery, let usedRuleCriteria) = buildResult else {
+                if case .failure(let error) = buildResult {
+                    onStatusChange?(error.localizedDescription)
+                }
+                // #region agent log
+                DebugLog.write(
+                    hypothesisId: "S5",
+                    location: "GmailSyncService.syncNow",
+                    message: "query build failed",
+                    data: [
+                        "enabledRuleCount": String(enabledRules.count),
+                        "baseQuery": settings.gmailSearchQuery
+                    ]
+                )
+                // #endregion
+                return
+            }
+            let messages = try await fetchMessageList(token: token, query: searchQuery)
+            // #region agent log
+            DebugLog.write(
+                hypothesisId: "S1",
+                location: "GmailSyncService.syncNow",
+                message: "fetched message list",
+                data: [
+                    "searchQuery": searchQuery,
+                    "baseQuery": settings.gmailSearchQuery,
+                    "usedRuleCriteria": usedRuleCriteria ? "1" : "0",
+                    "messageCount": String(messages.count),
+                    "ruleCount": String(rules.count),
+                    "enabledRuleCount": String(enabledRules.count)
+                ]
+            )
+            // #endregion
             var count = 0
+            var skippedProcessed = 0
+            var skippedNoRule = 0
             for summary in messages {
-                if orderStore.hasProcessed(messageId: summary.id) { continue }
+                if hasOrderForMessageId?(summary.id) == true {
+                    skippedProcessed += 1
+                    continue
+                }
                 guard let detail = try await fetchMessage(token: token, id: summary.id) else { continue }
                 let parsed = parseMessage(detail)
-                guard let rule = rules.first(where: { $0.enabled && $0.matchRules.matches(sender: parsed.sender, subject: parsed.subject, body: parsed.plainBody) }) else { continue }
-                let (fields, missing) = EmailParserService.extractFields(rule: rule, plainText: parsed.plainBody, html: parsed.htmlBody)
+                guard let rule = enabledRules.first(where: { $0.matchRules.matches(sender: parsed.sender, subject: parsed.subject, body: parsed.plainBody) }) else {
+                    skippedNoRule += 1
+                    // #region agent log
+                    DebugLog.write(
+                        hypothesisId: "S2",
+                        location: "GmailSyncService.syncNow",
+                        message: "no rule matched",
+                        data: [
+                            "subject": String(parsed.subject.prefix(80)),
+                            "sender": String(parsed.sender.prefix(80))
+                        ]
+                    )
+                    // #endregion
+                    continue
+                }
+                let (fields, missing) = extractOrderFields(
+                    rule: rule,
+                    sender: parsed.sender,
+                    subject: parsed.subject,
+                    plainText: parsed.plainBody,
+                    html: parsed.htmlBody
+                )
                 let order = PendingOrder(
                     messageId: summary.id,
                     ruleId: rule.id,
@@ -98,15 +159,91 @@ final class GmailSyncService {
                     fields: fields,
                     missingFields: missing,
                     emailSnippet: parsed.snippet,
+                    emailPlainBody: parsed.plainBody,
                     status: .pending
                 )
                 onNewOrder?(order)
                 count += 1
             }
-            onStatusChange?("上次同步: \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium))，新增 \(count) 条")
+            // #region agent log
+            DebugLog.write(
+                hypothesisId: "S3",
+                location: "GmailSyncService.syncNow",
+                message: "sync finished",
+                data: [
+                    "newOrders": String(count),
+                    "skippedProcessed": String(skippedProcessed),
+                    "skippedNoRule": String(skippedNoRule)
+                ]
+            )
+            // #endregion
+            if messages.isEmpty {
+                if usedRuleCriteria {
+                    onStatusChange?("未找到匹配影院规则的邮件。搜索: \(searchQuery)")
+                } else {
+                    onStatusChange?("未找到邮件（搜索: \(searchQuery)）。可扩大时间范围或完善规则中的发件人/主题。")
+                }
+            } else if enabledRules.isEmpty {
+                onStatusChange?("获取 \(messages.count) 封邮件，但没有启用的影院规则。请先在「影院规则」添加并保存。")
+            } else {
+                onStatusChange?("上次同步: \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium))，获取 \(messages.count) 封，新增 \(count) 条")
+            }
         } catch {
-            onStatusChange?("同步失败: \(error.localizedDescription)")
+            // #region agent log
+            DebugLog.write(
+                hypothesisId: "S4",
+                location: "GmailSyncService.syncNow",
+                message: "sync error",
+                data: ["error": String(error.localizedDescription.prefix(200))]
+            )
+            // #endregion
+            onStatusChange?("同步失败: \(GmailAPIErrorHelper.userMessage(for: error))")
         }
+    }
+
+    private func extractOrderFields(
+        rule: CinemaRule,
+        sender: String,
+        subject: String,
+        plainText: String,
+        html: String
+    ) -> (fields: [String: String], missing: [String]) {
+        let templates = templatesProvider?() ?? []
+        let template = templates.first { $0.id == rule.templateId }
+        let useOrpheum = OrpheumEmailParser.isOrpheumEmail(sender: sender, subject: subject, body: plainText)
+            || (template.map { MovieTicketData.isMovieTicketTemplate($0) } ?? false)
+
+        if useOrpheum, let parsed = OrpheumEmailParser.parse(plainText: plainText, html: html, subject: subject) {
+            // #region agent log
+            DebugLog.write(
+                hypothesisId: "P3",
+                location: "GmailSyncService.extractOrderFields",
+                message: "orpheum parse ok",
+                data: [
+                    "movieTitle": String((parsed["movieTitle"] ?? "").prefix(40)),
+                    "plainLen": String(plainText.count)
+                ]
+            )
+            // #endregion
+            return (parsed, [])
+        }
+        let generic = EmailParserService.extractFields(rule: rule, plainText: plainText, html: html)
+        // #region agent log
+        DebugLog.write(
+            hypothesisId: "P3",
+            location: "GmailSyncService.extractOrderFields",
+            message: "fallback generic extract",
+            data: [
+                "useOrpheum": useOrpheum ? "1" : "0",
+                "fieldCount": String(generic.fields.count),
+                "plainLen": String(plainText.count)
+            ]
+        )
+        // #endregion
+        if useOrpheum {
+            return (OrpheumEmailParser.normalizeLegacyFieldKeys(generic.fields), generic.missing)
+        }
+        return generic
     }
 
     private func fetchMessageList(token: String, query: String) async throws -> [GmailMessageSummary] {
@@ -117,9 +254,28 @@ final class GmailSyncService {
         ]
         var request = URLRequest(url: components.url!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: request)
-        let response = try JSONDecoder().decode(GmailListResponse.self, from: data)
-        return response.messages ?? []
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if status != 200,
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let error = json["error"] as? [String: Any] {
+            let message = (error["message"] as? String) ?? "HTTP \(status)"
+            // #region agent log
+            DebugLog.write(
+                hypothesisId: "S4",
+                location: "GmailSyncService.fetchMessageList",
+                message: "gmail api error",
+                data: [
+                    "status": String(status),
+                    "error": String(message.prefix(200)),
+                    "query": String(query.prefix(200))
+                ]
+            )
+            // #endregion
+            throw NSError(domain: "GmailSync", code: status, userInfo: [NSLocalizedDescriptionKey: GmailAPIErrorHelper.userMessage(forAPIError: message)])
+        }
+        let decoded = try JSONDecoder().decode(GmailListResponse.self, from: data)
+        return decoded.messages ?? []
     }
 
     private func fetchMessage(token: String, id: String) async throws -> GmailMessageDetail? {

@@ -31,11 +31,13 @@ swift build
 
 ## Gmail 配置
 
-1. [Google Cloud Console](https://console.cloud.google.com/) 创建项目并启用 Gmail API
-2. 配置 OAuth 同意屏幕，添加测试用户
-3. 创建「桌面应用」OAuth Client ID
-4. 在应用 **设置** 填入 Client ID / Secret
-5. **Gmail** 页面连接账号，在 **影院规则** 配置匹配条件与字段正则
+1. [Google Cloud Console](https://console.cloud.google.com/) 创建项目
+2. **API 和服务 → 库 → 搜索「Gmail API」→ 启用**（必须，否则同步报 403）
+3. 配置 OAuth 同意屏幕（用户类型选「外部」或「内部」均可）
+4. **OAuth 同意屏幕 → 测试用户 → 添加你的 Gmail 邮箱**
+5. 创建 OAuth 客户端 ID → 类型选 **「桌面应用」**
+6. 在应用 **设置** 填入 Client ID / Secret（Redirect URI 默认 `http://127.0.0.1:8765/`）
+7. **Gmail** 页面连接账号，在 **影院规则** 配置发件人/主题与模板
 
 ## 功能
 

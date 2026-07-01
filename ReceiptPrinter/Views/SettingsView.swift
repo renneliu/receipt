@@ -79,22 +79,37 @@ struct SettingsView: View {
                     get: { appState.settings.gmailClientID },
                     set: { appState.settings.gmailClientID = $0; appState.settings.save() }
                 ))
+                .textFieldStyle(.roundedBorder)
                 SecureField("Client Secret", text: Binding(
                     get: { appState.settings.gmailClientSecret },
                     set: { appState.settings.gmailClientSecret = $0; appState.settings.save() }
                 ))
+                .textFieldStyle(.roundedBorder)
                 TextField("Redirect URI", text: Binding(
                     get: { appState.settings.gmailRedirectURI },
                     set: { appState.settings.gmailRedirectURI = $0; appState.settings.save() }
                 ))
+                .textFieldStyle(.roundedBorder)
+                Button("重置 Redirect URI 为默认值") {
+                    appState.settings.gmailRedirectURI = GmailOAuthConfig.defaultRedirectURI
+                    appState.settings.save()
+                }
+                Text("Google Cloud 须创建「桌面应用」OAuth 客户端；Redirect URI 使用回环地址 \(GmailOAuthConfig.defaultRedirectURI)（无需在 Console 手动添加）")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
                 Stepper("同步间隔 \(Int(appState.settings.gmailSyncInterval)) 秒", value: Binding(
                     get: { appState.settings.gmailSyncInterval },
                     set: { appState.settings.gmailSyncInterval = $0; appState.settings.save() }
                 ), in: 60...3600, step: 60)
-                TextField("Gmail 搜索条件", text: Binding(
+                TextField("额外 Gmail 过滤（可选）", text: Binding(
                     get: { appState.settings.gmailSearchQuery },
                     set: { appState.settings.gmailSearchQuery = $0; appState.settings.save() }
                 ))
+                .textFieldStyle(.roundedBorder)
+                Text("留空表示不限制时间。同步主要依据「影院规则」中的发件人/主题/正文；此处可填可选过滤，如 is:unread 或 newer_than:90d。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("关于") {

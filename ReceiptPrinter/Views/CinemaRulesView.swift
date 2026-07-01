@@ -46,10 +46,18 @@ struct CinemaRulesView: View {
                 appState.saveRule(saved)
                 editingRule = nil
             }
+            .environmentObject(appState)
         }
     }
 
     private func createRule() {
+        if let orpheum = appState.templates.first(where: { MovieTicketData.isMovieTicketTemplate($0) }) {
+            var rule = CinemaRule(cinemaName: "Hayden Orpheum", templateId: orpheum.id)
+            rule.matchRules.senders = ["Hayden Orpheum Picture Palace", "@orpheum.com"]
+            rule.matchRules.subjectContains = ["Booking"]
+            editingRule = rule
+            return
+        }
         let templateId = appState.templates.first?.id ?? UUID()
         editingRule = CinemaRule(cinemaName: "新影院", templateId: templateId)
     }

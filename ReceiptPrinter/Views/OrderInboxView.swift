@@ -41,6 +41,8 @@ struct OrderInboxView: View {
         .navigationTitle("订单收件箱")
         .sheet(item: $selectedOrder) { order in
             OrderDetailView(order: order)
+                .environmentObject(appState)
+                .frame(width: 920, height: 640)
         }
     }
 }
