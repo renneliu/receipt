@@ -74,6 +74,43 @@ swift build
 
 打包后可在应用 **设置 → 关于** 看到版本号。
 
+### 推荐：每次发版一条龙
+
+改完代码后，在终端执行（把说明换成你这次改了什么）：
+
+```bash
+cd ~/Projects/ReceiptPrinter
+
+# 修 bug 发版（1.0.0 → 1.0.1）
+./scripts/release.sh patch "修复某某问题"
+
+# 加了新功能（1.0.0 → 1.1.0）
+./scripts/release.sh minor "新增某某功能"
+
+# 然后按脚本提示推送
+git push origin main
+git push origin v1.0.1   # 版本号换成脚本输出的那个
+```
+
+脚本会自动：更新 `VERSION` → 打包 `dist/ReceiptPrinter.app` → `git commit` → 打标签。
+
+### 平时只改代码、不上传
+
+```bash
+git add .
+git commit -m "改了电影票模板"
+git push origin main
+```
+
+不必每次都发版；只有要给用户新安装包时，才跑 `release.sh`。
+
+### 两个概念（不用背）
+
+| 概念 | 是什么 | 在哪 |
+|------|--------|------|
+| **应用版本** | 用户看到的 1.0.0 | `VERSION` 文件 + 设置页 |
+| **代码快照** | 某次改动的记录 | Git commit / GitHub |
+
 ### 代码历史（Git）
 
 ```bash

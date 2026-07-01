@@ -33,6 +33,8 @@ struct TemplateDesignerView: View {
             }
             updatePreview()
         }
+        .onChange(of: template.blocks) { _, _ in updatePreview() }
+        .onChange(of: previewDataJSON) { _, _ in updatePreview() }
     }
 
     private var toolbox: some View {
@@ -94,51 +96,193 @@ struct TemplateDesignerView: View {
 
     @ViewBuilder
     private func blockEditor(_ block: TemplateBlock, index: Int) -> some View {
-        Section("块属性") {
+        Section("块类型") {
             Picker("类型", selection: Binding(
                 get: { template.blocks[index].type },
                 set: { template.blocks[index].type = $0 }
             )) {
                 ForEach(BlockType.allCases) { Text($0.displayName).tag($0) }
             }
-            if block.type == .text {
-                TextField("内容", text: $template.blocks[index].content)
-                Picker("对齐", selection: $template.blocks[index].align) {
-                    ForEach(TextAlign.allCases) { Text($0.rawValue).tag($0) }
-                }
-                Picker("字号", selection: $template.blocks[index].size) {
-                    ForEach(TextSize.allCases) { Text($0.rawValue).tag($0) }
-                }
-                Toggle("加粗", isOn: $template.blocks[index].bold)
-            }
-            if block.type == .row {
-                TextField("左侧", text: $template.blocks[index].content)
-                TextField("右侧", text: $template.blocks[index].rightContent)
-                TextField("右侧高亮（反白）", text: $template.blocks[index].rightHighlight)
-                Picker("字号", selection: $template.blocks[index].size) {
-                    ForEach(TextSize.allCases) { Text($0.rawValue).tag($0) }
-                }
-                Toggle("左侧加粗", isOn: $template.blocks[index].bold)
-            }
-            if block.type == .spacer {
+        }
+
+        switch block.type {
+        case .text:
+            textBlockEditor(index: index)
+        case .row:
+            rowBlockEditor(index: index)
+        case .line:
+            lineBlockEditor(index: index)
+        case .spacer:
+            Section("空白") {
                 Stepper("行数: \(template.blocks[index].spacerLines)", value: $template.blocks[index].spacerLines, in: 1...10)
             }
-            if block.type == .barcode || block.type == .qr {
-                TextField("内容/占位符", text: $template.blocks[index].content)
+        case .barcode:
+            barcodeBlockEditor(index: index)
+        case .qr:
+            Section("内容") {
+                contentEditor(text: $template.blocks[index].content, placeholder: "{{qrContent}}")
             }
-            if block.type == .table {
-                TextField("数据源键名", text: Binding(
+        case .table:
+            Section("数据源") {
+                TextField("键名", text: Binding(
                     get: { template.blocks[index].dataSource ?? "items" },
                     set: { template.blocks[index].dataSource = $0 }
                 ))
             }
+        case .image:
+            Section("图片") {
+                TextField("图片路径", text: Binding(
+                    get: { template.blocks[index].imagePath ?? "" },
+                    set: { template.blocks[index].imagePath = $0.isEmpty ? nil : $0 }
+                ))
+            }
+        }
+
+        placeholderSection()
+    }
+
+    @ViewBuilder
+    private func textBlockEditor(index: Int) -> some View {
+        Section("内容") {
+            contentEditor(text: $template.blocks[index].content, placeholder: "输入文字，可用 {{字段名}}")
+        }
+        textFormatSection(
+            align: $template.blocks[index].align,
+            size: $template.blocks[index].size,
+            bold: $template.blocks[index].bold,
+            underline: $template.blocks[index].underline,
+            reverse: $template.blocks[index].reverse
+        )
+    }
+
+    @ViewBuilder
+    private func rowBlockEditor(index: Int) -> some View {
+        Section("左侧内容") {
+            TextField("左侧文字", text: $template.blocks[index].content)
+            textFormatSection(
+                align: .constant(.left),
+                size: $template.blocks[index].size,
+                bold: $template.blocks[index].bold,
+                underline: .constant(false),
+                reverse: .constant(false),
+                showAlign: false
+            )
+        }
+        Section("右侧内容") {
+            TextField("右侧文字", text: $template.blocks[index].rightContent)
+            TextField("反白高亮（如影厅号）", text: $template.blocks[index].rightHighlight)
+            Picker("右侧字号", selection: $template.blocks[index].rightSize) {
+                ForEach(TextSize.allCases) { Text($0.displayName).tag($0) }
+            }
+            Toggle("右侧加粗", isOn: $template.blocks[index].rightBold)
+        }
+    }
+
+    @ViewBuilder
+    private func lineBlockEditor(index: Int) -> some View {
+        Section("分隔线") {
+            Picker("线条样式", selection: Binding(
+                get: { template.blocks[index].content.isEmpty ? "-" : template.blocks[index].content },
+                set: { template.blocks[index].content = $0 }
+            )) {
+                Text("虚线 -------").tag("-")
+                Text("点线 ·······").tag("·")
+                Text("等号 ======").tag("=")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func barcodeBlockEditor(index: Int) -> some View {
+        Section("内容") {
+            contentEditor(text: $template.blocks[index].content, placeholder: "{{barcode}}")
+        }
+        Section("条码格式") {
+            Picker("类型", selection: $template.blocks[index].barcodeType) {
+                ForEach(BarcodeType.allCases) { Text($0.rawValue).tag($0) }
+            }
+            Stepper("高度: \(template.blocks[index].barcodeHeight)", value: Binding(
+                get: { Int(template.blocks[index].barcodeHeight) },
+                set: { template.blocks[index].barcodeHeight = UInt8(min(max($0, 40), 200)) }
+            ), in: 40...200, step: 10)
+            Stepper("宽度: \(template.blocks[index].barcodeWidth)", value: Binding(
+                get: { Int(template.blocks[index].barcodeWidth) },
+                set: { template.blocks[index].barcodeWidth = UInt8(min(max($0, 1), 6)) }
+            ), in: 1...6)
+            Toggle("打印下方文字", isOn: $template.blocks[index].barcodePrintHRI)
+        }
+    }
+
+    @ViewBuilder
+    private func textFormatSection(
+        align: Binding<TextAlign>,
+        size: Binding<TextSize>,
+        bold: Binding<Bool>,
+        underline: Binding<Bool>,
+        reverse: Binding<Bool>,
+        showAlign: Bool = true
+    ) -> some View {
+        Section("字体格式") {
+            if showAlign {
+                Picker("对齐", selection: align) {
+                    ForEach(TextAlign.allCases) { Text($0.displayName).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            }
+            Picker("字号", selection: size) {
+                ForEach(TextSize.allCases) { Text($0.displayName).tag($0) }
+            }
+            Toggle("加粗", isOn: bold)
+            Toggle("下划线", isOn: underline)
+            Toggle("反白（黑底白字）", isOn: reverse)
+        }
+    }
+
+    @ViewBuilder
+    private func contentEditor(text: Binding<String>, placeholder: String) -> some View {
+        TextEditor(text: text)
+            .frame(minHeight: 72)
+            .font(.body)
+        Text(placeholder)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private func placeholderSection() -> some View {
+        let keys = template.placeholders()
+        if !keys.isEmpty {
+            Section("可用占位符（点击插入）") {
+                FlowLayout(spacing: 6) {
+                    ForEach(keys, id: \.self) { key in
+                        Button("{{\(key)}}") {
+                            insertPlaceholder(key)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+            }
+        }
+    }
+
+    private func insertPlaceholder(_ key: String) {
+        guard let idx = template.blocks.firstIndex(where: { $0.id == selectedBlockID }) else { return }
+        let token = "{{\(key)}}"
+        switch template.blocks[idx].type {
+        case .text, .barcode, .qr:
+            template.blocks[idx].content += token
+        case .row:
+            template.blocks[idx].content += token
+        default:
+            break
         }
     }
 
     private func addBlock(_ type: BlockType) {
         let block: TemplateBlock = switch type {
         case .text: .text("新文本", align: .center)
-        case .line: .line()
+        case .line: .line(char: "-")
         case .spacer: .spacer()
         case .image: TemplateBlock(type: .image)
         case .barcode: .barcode("{{barcode}}")

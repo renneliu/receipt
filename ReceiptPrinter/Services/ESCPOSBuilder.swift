@@ -32,7 +32,21 @@ final class ESCPOSBuilder {
             data.append(contentsOf: [0x1C, 0x26])
             data.append(contentsOf: [0x1B, 0x74, 0x00])
         }
+        return feed(lines: 1)
+    }
+
+    @discardableResult
+    func resetStyle() -> Self {
+        underline(false)
+        reversePrint(false)
+        bold(false)
+        applyTextSize(.normal)
+        align(.left)
         return self
+    }
+
+    private static func rowNeedsSplitLayout(leftSize: TextSize, rightSize: TextSize) -> Bool {
+        leftSize == .double || rightSize == .double || leftSize != rightSize
     }
 
     @discardableResult
@@ -73,15 +87,13 @@ final class ESCPOSBuilder {
         case .tall: 0x01
         case .double: 0x11
         }
-        // #region agent log
-        DebugLog.write(
-            hypothesisId: "A",
-            location: "ESCPOSBuilder.applyTextSize",
-            message: "text size command",
-            data: ["size": size.rawValue, "gsMode": String(format: "0x%02X", mode)]
-        )
-        // #endregion
         data.append(contentsOf: [0x1D, 0x21, mode])
+        return self
+    }
+
+    @discardableResult
+    func underline(_ on: Bool) -> Self {
+        data.append(contentsOf: [0x1B, 0x2D, on ? 1 : 0])
         return self
     }
 
@@ -168,43 +180,52 @@ final class ESCPOSBuilder {
         rightPrefix: String,
         highlight: String,
         leftBold: Bool = false,
-        leftSize: TextSize = .normal
+        leftSize: TextSize = .normal,
+        rightBold: Bool = false,
+        rightSize: TextSize = .normal
     ) -> Self {
         let highlightText = highlight.isEmpty ? "" : "  \(highlight)  "
-        let leftCols = columnWidth(left, size: leftSize)
-        let rightWidth = ReceiptTextLayout.displayWidth(rightPrefix) + ReceiptTextLayout.displayWidth(highlightText)
-        let padding = max(1, config.columnsPerLine - leftCols - rightWidth)
 
+        if Self.rowNeedsSplitLayout(leftSize: leftSize, rightSize: rightSize) {
+            align(.left)
+            bold(leftBold).applyTextSize(leftSize)
+            appendEncoded(left)
+            data.append(0x0A)
+            resetStyle()
+
+            align(.right)
+            bold(rightBold).applyTextSize(rightSize)
+            appendEncoded(rightPrefix)
+            if !highlightText.isEmpty {
+                reversePrint(true)
+                appendEncoded(highlightText)
+                reversePrint(false)
+            }
+            data.append(0x0A)
+            resetStyle()
+            return self
+        }
+
+        let leftCols = ReceiptTextLayout.displayWidth(left)
+        let rightCols = ReceiptTextLayout.displayWidth(rightPrefix)
+            + (highlightText.isEmpty ? 0 : ReceiptTextLayout.displayWidth(highlightText))
+        let padding = max(1, effectiveColumns - leftCols - rightCols)
+
+        align(.left)
         bold(leftBold).applyTextSize(leftSize)
         appendEncoded(left)
         bold(false).applyTextSize(.normal)
-        appendEncoded(String(repeating: " ", count: padding) + rightPrefix)
+        appendEncoded(String(repeating: " ", count: padding))
+        bold(rightBold).applyTextSize(rightSize)
+        appendEncoded(rightPrefix)
         if !highlightText.isEmpty {
             reversePrint(true)
             appendEncoded(highlightText)
             reversePrint(false)
         }
-        // #region agent log
-        DebugLog.write(
-            hypothesisId: "B",
-            location: "ESCPOSBuilder.tableRowWithHighlight",
-            message: "mixed row",
-            data: [
-                "left": String(left.prefix(20)),
-                "leftSize": leftSize.rawValue,
-                "leftBold": leftBold ? "1" : "0",
-                "highlight": highlightText,
-                "padding": String(padding)
-            ]
-        )
-        // #endregion
         data.append(0x0A)
+        resetStyle()
         return self
-    }
-
-    private func columnWidth(_ text: String, size: TextSize) -> Int {
-        let base = ReceiptTextLayout.displayWidth(text)
-        return size == .double ? base * 2 : base
     }
 
     @discardableResult
@@ -223,19 +244,6 @@ final class ESCPOSBuilder {
         if let bytes = content.data(using: .ascii) {
             data.append(bytes)
         }
-        // #region agent log
-        DebugLog.write(
-            hypothesisId: "C",
-            location: "ESCPOSBuilder.barcode",
-            message: "barcode command",
-            data: [
-                "height": String(height),
-                "width": String(width),
-                "printHRI": printHRI ? "1" : "0",
-                "content": String(content.prefix(30))
-            ]
-        )
-        // #endregion
         newline()
         return self
     }

@@ -3,25 +3,8 @@ import Foundation
 
 enum TemplateRenderer {
     static func renderESCPOS(template: ReceiptTemplate, data: [String: String], config: PrinterConfig) -> Data {
-        if template.name.contains("Orpheum") {
-            return OrpheumTicketRenderer.renderESCPOS(data: data, config: config)
-        }
         let builder = ESCPOSBuilder(config: config).initialize()
-        for (index, block) in template.blocks.enumerated() {
-            // #region agent log
-            DebugLog.write(
-                hypothesisId: "D",
-                location: "TemplateRenderer.renderBlock",
-                message: "render block",
-                data: [
-                    "index": String(index),
-                    "type": block.type.rawValue,
-                    "size": block.size.rawValue,
-                    "bold": block.bold ? "1" : "0",
-                    "content": String(block.content.prefix(30))
-                ]
-            )
-            // #endregion
+        for block in template.blocks {
             renderBlock(block, data: data, builder: builder, config: config)
         }
         return builder.cut().build()
@@ -60,24 +43,26 @@ enum TemplateRenderer {
             builder.align(align)
                 .bold(block.bold)
                 .applyTextSize(block.size)
-                .text(text)
-                .newline()
-                .bold(false)
-                .applyTextSize(.normal)
+            if block.underline { builder.underline(true) }
+            if block.reverse { builder.reversePrint(true) }
+            builder.text(text).newline()
+            builder.resetStyle()
         case .row:
             let left = ReceiptTemplate.substitute(block.content, data: data)
             let right = ReceiptTemplate.substitute(block.rightContent, data: data)
             let highlight = ReceiptTemplate.substitute(block.rightHighlight, data: data)
-            builder.align(.left)
-                .tableRowWithHighlight(
-                    left: left,
-                    rightPrefix: right,
-                    highlight: highlight,
-                    leftBold: block.bold,
-                    leftSize: block.size
-                )
+            builder.tableRowWithHighlight(
+                left: left,
+                rightPrefix: right,
+                highlight: highlight,
+                leftBold: block.bold,
+                leftSize: block.size,
+                rightBold: block.rightBold,
+                rightSize: block.rightSize
+            )
         case .line:
-            builder.line()
+            let char = block.content.first ?? "-"
+            builder.align(.left).line(char: char)
         case .spacer:
             builder.feed(lines: block.spacerLines)
         case .barcode:
@@ -90,6 +75,7 @@ enum TemplateRenderer {
                 width: block.barcodeWidth,
                 printHRI: block.barcodePrintHRI
             )
+            builder.resetStyle()
         case .qr:
             let content = ReceiptTemplate.substitute(block.content, data: data)
             builder.qrCodeImage(content)
@@ -122,7 +108,9 @@ enum TemplateRenderer {
         for block in template.blocks {
             switch block.type {
             case .text: h += textBlockHeight(block.size)
-            case .row: h += block.size == .double ? 36 : 20
+            case .row:
+                let split = rowNeedsSplitLayout(block)
+                h += split ? textBlockHeight(block.size) + 20 : 20
             case .line: h += 16
             case .spacer: h += CGFloat(block.spacerLines * 12)
             case .barcode: h += CGFloat(block.barcodeHeight) + 24
@@ -159,6 +147,33 @@ enum TemplateRenderer {
         NSFont.systemFont(ofSize: previewFontSize(for: size, bold: bold), weight: bold ? .bold : .regular)
     }
 
+    private static func rowNeedsSplitLayout(_ block: TemplateBlock) -> Bool {
+        block.size == .double || block.rightSize == .double || block.size != block.rightSize
+    }
+
+    private static func drawRowRight(
+        right: String,
+        highlight: String,
+        attrs: [NSAttributedString.Key: Any],
+        at y: CGFloat,
+        width: Int
+    ) {
+        var rightX = CGFloat(width) - 4
+        if !highlight.isEmpty {
+            let hlText = "  \(highlight)  " as NSString
+            let hlSize = hlText.size(withAttributes: attrs)
+            rightX -= hlSize.width
+            NSColor.black.setFill()
+            NSRect(x: rightX, y: y, width: hlSize.width, height: hlSize.height + 2).fill()
+            var hlAttrs = attrs
+            hlAttrs[.foregroundColor] = NSColor.white
+            hlText.draw(at: NSPoint(x: rightX, y: y), withAttributes: hlAttrs)
+        }
+        let prefixSize = (right as NSString).size(withAttributes: attrs)
+        rightX -= prefixSize.width
+        (right as NSString).draw(at: NSPoint(x: rightX, y: y), withAttributes: attrs)
+    }
+
     private static func drawBlock(_ block: TemplateBlock, data: [String: String], at startY: CGFloat, width: Int, context: NSGraphicsContext?) -> CGFloat {
         var y = startY
         switch block.type {
@@ -171,29 +186,49 @@ enum TemplateRenderer {
                 .foregroundColor: NSColor.black
             ]
             let rightAttrs: [NSAttributedString.Key: Any] = [
-                .font: previewFont(for: .normal, bold: false),
+                .font: previewFont(for: block.rightSize, bold: block.rightBold),
                 .foregroundColor: NSColor.black
             ]
+            let split = rowNeedsSplitLayout(block)
             left.draw(at: NSPoint(x: 4, y: y), withAttributes: leftAttrs)
-            var rightText = right
-            if !highlight.isEmpty {
-                rightText += "  \(highlight)  "
+            if split {
+                y += left.size(withAttributes: leftAttrs).height + 4
+                drawRowRight(right: right, highlight: highlight, attrs: rightAttrs, at: y, width: width)
+                y += previewFontSize(for: block.rightSize, bold: block.rightBold) + 10
+            } else {
+                drawRowRight(right: right, highlight: highlight, attrs: rightAttrs, at: y, width: width)
+                let rowHeight = max(
+                    left.size(withAttributes: leftAttrs).height,
+                    previewFontSize(for: block.rightSize, bold: block.rightBold) + 4
+                )
+                y += rowHeight + 6
             }
-            let rs = (rightText as NSString).size(withAttributes: rightAttrs)
-            (rightText as NSString).draw(at: NSPoint(x: CGFloat(width) - rs.width - 4, y: y), withAttributes: rightAttrs)
-            y += max(left.size(withAttributes: leftAttrs).height, rs.height) + 6
         case .text:
-            let attrs: [NSAttributedString.Key: Any] = [
+            var attrs: [NSAttributedString.Key: Any] = [
                 .font: previewFont(for: block.size, bold: block.bold),
-                .foregroundColor: NSColor.black
+                .foregroundColor: block.reverse ? NSColor.white : NSColor.black
             ]
-            let text = ReceiptTemplate.substitute(block.content, data: data) as NSString
-            let size = text.size(withAttributes: attrs)
-            var x: CGFloat = 4
-            if block.align == .center { x = (CGFloat(width) - size.width) / 2 }
-            if block.align == .right { x = CGFloat(width) - size.width - 4 }
-            text.draw(at: NSPoint(x: x, y: y), withAttributes: attrs)
-            y += size.height + 6
+            if block.underline {
+                attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            }
+            let raw = ReceiptTemplate.substitute(block.content, data: data)
+            let lines = raw.components(separatedBy: "\n")
+            for (lineIndex, line) in lines.enumerated() {
+                let text = line as NSString
+                let size = text.size(withAttributes: attrs)
+                var x: CGFloat = 4
+                if block.align == .center { x = (CGFloat(width) - size.width) / 2 }
+                if block.align == .right { x = CGFloat(width) - size.width - 4 }
+                if block.reverse {
+                    let pad: CGFloat = 2
+                    NSColor.black.setFill()
+                    NSRect(x: x - pad, y: y, width: size.width + pad * 2, height: size.height + 2).fill()
+                }
+                text.draw(at: NSPoint(x: x, y: y), withAttributes: attrs)
+                y += size.height + 4
+                if lineIndex < lines.count - 1 { y += 2 }
+            }
+            y += 2
         case .line:
             NSColor.black.setStroke()
             let path = NSBezierPath()

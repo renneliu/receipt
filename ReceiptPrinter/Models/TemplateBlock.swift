@@ -22,11 +22,27 @@ enum BlockType: String, Codable, CaseIterable, Identifiable {
 enum TextAlign: String, Codable, CaseIterable, Identifiable {
     case left, center, right
     var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .left: return "左对齐"
+        case .center: return "居中"
+        case .right: return "右对齐"
+        }
+    }
 }
 
 enum TextSize: String, Codable, CaseIterable, Identifiable {
     case normal, tall, double
     var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .normal: return "标准"
+        case .tall: return "加高"
+        case .double: return "双倍大小"
+        }
+    }
 }
 
 enum BarcodeType: String, Codable, CaseIterable, Identifiable {
@@ -41,6 +57,10 @@ struct TemplateBlock: Codable, Identifiable, Equatable {
     var align: TextAlign = .left
     var size: TextSize = .normal
     var bold: Bool = false
+    var underline: Bool = false
+    var reverse: Bool = false
+    var rightBold: Bool = false
+    var rightSize: TextSize = .normal
     var spacerLines: Int = 1
     var barcodeType: BarcodeType = .code128
     var imagePath: String?
@@ -57,7 +77,9 @@ struct TemplateBlock: Codable, Identifiable, Equatable {
         TemplateBlock(type: .text, content: content, align: align, size: size, bold: bold)
     }
 
-    static func line() -> TemplateBlock { TemplateBlock(type: .line) }
+    static func line(char: String = "-") -> TemplateBlock {
+        TemplateBlock(type: .line, content: char)
+    }
     static func spacer(_ lines: Int = 1) -> TemplateBlock { TemplateBlock(type: .spacer, spacerLines: lines) }
     static func qr(_ content: String) -> TemplateBlock { TemplateBlock(type: .qr, content: content, align: .center) }
     static func barcode(
