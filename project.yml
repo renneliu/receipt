@@ -1,0 +1,24 @@
+name: ReceiptPrinter
+options:
+  bundleIdPrefix: com.receiptprinter
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CODE_SIGN_ENTITLEMENTS: ReceiptPrinter/ReceiptPrinter.entitlements
+targets:
+  ReceiptPrinter:
+    type: application
+    platform: macOS
+    sources:
+      - ReceiptPrinter
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.receiptprinter.app
+      INFOPLIST_KEY_CFBundleURLTypes:
+        - CFBundleURLSchemes:
+            - com.receiptprinter
+          CFBundleURLName: OAuth Redirect
+      GENERATE_INFOPLIST_FILE: YES
+      INFOPLIST_KEY_LSMinimumSystemVersion: "14.0"
+      ENABLE_APP_SANDBOX: NO
