@@ -154,9 +154,15 @@ struct OrderDetailView: View {
     private func binding(for key: String) -> Binding<String> {
         Binding(
             get: {
-                if let manual = order.manualFields[key], !manual.isEmpty { return manual }
-                if let stored = order.fields[key], !stored.isEmpty { return stored }
-                return resolvedFields[key] ?? ""
+                let value: String
+                if let manual = order.manualFields[key], !manual.isEmpty {
+                    value = manual
+                } else if let stored = order.fields[key], !stored.isEmpty {
+                    value = stored
+                } else {
+                    value = resolvedFields[key] ?? ""
+                }
+                return value
             },
             set: { order.manualFields[key] = $0 }
         )

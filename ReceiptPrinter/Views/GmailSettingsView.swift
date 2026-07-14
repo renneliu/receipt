@@ -3,6 +3,10 @@ import SwiftUI
 struct GmailSettingsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var isConnecting = false
+    @State private var draftFilterSender = ""
+    @State private var draftFilterSubject = ""
+    @State private var customStart = Date()
+    @State private var customEnd = Date()
 
     var body: some View {
         Form {
@@ -29,6 +33,32 @@ struct GmailSettingsView: View {
                 }
             }
 
+            Section("时间筛选") {
+                Picker("范围", selection: Binding(
+                    get: { appState.settings.gmailTimeRange },
+                    set: {
+                        appState.settings.gmailTimeRange = $0
+                        appState.settings.save()
+                    }
+                )) {
+                    ForEach(GmailTimeRange.allCases) { range in
+                        Text(range.displayName).tag(range)
+                    }
+                }
+                if appState.settings.gmailTimeRange == .custom {
+                    DatePicker("开始", selection: $customStart, displayedComponents: .date)
+                    DatePicker("结束", selection: $customEnd, displayedComponents: .date)
+                }
+                TextField("发件人包含（可选）", text: $draftFilterSender)
+                    .textFieldStyle(.roundedBorder)
+                TextField("主题包含（可选）", text: $draftFilterSubject)
+                    .textFieldStyle(.roundedBorder)
+                Button("应用筛选并同步") {
+                    applyFiltersAndSync()
+                }
+                .disabled(!appState.gmailAuth.isAuthenticated)
+            }
+
             Section("同步") {
                 Toggle("启用自动同步", isOn: Binding(
                     get: { appState.settings.gmailSyncEnabled },
@@ -46,7 +76,7 @@ struct GmailSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
-                Text("额外过滤：\(appState.settings.gmailSearchQuery.isEmpty ? "无（不限制时间）" : appState.settings.gmailSearchQuery)")
+                Text("合并过滤：\(appState.settings.composedGmailExtraQuery().isEmpty ? "无（不限制时间）" : appState.settings.composedGmailExtraQuery())")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -78,13 +108,32 @@ struct GmailSettingsView: View {
         }
         .padding()
         .navigationTitle("Gmail")
+        .onAppear { loadFilterDrafts() }
     }
 
     private var previewSearchQuery: String? {
-        switch GmailSearchQueryBuilder.build(rules: appState.cinemaRules, baseQuery: appState.settings.gmailSearchQuery) {
+        switch GmailSearchQueryBuilder.build(rules: appState.cinemaRules, settings: appState.settings) {
         case .success(let query, _): return query
         case .failure: return nil
         }
+    }
+
+    private func loadFilterDrafts() {
+        draftFilterSender = appState.settings.gmailFilter.senderContains
+        draftFilterSubject = appState.settings.gmailFilter.subjectContains
+        customStart = appState.settings.gmailCustomStart ?? Calendar.current.date(byAdding: .month, value: -1, to: Date()) ?? Date()
+        customEnd = appState.settings.gmailCustomEnd ?? Date()
+    }
+
+    private func applyFiltersAndSync() {
+        appState.settings.gmailFilter.senderContains = draftFilterSender
+        appState.settings.gmailFilter.subjectContains = draftFilterSubject
+        if appState.settings.gmailTimeRange == .custom {
+            appState.settings.gmailCustomStart = customStart
+            appState.settings.gmailCustomEnd = customEnd
+        }
+        appState.settings.save()
+        Task { await appState.syncGmailNow() }
     }
 
     private func connect() {

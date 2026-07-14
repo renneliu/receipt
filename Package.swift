@@ -9,6 +9,11 @@ let package = Package(
             name: "ReceiptPrinter",
             path: "ReceiptPrinter",
             resources: [.process("Resources")]
+        ),
+        .testTarget(
+            name: "ReceiptPrinterCoreTests",
+            dependencies: ["ReceiptPrinter"],
+            path: "Tests/ReceiptPrinterCoreTests"
         )
     ]
 )

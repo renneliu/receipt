@@ -2,6 +2,10 @@ import Foundation
 
 enum GmailSearchQueryBuilder {
     /// Builds Gmail `q` from enabled cinema rules plus optional extra filter (empty = no time limit).
+    static func build(rules: [CinemaRule], settings: AppSettings, now: Date = Date()) -> BuildResult {
+        build(rules: rules, baseQuery: settings.composedGmailExtraQuery(now: now))
+    }
+
     static func build(rules: [CinemaRule], baseQuery: String) -> BuildResult {
         let enabled = rules.filter(\.enabled)
         guard !enabled.isEmpty else {

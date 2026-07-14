@@ -1,43 +1,57 @@
 import SwiftUI
 
-/// Edits movie ticket fields using local state so parent re-renders do not steal TextField focus on each keystroke.
+/// Edits movie ticket fields using local draft state.
+/// Preview updates do NOT write through the Binding on each keystroke (that remounts this Form
+/// child and resets @State to sample / steals focus). Binding is committed on disappear.
 struct MovieTicketDataEditorView: View {
     @Binding var data: MovieTicketData
     let templateId: UUID
-    var onFieldEdit: () -> Void = {}
+    /// Called with the current draft so the parent can refresh preview without taking ownership mid-edit.
+    var onDraftChange: (MovieTicketData) -> Void = { _ in }
 
-    @State private var local = MovieTicketData.sample
+    @State private var local: MovieTicketData
     @State private var loadedTemplateId: UUID?
-    @State private var fullBarcodeDraft = ""
-    @State private var syncTask: Task<Void, Never>?
+    @State private var fullBarcodeDraft: String
+    @State private var previewTask: Task<Void, Never>?
     @FocusState private var fullBarcodeFocused: Bool
+
+    init(
+        data: Binding<MovieTicketData>,
+        templateId: UUID,
+        onDraftChange: @escaping (MovieTicketData) -> Void = { _ in }
+    ) {
+        self._data = data
+        self.templateId = templateId
+        self.onDraftChange = onDraftChange
+        self._local = State(initialValue: data.wrappedValue)
+        self._loadedTemplateId = State(initialValue: templateId)
+        self._fullBarcodeDraft = State(initialValue: data.wrappedValue.barcode)
+    }
 
     var body: some View {
         Group {
             Section("影院与场次") {
                 TextField("影院名", text: $local.venueName)
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: local.venueName) { _, _ in
-                        scheduleSyncToParent()
-                    }
+                    .onChange(of: local.venueName) { _, _ in schedulePreviewOnly() }
                 TextField("影厅号", text: $local.hallNumber)
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: local.hallNumber) { _, _ in scheduleSyncToParent() }
+                    .onChange(of: local.hallNumber) { _, _ in schedulePreviewOnly() }
                 TextField("影片名", text: $local.movieTitle)
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: local.movieTitle) { _, _ in scheduleSyncToParent() }
+                    .onChange(of: local.movieTitle) { _, _ in schedulePreviewOnly() }
             }
 
             Section("放映时间") {
                 DatePicker("开始时间", selection: $local.showStartTime, displayedComponents: [.date, .hourAndMinute])
-                    .onChange(of: local.showStartTime) { _, _ in scheduleSyncToParent() }
+                    .onChange(of: local.showStartTime) { _, _ in schedulePreviewOnly() }
                 Stepper("广告时长: \(local.adDurationMinutes) 分钟", value: $local.adDurationMinutes, in: 0...120)
-                    .onChange(of: local.adDurationMinutes) { _, _ in scheduleSyncToParent() }
+                    .onChange(of: local.adDurationMinutes) { _, _ in schedulePreviewOnly() }
                 Text("广告时长不打印在票上，仅用于推算结束时间")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Stepper("影片时长: \(local.movieDurationMinutes) 分钟", value: $local.movieDurationMinutes, in: 1...300)
-                    .onChange(of: local.movieDurationMinutes) { _, _ in scheduleSyncToParent() }
+                    .onChange(of: local.movieDurationMinutes) { _, _ in schedulePreviewOnly() }
                 Text("影片时长不打印在票上，仅用于推算结束时间")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -56,12 +70,12 @@ struct MovieTicketDataEditorView: View {
             Section("票价") {
                 TextField("票种", text: $local.ticketType)
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: local.ticketType) { _, _ in scheduleSyncToParent() }
+                    .onChange(of: local.ticketType) { _, _ in schedulePreviewOnly() }
                 HStack {
                     Text("金额")
                     TextField("金额", text: $local.ticketPrice)
                         .textFieldStyle(.roundedBorder)
-                        .onChange(of: local.ticketPrice) { _, _ in scheduleSyncToParent() }
+                        .onChange(of: local.ticketPrice) { _, _ in schedulePreviewOnly() }
                 }
                 LabeledContent("打印显示") {
                     Text(local.formattedTicketPrice)
@@ -72,10 +86,10 @@ struct MovieTicketDataEditorView: View {
             Section("条码与 DEBI 流水号") {
                 TextField("条码前 8 位", text: $local.barcodeBase)
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: local.barcodeBase) { _, _ in scheduleSyncToParent() }
+                    .onChange(of: local.barcodeBase) { _, _ in schedulePreviewOnly() }
                 TextField("流水号后 3 位", text: $local.ticketSerial)
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: local.ticketSerial) { _, _ in scheduleSyncToParent() }
+                    .onChange(of: local.ticketSerial) { _, _ in schedulePreviewOnly() }
                 TextField("完整条码（11 位）", text: $fullBarcodeDraft)
                     .textFieldStyle(.roundedBorder)
                     .focused($fullBarcodeFocused)
@@ -98,6 +112,7 @@ struct MovieTicketDataEditorView: View {
                 }
             }
         }
+        .id(templateId)
         .onAppear { loadLocalIfNeeded() }
         .onChange(of: templateId) { _, _ in
             loadedTemplateId = nil
@@ -108,11 +123,12 @@ struct MovieTicketDataEditorView: View {
         .onChange(of: fullBarcodeFocused) { _, focused in
             if !focused {
                 applyFullBarcodeDraft()
-                scheduleSyncToParent()
+                commitToBinding()
+                schedulePreviewOnly()
             }
         }
         .onDisappear {
-            flushSyncToParent()
+            commitToBinding()
         }
     }
 
@@ -131,19 +147,19 @@ struct MovieTicketDataEditorView: View {
         loadedTemplateId = templateId
     }
 
-    private func scheduleSyncToParent() {
-        syncTask?.cancel()
-        syncTask = Task {
-            try? await Task.sleep(nanoseconds: 350_000_000)
+    /// Refresh parent preview from draft only — do not write @Binding (avoids remount/focus loss).
+    private func schedulePreviewOnly() {
+        previewTask?.cancel()
+        previewTask = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                flushSyncToParent()
-                onFieldEdit()
+                onDraftChange(local)
             }
         }
     }
 
-    private func flushSyncToParent() {
+    private func commitToBinding() {
         data = local
     }
 

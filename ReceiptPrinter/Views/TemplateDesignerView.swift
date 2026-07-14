@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct TemplateDesignerView: View {
     @EnvironmentObject private var appState: AppState
@@ -8,9 +9,13 @@ struct TemplateDesignerView: View {
     @State private var previewImage: NSImage?
     @State private var showPreview = false
     @State private var movieTicket = MovieTicketData.sample
+    /// Live draft used only for canvas preview while typing (avoids rewriting `$movieTicket` mid-edit).
+    @State private var previewTicketDraft: MovieTicketData?
     @State private var showAdvancedJSON = false
     @State private var inspectorTab: DesignerInspectorTab = .ticket
     @State private var previewUpdateTask: Task<Void, Never>?
+    @State private var templateDocument: TemplateDocument = TemplateDocument(name: "新模板")
+    @State private var showFreestyleLayer = false
     private enum DesignerInspectorTab: String, CaseIterable, Identifiable {
         case ticket = "票券内容"
         case block = "块格式"
@@ -35,6 +40,15 @@ struct TemplateDesignerView: View {
                 TextField("模板名称", text: $template.name)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 180)
+                Picker("分类", selection: $templateDocument.category) {
+                    ForEach(TemplateCategory.allCases) { cat in
+                        Text(cat.displayName).tag(cat)
+                    }
+                }
+                .frame(width: 120)
+                Toggle("自由定位", isOn: $showFreestyleLayer)
+                Button("导出 JSON") { exportDocument() }
+                Button("导入 JSON") { importDocument() }
                 Button("保存") { saveTemplate() }
                 Button("预览") { updatePreview(); showPreview = true }
                 Button("测试打印") { Task { await testPrint() } }
@@ -44,6 +58,8 @@ struct TemplateDesignerView: View {
             PrintPreviewView(template: template, previewData: parsedPreviewData())
         }
         .onAppear {
+            templateDocument = TemplateDocumentMigration.fromReceiptTemplate(template)
+            templateDocument.name = template.name
             loadPreviewData()
             updatePreview()
         }
@@ -94,11 +110,17 @@ struct TemplateDesignerView: View {
                 .onDelete { indexSet in template.blocks.remove(atOffsets: indexSet) }
             }
             if let img = previewImage {
-                Image(nsImage: img)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: 300)
-                    .border(Color.gray.opacity(0.3))
+                ZStack(alignment: .topLeading) {
+                    Image(nsImage: img)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 300)
+                        .border(Color.gray.opacity(0.3))
+                    if showFreestyleLayer {
+                        freestyleOverlay
+                            .frame(maxWidth: 300)
+                    }
+                }
             }
         }
         .frame(minWidth: 320)
@@ -120,7 +142,10 @@ struct TemplateDesignerView: View {
                     MovieTicketDataEditorView(
                         data: $movieTicket,
                         templateId: template.id,
-                        onFieldEdit: schedulePreviewUpdate
+                        onDraftChange: { draft in
+                            previewTicketDraft = draft
+                            schedulePreviewUpdate()
+                        }
                     )
                 }
 
@@ -385,7 +410,7 @@ struct TemplateDesignerView: View {
 
     private func parsedPreviewData() -> [String: String] {
         if isMovieTicketTemplate {
-            return movieTicket.renderedDictionary()
+            return (previewTicketDraft ?? movieTicket).renderedDictionary()
         }
         guard let data = previewDataJSON.data(using: .utf8),
               let dict = try? JSONDecoder().decode([String: String].self, from: data) else {
@@ -401,6 +426,7 @@ struct TemplateDesignerView: View {
             } else {
                 movieTicket = MovieTicketData.from(dictionary: defaultPreviewData())
             }
+            previewTicketDraft = nil
             refreshPreviewJSON()
             return
         }
@@ -411,7 +437,7 @@ struct TemplateDesignerView: View {
 
     private func refreshPreviewJSON() {
         guard isMovieTicketTemplate else { return }
-        let rendered = movieTicket.renderedDictionary()
+        let rendered = (previewTicketDraft ?? movieTicket).renderedDictionary()
         if let data = try? JSONEncoder().encode(rendered),
            let str = String(data: data, encoding: .utf8) {
             previewDataJSON = prettyJSON(str) ?? str
@@ -432,9 +458,63 @@ struct TemplateDesignerView: View {
 
     private func saveTemplate() {
         if isMovieTicketTemplate {
+            if let draft = previewTicketDraft {
+                movieTicket = draft
+            }
             template.defaultData = movieTicket.storageDictionary()
         }
+        templateDocument.name = template.name
+        templateDocument.defaultData = template.defaultData
+        templateDocument.updatedAt = Date()
         appState.saveTemplate(template)
+    }
+
+    private var freestyleOverlay: some View {
+        ForEach($templateDocument.elements) { $element in
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(Color.accentColor.opacity(0.8), lineWidth: 1)
+                .background(Color.accentColor.opacity(0.08))
+                .frame(width: element.frame.width * 0.5, height: element.frame.height)
+                .offset(x: element.frame.x * 0.5, y: element.frame.y * 0.5)
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            element.frame.x = max(0, element.frame.x + value.translation.width * 2)
+                            element.frame.y = max(0, element.frame.y + value.translation.height * 2)
+                        }
+                )
+                .overlay(alignment: .topLeading) {
+                    Text(element.kind.rawValue)
+                        .font(.system(size: 9))
+                        .padding(2)
+                }
+        }
+    }
+
+    private func exportDocument() {
+        templateDocument = TemplateDocumentMigration.fromReceiptTemplate(template)
+        templateDocument.category = templateDocument.category
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "\(template.name).json"
+        if panel.runModal() == .OK, let url = panel.url,
+           let data = try? JSONEncoder().encode(templateDocument) {
+            try? data.write(to: url)
+        }
+    }
+
+    private func importDocument() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url,
+           let data = try? Data(contentsOf: url),
+           let doc = try? JSONDecoder().decode(TemplateDocument.self, from: data) {
+            templateDocument = doc
+            template = TemplateDocumentMigration.toReceiptTemplate(doc)
+            loadPreviewData()
+            updatePreview()
+        }
     }
 
     private func defaultPreviewData() -> [String: String] {

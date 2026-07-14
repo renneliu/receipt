@@ -4,6 +4,12 @@ struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var printers: [String] = []
     @State private var loadError: String?
+    @State private var draftClientID = ""
+    @State private var draftClientSecret = ""
+    @State private var draftRedirectURI = ""
+    @State private var draftSearchQuery = ""
+    @State private var draftTMDBKey = ""
+    @State private var oauthSaveTask: Task<Void, Never>?
 
     var body: some View {
         Form {
@@ -74,25 +80,43 @@ struct SettingsView: View {
                 ))
             }
 
+            Section("电影票默认值") {
+                Stepper("默认广告时长 \(appState.settings.defaultAdvertisingMinutes) 分钟", value: Binding(
+                    get: { appState.settings.defaultAdvertisingMinutes },
+                    set: {
+                        appState.settings.defaultAdvertisingMinutes = $0
+                        appState.settings.save()
+                    }
+                ), in: 0...60)
+                Text("模板打印与电影票模板将使用此默认值推算结束时间。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("TMDB") {
+                SecureField("API Key", text: $draftTMDBKey)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: draftTMDBKey) { _, _ in
+                        appState.settings.tmdbAPIKey = draftTMDBKey
+                    }
+                Text("用于「匹配片长」。在 themoviedb.org 申请 API Key。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Gmail OAuth") {
-                TextField("Client ID", text: Binding(
-                    get: { appState.settings.gmailClientID },
-                    set: { appState.settings.gmailClientID = $0; appState.settings.save() }
-                ))
-                .textFieldStyle(.roundedBorder)
-                SecureField("Client Secret", text: Binding(
-                    get: { appState.settings.gmailClientSecret },
-                    set: { appState.settings.gmailClientSecret = $0; appState.settings.save() }
-                ))
-                .textFieldStyle(.roundedBorder)
-                TextField("Redirect URI", text: Binding(
-                    get: { appState.settings.gmailRedirectURI },
-                    set: { appState.settings.gmailRedirectURI = $0; appState.settings.save() }
-                ))
-                .textFieldStyle(.roundedBorder)
+                TextField("Client ID", text: $draftClientID)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: draftClientID) { _, _ in scheduleSaveOAuthDrafts() }
+                SecureField("Client Secret", text: $draftClientSecret)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: draftClientSecret) { _, _ in scheduleSaveOAuthDrafts() }
+                TextField("Redirect URI", text: $draftRedirectURI)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: draftRedirectURI) { _, _ in scheduleSaveOAuthDrafts() }
                 Button("重置 Redirect URI 为默认值") {
-                    appState.settings.gmailRedirectURI = GmailOAuthConfig.defaultRedirectURI
-                    appState.settings.save()
+                    draftRedirectURI = GmailOAuthConfig.defaultRedirectURI
+                    scheduleSaveOAuthDrafts()
                 }
                 Text("Google Cloud 须创建「桌面应用」OAuth 客户端；Redirect URI 使用回环地址 \(GmailOAuthConfig.defaultRedirectURI)（无需在 Console 手动添加）")
                     .font(.caption)
@@ -102,14 +126,17 @@ struct SettingsView: View {
                     get: { appState.settings.gmailSyncInterval },
                     set: { appState.settings.gmailSyncInterval = $0; appState.settings.save() }
                 ), in: 60...3600, step: 60)
-                TextField("额外 Gmail 过滤（可选）", text: Binding(
-                    get: { appState.settings.gmailSearchQuery },
-                    set: { appState.settings.gmailSearchQuery = $0; appState.settings.save() }
-                ))
-                .textFieldStyle(.roundedBorder)
+                TextField("额外 Gmail 过滤（可选）", text: $draftSearchQuery)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: draftSearchQuery) { _, _ in scheduleSaveOAuthDrafts() }
                 Text("留空表示不限制时间。同步主要依据「影院规则」中的发件人/主题/正文；此处可填可选过滤，如 is:unread 或 newer_than:90d。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if appState.settings.gmailClientID.isEmpty {
+                    Text("当前未保存 Client ID。填写后会自动保存；若 Access Token 过期，缺少 Client ID 会导致同步失败。")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
 
             Section("关于") {
@@ -118,7 +145,38 @@ struct SettingsView: View {
         }
         .padding()
         .navigationTitle("设置")
-        .onAppear { refreshPrinters() }
+        .onAppear {
+            refreshPrinters()
+            loadOAuthDrafts()
+        }
+        .onDisappear {
+            persistOAuthDrafts()
+        }
+    }
+
+    private func loadOAuthDrafts() {
+        draftClientID = appState.settings.gmailClientID
+        draftClientSecret = appState.settings.gmailClientSecret
+        draftRedirectURI = appState.settings.gmailRedirectURI
+        draftSearchQuery = appState.settings.gmailSearchQuery
+        draftTMDBKey = appState.settings.tmdbAPIKey
+    }
+
+    private func scheduleSaveOAuthDrafts() {
+        oauthSaveTask?.cancel()
+        oauthSaveTask = Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { persistOAuthDrafts() }
+        }
+    }
+
+    private func persistOAuthDrafts() {
+        appState.settings.gmailClientID = draftClientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.settings.gmailClientSecret = draftClientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.settings.gmailRedirectURI = draftRedirectURI.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.settings.gmailSearchQuery = draftSearchQuery
+        appState.settings.save()
     }
 
     private func refreshPrinters() {

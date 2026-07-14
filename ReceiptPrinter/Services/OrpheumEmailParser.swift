@@ -23,21 +23,6 @@ enum OrpheumEmailParser {
         let reference = firstCapture(pattern: #"Reference\s*#\s*:?\s*(\d+)"#, in: text)
         let total = firstCapture(pattern: #"Total\s*[\s\n\*]*(\d+(?:\.\d+)?)"#, in: text, options: [.dotMatchesLineSeparators])
 
-        // #region agent log
-        DebugLog.write(
-            hypothesisId: "P1",
-            location: "OrpheumEmailParser.parse",
-            message: "parse attempt",
-            data: [
-                "textLen": String(text.count),
-                "hasShowtime": showtimeString != nil ? "1" : "0",
-                "movieTitle": String(movieTitle.prefix(60)),
-                "hasReference": reference != nil ? "1" : "0",
-                "subject": String(subject.prefix(80))
-            ]
-        )
-        // #endregion
-
         guard !movieTitle.isEmpty || showtimeString != nil || reference != nil || total != nil else {
             return nil
         }
@@ -67,18 +52,6 @@ enum OrpheumEmailParser {
             rendered["barcodeLabel"] = "* \(digits.map(String.init).joined(separator: " ")) *"
         }
 
-        // #region agent log
-        DebugLog.write(
-            hypothesisId: "P2",
-            location: "OrpheumEmailParser.parse",
-            message: "parse success",
-            data: [
-                "movieTitle": rendered["movieTitle"] ?? "",
-                "showDateTime": String((rendered["showDateTime"] ?? "").prefix(40)),
-                "barcode": rendered["barcode"] ?? ""
-            ]
-        )
-        // #endregion
         return rendered
     }
 

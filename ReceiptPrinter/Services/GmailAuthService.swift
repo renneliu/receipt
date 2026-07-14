@@ -9,6 +9,7 @@ enum GmailAuthError: LocalizedError {
     case noRefreshToken
     case redirectURIMismatch(expected: String)
     case testUserAccessDenied
+    case missingClientCredentials
 
     var errorDescription: String? {
         switch self {
@@ -16,6 +17,8 @@ enum GmailAuthError: LocalizedError {
         case .cancelled: return "授权已取消"
         case .tokenExchangeFailed(let msg): return "获取 Token 失败: \(msg)"
         case .noRefreshToken: return "无 Refresh Token，请重新授权"
+        case .missingClientCredentials:
+            return "设置中的 Google Client ID 或 Secret 为空。请在「设置」重新填写，然后在 Gmail 页断开并重新连接。"
         case .testUserAccessDenied: return GmailOAuthConfig.testUserAccessDeniedMessage
         case .redirectURIMismatch(let expected):
             return """
@@ -164,12 +167,17 @@ final class GmailAuthService: NSObject, ObservableObject {
     }
 
     func validAccessToken(clientID: String, clientSecret: String) async throws -> String {
+        let trimmedID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSecret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
         guard var current = tokens else { throw GmailAuthError.notConfigured }
         if current.expiresAt.timeIntervalSinceNow > 60 {
             return current.accessToken
         }
+        guard !trimmedID.isEmpty, !trimmedSecret.isEmpty else {
+            throw GmailAuthError.missingClientCredentials
+        }
         guard let refresh = current.refreshToken else { throw GmailAuthError.noRefreshToken }
-        current = try await refreshToken(refresh, clientID: clientID, clientSecret: clientSecret)
+        current = try await refreshToken(refresh, clientID: trimmedID, clientSecret: trimmedSecret)
         tokens = current
         saveTokens()
         return current.accessToken
@@ -210,13 +218,23 @@ final class GmailAuthService: NSObject, ObservableObject {
         var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        let body = "refresh_token=\(refresh)&client_id=\(clientID)&client_secret=\(clientSecret)&grant_type=refresh_token"
+        let body = [
+            "refresh_token": refresh,
+            "client_id": clientID,
+            "client_secret": clientSecret,
+            "grant_type": "refresh_token"
+        ].map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.value)" }
+            .joined(separator: "&")
         request.httpBody = body.data(using: .utf8)
         let (data, _) = try await URLSession.shared.data(for: request)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let accessToken = json["access_token"] as? String,
               let expiresIn = json["expires_in"] as? Double else {
-            throw GmailAuthError.tokenExchangeFailed(String(data: data, encoding: .utf8) ?? "")
+            let raw = String(data: data, encoding: .utf8) ?? ""
+            if raw.localizedCaseInsensitiveContains("Could not determine client ID") {
+                throw GmailAuthError.missingClientCredentials
+            }
+            throw GmailAuthError.tokenExchangeFailed(raw)
         }
         return GmailTokens(
             accessToken: accessToken,

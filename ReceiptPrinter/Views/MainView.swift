@@ -28,18 +28,22 @@ struct MainView: View {
         switch appState.selectedSidebarItem {
         case .quickPrint:
             QuickPrintView()
+        case .templatePrint:
+            TemplatePrintView()
         case .templates:
             TemplateListView()
         case .designer:
             TemplateDesignerView(template: appState.designerTemplate ?? appState.templates.first ?? ReceiptTemplate(name: "新模板"))
-        case .importPhoto:
-            ImportReceiptView()
+        case .emailExtraction:
+            EmailExtractionRulesView()
         case .orders:
             OrderInboxView()
         case .cinemaRules:
             CinemaRulesView()
         case .gmail:
             GmailSettingsView()
+        case .diagnostics:
+            PrintDiagnosticView()
         case .settings:
             SettingsView()
         }

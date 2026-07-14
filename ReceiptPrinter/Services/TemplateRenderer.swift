@@ -2,115 +2,45 @@ import AppKit
 import Foundation
 
 enum TemplateRenderer {
+    /// Canonical render: same bitmap used for on-screen preview and ESC/POS raster print.
+    /// Thermal printers receive GS v 0 raster bytes — not their built-in text fonts.
     static func renderESCPOS(template: ReceiptTemplate, data: [String: String], config: PrinterConfig) -> Data {
-        let builder = ESCPOSBuilder(config: config).initialize()
-        for block in template.blocks {
-            renderBlock(block, data: data, builder: builder, config: config)
-        }
-        return builder.cut().build()
+        let image = renderPreviewImage(template: template, data: data, config: config)
+        return ESCPOSBuilder(config: config)
+            .initializeForRaster()
+            .align(.left)
+            .image(image, maxWidth: config.dotsPerLine)
+            .cut()
+            .build()
     }
 
     static func renderPreviewImage(template: ReceiptTemplate, data: [String: String], config: PrinterConfig) -> NSImage {
         let width = config.dotsPerLine
         let height = estimateHeight(template: template, data: data, width: width)
-        let image = NSImage(size: NSSize(width: CGFloat(width), height: height))
-        image.lockFocus()
-        NSColor.white.setFill()
-        NSRect(x: 0, y: 0, width: CGFloat(width), height: height).fill()
-        var y: CGFloat = 8
-        for block in template.blocks {
-            y = drawBlock(block, data: data, at: y, width: width, context: NSGraphicsContext.current)
-        }
-        image.unlockFocus()
-        return image
-    }
-
-    private static func renderBlock(
-        _ block: TemplateBlock,
-        data: [String: String],
-        builder: ESCPOSBuilder,
-        config: PrinterConfig
-    ) {
-        switch block.type {
-        case .text:
-            let text = ReceiptTemplate.substitute(block.content, data: data)
-            guard !text.isEmpty else { return }
-            let align: ESCPOSAlign = switch block.align {
-            case .left: .left
-            case .center: .center
-            case .right: .right
+        let size = NSSize(width: CGFloat(width), height: height)
+        // flipped: true → origin top-left, same reading order as ESC/POS scroll
+        return NSImage(size: size, flipped: true) { _ in
+            NSColor.white.setFill()
+            NSRect(origin: .zero, size: size).fill()
+            var y: CGFloat = 8
+            for block in template.blocks {
+                y = drawBlock(block, data: data, at: y, width: width, context: NSGraphicsContext.current)
             }
-            builder.align(align)
-                .bold(block.bold)
-                .applyTextSize(block.size)
-            if block.underline { builder.underline(true) }
-            if block.reverse { builder.reversePrint(true) }
-            builder.text(text).newline()
-            builder.resetStyle()
-        case .row:
-            let left = ReceiptTemplate.substitute(block.content, data: data)
-            let right = ReceiptTemplate.substitute(block.rightContent, data: data)
-            let highlight = ReceiptTemplate.substitute(block.rightHighlight, data: data)
-            builder.tableRowWithHighlight(
-                left: left,
-                rightPrefix: right,
-                highlight: highlight,
-                leftBold: block.bold,
-                leftSize: block.size,
-                rightBold: block.rightBold,
-                rightSize: block.rightSize
-            )
-        case .line:
-            let char = block.content.first ?? "-"
-            builder.align(.left).line(char: char)
-        case .spacer:
-            builder.feed(lines: block.spacerLines)
-        case .barcode:
-            let content = ReceiptTemplate.substitute(block.content, data: data)
-            let type: ESCPOSBarcode = block.barcodeType == .code128 ? .code128 : .ean13
-            builder.barcode(
-                type: type,
-                content: content,
-                height: block.barcodeHeight,
-                width: block.barcodeWidth,
-                printHRI: block.barcodePrintHRI
-            )
-            builder.resetStyle()
-        case .qr:
-            let content = ReceiptTemplate.substitute(block.content, data: data)
-            builder.qrCodeImage(content)
-        case .image:
-            if let path = block.imagePath, let img = NSImage(contentsOfFile: path) {
-                builder.image(img)
-            }
-        case .table:
-            renderTable(block, data: data, builder: builder)
-        }
-    }
-
-    private static func renderTable(_ block: TemplateBlock, data: [String: String], builder: ESCPOSBuilder) {
-        if let json = data[block.dataSource ?? "items"],
-           let itemsData = json.data(using: .utf8),
-           let items = try? JSONDecoder().decode([[String: String]].self, from: itemsData) {
-            for item in items {
-                let name = item["name"] ?? ""
-                let qty = item["qty"] ?? "1"
-                let price = item["price"] ?? ""
-                builder.tableRow(left: "\(name) x\(qty)", right: price)
-            }
-        } else {
-            builder.text("[表格: \(block.dataSource ?? "items")]").newline()
+            return true
         }
     }
 
     private static func estimateHeight(template: ReceiptTemplate, data: [String: String], width: Int) -> CGFloat {
         var h: CGFloat = 16
+        let contentWidth = CGFloat(width) - 8
         for block in template.blocks {
             switch block.type {
-            case .text: h += textBlockHeight(block.size)
+            case .text:
+                let raw = ReceiptTemplate.substitute(block.content, data: data)
+                h += wrappedTextHeight(raw, size: block.size, bold: block.bold, width: contentWidth) + 6
             case .row:
                 let split = rowNeedsSplitLayout(block)
-                h += split ? textBlockHeight(block.size) + 20 : 20
+                h += split ? textBlockHeight(block.size) + textBlockHeight(block.rightSize) + 14 : 28
             case .line: h += 16
             case .spacer: h += CGFloat(block.spacerLines * 12)
             case .barcode: h += CGFloat(block.barcodeHeight) + 24
@@ -124,6 +54,30 @@ enum TemplateRenderer {
             }
         }
         return max(h + 20, 200)
+    }
+
+    private static func wrappedTextHeight(_ text: String, size: TextSize, bold: Bool, width: CGFloat) -> CGFloat {
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: previewFont(for: size, bold: bold),
+            .paragraphStyle: wrappedParagraph(align: .left)
+        ]
+        let bounds = (text as NSString).boundingRect(
+            with: NSSize(width: width, height: 10_000),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attrs
+        )
+        return max(ceil(bounds.height), textBlockHeight(size))
+    }
+
+    private static func wrappedParagraph(align: TextAlign) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byWordWrapping
+        switch align {
+        case .left: style.alignment = .left
+        case .center: style.alignment = .center
+        case .right: style.alignment = .right
+        }
+        return style
     }
 
     private static func textBlockHeight(_ size: TextSize) -> CGFloat {
@@ -206,34 +160,33 @@ enum TemplateRenderer {
         case .text:
             var attrs: [NSAttributedString.Key: Any] = [
                 .font: previewFont(for: block.size, bold: block.bold),
-                .foregroundColor: block.reverse ? NSColor.white : NSColor.black
+                .foregroundColor: block.reverse ? NSColor.white : NSColor.black,
+                .paragraphStyle: wrappedParagraph(align: block.align)
             ]
             if block.underline {
                 attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
             }
             let raw = ReceiptTemplate.substitute(block.content, data: data)
-            let lines = raw.components(separatedBy: "\n")
-            for (lineIndex, line) in lines.enumerated() {
-                let text = line as NSString
-                let size = text.size(withAttributes: attrs)
-                var x: CGFloat = 4
-                if block.align == .center { x = (CGFloat(width) - size.width) / 2 }
-                if block.align == .right { x = CGFloat(width) - size.width - 4 }
-                if block.reverse {
-                    let pad: CGFloat = 2
-                    NSColor.black.setFill()
-                    NSRect(x: x - pad, y: y, width: size.width + pad * 2, height: size.height + 2).fill()
-                }
-                text.draw(at: NSPoint(x: x, y: y), withAttributes: attrs)
-                y += size.height + 4
-                if lineIndex < lines.count - 1 { y += 2 }
+            guard !raw.isEmpty else { break }
+            let contentWidth = CGFloat(width) - 8
+            let bounds = (raw as NSString).boundingRect(
+                with: NSSize(width: contentWidth, height: 10_000),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: attrs
+            )
+            let drawRect = NSRect(x: 4, y: y, width: contentWidth, height: ceil(bounds.height))
+            if block.reverse {
+                NSColor.black.setFill()
+                drawRect.insetBy(dx: -2, dy: -1).fill()
             }
-            y += 2
+            (raw as NSString).draw(with: drawRect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs)
+            y += ceil(bounds.height) + 6
         case .line:
             NSColor.black.setStroke()
             let path = NSBezierPath()
-            path.move(to: NSPoint(x: 4, y: y))
-            path.line(to: NSPoint(x: CGFloat(width) - 4, y: y))
+            path.move(to: NSPoint(x: 4, y: y + 4))
+            path.line(to: NSPoint(x: CGFloat(width) - 4, y: y + 4))
+            path.lineWidth = 1
             path.stroke()
             y += 12
         case .spacer:
@@ -241,22 +194,35 @@ enum TemplateRenderer {
         case .qr:
             let content = ReceiptTemplate.substitute(block.content, data: data)
             if let qr = BarcodeGenerator.makeQRCode(content, size: min(width - 40, 160)) {
-                qr.draw(in: NSRect(x: (CGFloat(width) - qr.size.width) / 2, y: y, width: qr.size.width, height: qr.size.height))
+                qr.draw(
+                    in: NSRect(x: (CGFloat(width) - qr.size.width) / 2, y: y, width: qr.size.width, height: qr.size.height),
+                    from: .zero,
+                    operation: .copy,
+                    fraction: 1,
+                    respectFlipped: true,
+                    hints: [.interpolation: NSNumber(value: NSImageInterpolation.none.rawValue)]
+                )
                 y += qr.size.height + 8
             }
         case .barcode:
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: previewFont(for: .normal, bold: false),
-                .foregroundColor: NSColor.black
-            ]
-            let content = ReceiptTemplate.substitute(block.content, data: data) as NSString
+            let content = ReceiptTemplate.substitute(block.content, data: data)
             let barH = CGFloat(block.barcodeHeight)
-            NSColor.black.setFill()
-            NSRect(x: CGFloat(width) * 0.15, y: y, width: CGFloat(width) * 0.7, height: barH * 0.6).fill()
-            y += barH * 0.6 + 4
+            let barW = CGFloat(width) * 0.78
+            let barX = (CGFloat(width) - barW) / 2
+            drawPreviewBarcode(content: content, in: NSRect(x: barX, y: y, width: barW, height: barH * 0.7))
+            y += barH * 0.7 + 6
             if block.barcodePrintHRI {
-                content.draw(at: NSPoint(x: 4, y: y), withAttributes: attrs)
-                y += 16
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .font: previewFont(for: .normal, bold: false),
+                    .foregroundColor: NSColor.black,
+                    .paragraphStyle: wrappedParagraph(align: .center)
+                ]
+                let label = content as NSString
+                let size = label.size(withAttributes: attrs)
+                label.draw(at: NSPoint(x: (CGFloat(width) - size.width) / 2, y: y), withAttributes: attrs)
+                y += size.height + 8
+            } else {
+                y += 4
             }
         case .image:
             if let path = block.imagePath, let img = NSImage(contentsOfFile: path) {
@@ -284,5 +250,31 @@ enum TemplateRenderer {
             }
         }
         return y
+    }
+
+    /// Simple Code128-like bars for preview/raster print (integer-pixel bar widths, no interpolation).
+    private static func drawPreviewBarcode(content: String, in rect: NSRect) {
+        let digits = content.filter { $0.isNumber || $0.isLetter }
+        var pattern: [Bool] = [true, true, false] // start-ish
+        for (index, ch) in digits.utf8.enumerated() {
+            let v = Int(ch)
+            pattern.append(true)
+            pattern.append(index % 2 == 0)
+            pattern.append(false)
+            pattern.append(v % 2 == 0)
+            pattern.append(true)
+            pattern.append(false)
+        }
+        pattern.append(contentsOf: [true, true, true, false, true])
+        let unit = max(1, floor(rect.width / CGFloat(max(pattern.count, 1))))
+        var x = rect.minX
+        NSColor.black.setFill()
+        for bit in pattern {
+            if bit {
+                NSRect(x: x, y: rect.minY, width: unit, height: rect.height).fill()
+            }
+            x += unit
+            if x > rect.maxX { break }
+        }
     }
 }

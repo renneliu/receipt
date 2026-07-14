@@ -32,3 +32,24 @@ struct PrintPreviewView: View {
         .frame(minWidth: 420, minHeight: 500)
     }
 }
+
+/// Bitmap-only preview (quick print / template print).
+struct BitmapPrintPreviewView: View {
+    let image: NSImage
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack {
+            Text("80mm 小票预览")
+                .font(.headline)
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: 360)
+                .padding()
+            Button("关闭") { dismiss() }
+        }
+        .padding()
+        .frame(minWidth: 420, minHeight: 500)
+    }
+}

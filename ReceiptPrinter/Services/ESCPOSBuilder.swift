@@ -28,11 +28,22 @@ final class ESCPOSBuilder {
     @discardableResult
     func initialize() -> Self {
         data.append(contentsOf: [0x1B, 0x40])
+        // This POS-80 prints Chinese correctly in GBK + FS & text mode.
+        // Whole-page GS v 0 is often misread as text → garbled output (runtime evidence).
         if config.encoding == .gbk {
-            data.append(contentsOf: [0x1C, 0x26])
-            data.append(contentsOf: [0x1B, 0x74, 0x00])
+            data.append(contentsOf: [0x1C, 0x26]) // FS & enable Chinese character mode
+            data.append(contentsOf: [0x1B, 0x74, 0x00]) // ESC t 0
         }
-        return feed(lines: 1)
+        return self
+    }
+
+    /// Reset without Chinese character mode — used before GS v 0 raster (when supported).
+    @discardableResult
+    func initializeForRaster() -> Self {
+        data.append(contentsOf: [0x1B, 0x40])
+        data.append(contentsOf: [0x1C, 0x2E])
+        data.append(contentsOf: [0x1B, 0x40])
+        return self
     }
 
     @discardableResult
@@ -118,6 +129,15 @@ final class ESCPOSBuilder {
         return self
     }
 
+    /// Encode a single already-wrapped line (no additional wrap). Used by WYSIWYG quick-print.
+    @discardableResult
+    func appendRawTextLine(_ string: String) -> Self {
+        if !string.isEmpty {
+            appendEncoded(string)
+        }
+        return self
+    }
+
     private func appendEncoded(_ string: String) {
         switch config.encoding {
         case .utf8:
@@ -129,12 +149,38 @@ final class ESCPOSBuilder {
         }
     }
 
-    /// Send raw GBK bytes without FS & / FS . mode toggles (avoids boundary corruption on many printers).
+    /// Segment halfwidth ASCII / CJK on the same LF line with FS . / FS &.
     private func appendGBKPlain(_ string: String) {
         let cfEncoding = CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)
         let encoding = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cfEncoding))
-        guard let encoded = string.data(using: encoding) else { return }
-        data.append(encoded)
+        let cleaned = String(string.unicodeScalars.filter { $0.value != 0xFFFC })
+        guard !cleaned.isEmpty else { return }
+
+        for segment in Self.scriptRuns(cleaned) {
+            let isCJK = segment.unicodeScalars.contains { $0.value > 0x7F }
+            data.append(contentsOf: isCJK ? [0x1C, 0x26] : [0x1C, 0x2E])
+            if let encoded = segment.data(using: encoding) {
+                data.append(encoded)
+            }
+        }
+    }
+
+    /// Group characters into ASCII-only vs CJK/fullwidth runs (spaces stay with the run).
+    private static func scriptRuns(_ string: String) -> [String] {
+        var runs: [String] = []
+        var current = ""
+        var currentIsCJK: Bool?
+        for scalar in string.unicodeScalars {
+            let isCJK = scalar.value > 0x7F
+            if let cur = currentIsCJK, cur != isCJK, !current.isEmpty {
+                runs.append(current)
+                current = ""
+            }
+            currentIsCJK = isCJK
+            current.unicodeScalars.append(scalar)
+        }
+        if !current.isEmpty { runs.append(current) }
+        return runs.isEmpty ? [string] : runs
     }
 
     @discardableResult
@@ -276,22 +322,55 @@ final class ESCPOSBuilder {
     }
 
     private func appendRasterImage(_ raster: RasterImage) {
+        // Cancel Chinese character mode before bit-image; otherwise clones often print raster as GBK text.
+        data.append(contentsOf: [0x1C, 0x2E])
         let widthBytes = raster.widthBytes
         let xL = UInt8(widthBytes & 0xFF)
         let xH = UInt8((widthBytes >> 8) & 0xFF)
         let yL = UInt8(raster.height & 0xFF)
         let yH = UInt8((raster.height >> 8) & 0xFF)
+        // GS v 0: xL/xH = bytes per row, yL/yH = number of rows. Payload MUST be exactly
+        // widthBytes*height, else the printer reads trailing image bytes as commands (garbage).
+        let expectedRasterBytes = widthBytes * raster.height
+        assert(expectedRasterBytes == raster.data.count, "GS v 0 raster byte count mismatch")
         data.append(contentsOf: [0x1D, 0x76, 0x30, 0x00, xL, xH, yL, yH])
         data.append(raster.data)
         feed(lines: 1)
     }
 
     @discardableResult
-    func cut() -> Self {
+    func cut(feedLines override: Int? = nil) -> Self {
         if config.cutPaper {
-            feed(lines: config.feedLinesBeforeCut)
+            let lines = max(1, min(override ?? config.feedLinesBeforeCut, 255))
+            feed(lines: lines)
+            // Full cut (GS V 0) — works on this POS-80 after text jobs.
             data.append(contentsOf: [0x1D, 0x56, 0x00])
         }
+        return self
+    }
+
+    /// Paper advance for dedicated 「走纸」.
+    /// Empty LFs alone are unreliable; print a space each line so the head actually advances.
+    @discardableResult
+    func feedPaperAction(lines: Int) -> Self {
+        let n = max(1, min(lines, 40))
+        for _ in 0..<n {
+            appendEncoded(" ")
+            data.append(0x0A)
+        }
+        feed(lines: n)
+        return self
+    }
+
+    /// Dedicated 「切纸」: advance then a single full cut (GS V 0).
+    /// Multiple cut variants in one job caused repeated cuts on POS-80 (log evidence).
+    @discardableResult
+    func cutPaperAction(feedLines: Int = 12) -> Self {
+        let n = max(12, min(feedLines, 40))
+        appendEncoded(" ")
+        newline(2)
+        feed(lines: n)
+        data.append(contentsOf: [0x1D, 0x56, 0x00])
         return self
     }
 }

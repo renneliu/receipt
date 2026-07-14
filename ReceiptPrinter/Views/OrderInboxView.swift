@@ -10,17 +10,10 @@ struct OrderInboxView: View {
     }
 
     var body: some View {
-        VStack {
-            Picker("状态", selection: $selectedTab) {
-                ForEach(OrderStatus.allCases) { status in
-                    Text(status.displayName).tag(status)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-
+        Group {
             if filtered.isEmpty {
                 ContentUnavailableView("暂无\(selectedTab.displayName)订单", systemImage: "tray")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(filtered, selection: $selectedOrder) { order in
                     Button { selectedOrder = order } label: {
@@ -39,6 +32,17 @@ struct OrderInboxView: View {
             }
         }
         .navigationTitle("订单收件箱")
+        .safeAreaInset(edge: .top, spacing: 0) {
+            Picker("状态", selection: $selectedTab) {
+                ForEach(OrderStatus.allCases) { status in
+                    Text(status.displayName).tag(status)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(.bar)
+        }
         .sheet(item: $selectedOrder) { order in
             OrderDetailView(order: order)
                 .environmentObject(appState)

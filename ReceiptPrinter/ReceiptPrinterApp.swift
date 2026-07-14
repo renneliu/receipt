@@ -31,11 +31,17 @@ final class AppState: ObservableObject {
     @Published var importResult: ImportReceiptResult?
     @Published var lastError: String?
     @Published var gmailSyncStatus: String = "未同步"
+    @Published var extractionSchemas: [EmailExtractionSchema] = []
+    @Published var diagnosticRecords: [PrintDiagnosticRecord] = []
+    @Published var isPrinting = false
 
     let printService = CUPSPrintService()
+    let printController = PrintController()
+    let diagnosticStore = PrintDiagnosticStore()
     let templateStore = TemplateStore()
     let cinemaRuleStore = CinemaRuleStore()
     let orderStore = OrderStore()
+    let extractionSchemaStore = ExtractionSchemaStore()
     let gmailAuth = GmailAuthService()
     let gmailSync: GmailSyncService
     let notificationService = NotificationService()
@@ -67,6 +73,8 @@ final class AppState: ObservableObject {
         templates = templateStore.loadAll()
         cinemaRules = cinemaRuleStore.loadAll()
         orders = orderStore.loadAll()
+        extractionSchemas = extractionSchemaStore.loadAll()
+        diagnosticRecords = diagnosticStore.loadAll()
         notificationService.requestAuthorization()
         if settings.gmailSyncEnabled && gmailAuth.isAuthenticated {
             gmailSync.start(interval: settings.gmailSyncInterval)
@@ -110,12 +118,67 @@ final class AppState: ObservableObject {
             lastError = "请先在设置中选择打印机"
             return
         }
-        do {
-            let escpos = TemplateRenderer.renderESCPOS(template: template, data: data, config: settings.printerConfig)
-            try printService.printRaw(printerName: printer, data: escpos)
-        } catch {
-            lastError = error.localizedDescription
+        let escpos = TemplateRenderer.renderESCPOS(template: template, data: data, config: settings.printerConfig)
+        let config = PrintController.Config(
+            printerName: printer,
+            connectionType: "USB raw via CUPS `lp`",
+            statusPollingWasActive: false,
+            clearStuckJobsFirst: false
+        )
+        // Route through the single serialized, off-main controller (no overlap with manual/Gmail).
+        let record = await printController.printRawOnce(
+            config: config,
+            payload: escpos,
+            sourceLabel: "template:\(template.name)",
+            renderMode: .raster
+        )
+        ingest(record)
+        if let err = record.transportError { lastError = err }
+    }
+
+    // MARK: - Diagnostics
+
+    /// Off-main render + serialized single transmission, then publish the record on main.
+    func runDiagnosticPrint(artifacts: PrintArtifacts, statusPollingWasActive: Bool) async -> PrintDiagnosticRecord? {
+        guard let printer = settings.selectedPrinterName, !printer.isEmpty else {
+            lastError = "请先在设置中选择打印机"
+            return nil
         }
+        isPrinting = true
+        defer { isPrinting = false }
+        let config = PrintController.Config(
+            printerName: printer,
+            connectionType: "USB raw via CUPS `lp`",
+            statusPollingWasActive: statusPollingWasActive,
+            clearStuckJobsFirst: false
+        )
+        let record = await printController.printOnce(config: config, artifacts: artifacts)
+        ingest(record)
+        if let err = record.transportError { lastError = err }
+        return record
+    }
+
+    func ingest(_ record: PrintDiagnosticRecord) {
+        diagnosticRecords.removeAll { $0.id == record.id }
+        diagnosticRecords.insert(record, at: 0)
+    }
+
+    func reloadDiagnostics() {
+        diagnosticRecords = diagnosticStore.loadAll()
+    }
+
+    func markDiagnosticResult(id: String, result: PrintResultLabel, note: String? = nil) {
+        guard var record = diagnosticRecords.first(where: { $0.id == id }) else { return }
+        record.result = result
+        if let note { record.note = note }
+        diagnosticStore.upsert(record)
+        diagnosticStore.writeMetadata(record)
+        ingest(record)
+    }
+
+    func deleteDiagnostic(id: String) {
+        diagnosticStore.delete(id: id)
+        diagnosticRecords.removeAll { $0.id == id }
     }
 
     func handleNewOrder(_ order: PendingOrder) {
@@ -167,16 +230,28 @@ final class AppState: ObservableObject {
         await gmailSync.syncNow(rules: cinemaRules, settings: settings)
         reloadOrders()
     }
+
+    func saveExtractionSchema(_ schema: EmailExtractionSchema) {
+        extractionSchemaStore.save(schema)
+        extractionSchemas = extractionSchemaStore.loadAll()
+    }
+
+    func deleteExtractionSchema(_ schema: EmailExtractionSchema) {
+        extractionSchemaStore.delete(schema)
+        extractionSchemas = extractionSchemaStore.loadAll()
+    }
 }
 
 enum SidebarItem: String, CaseIterable, Identifiable {
     case quickPrint = "快速打印"
+    case templatePrint = "模板打印"
     case templates = "模板管理"
     case designer = "模板设计"
-    case importPhoto = "照片识别"
+    case emailExtraction = "邮件抓取规则"
     case orders = "订单收件箱"
     case cinemaRules = "影院规则"
     case gmail = "Gmail"
+    case diagnostics = "打印诊断"
     case settings = "设置"
 
     var id: String { rawValue }
@@ -184,12 +259,14 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .quickPrint: return "printer"
+        case .templatePrint: return "doc.richtext"
         case .templates: return "doc.text"
         case .designer: return "pencil.and.outline"
-        case .importPhoto: return "photo"
+        case .emailExtraction: return "envelope.badge"
         case .orders: return "tray"
         case .cinemaRules: return "film"
         case .gmail: return "envelope"
+        case .diagnostics: return "stethoscope"
         case .settings: return "gearshape"
         }
     }
