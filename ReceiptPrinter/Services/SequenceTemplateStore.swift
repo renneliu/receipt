@@ -4,7 +4,8 @@ import Foundation
 /// Persists Excel-sequence templates: `meta.json` + `body.rtfd` + optional images per id.
 final class SequenceTemplateStore {
     static let draftBackgroundFilename = "sequence-draft-background.png"
-    static let draftLogoFilename = "sequence-draft-logo.png"
+    static let draftLegacyLogoFilename = "sequence-draft-logo.png"
+    static let draftLogosFolderName = "sequence-draft-logos"
 
     private let root: URL
     private let draftDir: URL
@@ -21,6 +22,10 @@ final class SequenceTemplateStore {
         root.appendingPathComponent(id.uuidString, isDirectory: true)
     }
 
+    private var draftLogosDir: URL {
+        draftDir.appendingPathComponent(Self.draftLogosFolderName, isDirectory: true)
+    }
+
     func loadAll() -> [(document: SpreadsheetSequenceDocument, body: NSAttributedString)] {
         guard let dirs = try? FileManager.default.contentsOfDirectory(
             at: root,
@@ -35,9 +40,10 @@ final class SequenceTemplateStore {
             }
             let metaURL = dir.appendingPathComponent("meta.json")
             guard let data = try? Data(contentsOf: metaURL),
-                  let doc = try? JSONDecoder().decode(SpreadsheetSequenceDocument.self, from: data) else {
+                  var doc = try? JSONDecoder().decode(SpreadsheetSequenceDocument.self, from: data) else {
                 return nil
             }
+            doc.normalizeLogos()
             let bodyURL = dir.appendingPathComponent("body.rtfd", isDirectory: true)
             let body: NSAttributedString
             if FileManager.default.fileExists(atPath: bodyURL.path),
@@ -55,19 +61,30 @@ final class SequenceTemplateStore {
         .sorted { $0.document.updatedAt > $1.document.updatedAt }
     }
 
-    func loadImage(document: SpreadsheetSequenceDocument, kind: SequenceImageKind) -> NSImage? {
-        guard let name = kind.filename(in: document) else { return nil }
-        let url = folder(for: document.id).appendingPathComponent(name)
-        return NSImage(contentsOf: url)
+    func loadBackground(document: SpreadsheetSequenceDocument) -> NSImage? {
+        guard let name = document.backgroundImageFilename else { return nil }
+        return NSImage(contentsOf: folder(for: document.id).appendingPathComponent(name))
+    }
+
+    func loadLogoImages(document: SpreadsheetSequenceDocument) -> [UUID: NSImage] {
+        var result: [UUID: NSImage] = [:]
+        let dir = folder(for: document.id)
+        for item in document.logos {
+            if let img = NSImage(contentsOf: dir.appendingPathComponent(item.imageFilename)) {
+                result[item.id] = img
+            }
+        }
+        return result
     }
 
     func save(
         document: SpreadsheetSequenceDocument,
         body: NSAttributedString,
         backgroundImage: NSImage?,
-        logoImage: NSImage?
+        logos: [(item: SequenceLogoItem, image: NSImage)]
     ) {
         var doc = document
+        doc.normalizeLogos()
         doc.touch()
         let dir = folder(for: doc.id)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -80,14 +97,28 @@ final class SequenceTemplateStore {
             doc.backgroundImageFilename = nil
         }
 
-        let logoURL = dir.appendingPathComponent(SpreadsheetSequenceDocument.logoFilename)
-        if writePNG(logoImage, to: logoURL) {
-            doc.logoImageFilename = SpreadsheetSequenceDocument.logoFilename
-        } else {
-            try? FileManager.default.removeItem(at: logoURL)
-            doc.logoImageFilename = nil
-            doc.logoFrame = nil
+        // Remove previous logo-*.png / legacy logo.png, then write current set.
+        if let existing = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            for url in existing {
+                let name = url.lastPathComponent
+                if name == SpreadsheetSequenceDocument.logoFilename || name.hasPrefix("logo-") {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
         }
+
+        var savedItems: [SequenceLogoItem] = []
+        for entry in logos {
+            var item = entry.item
+            let name = SpreadsheetSequenceDocument.logoFilename(for: item.id)
+            let url = dir.appendingPathComponent(name)
+            guard writePNG(entry.image, to: url) else { continue }
+            item.imageFilename = name
+            savedItems.append(item)
+        }
+        doc.logos = savedItems
+        doc.logoImageFilename = nil
+        doc.logoFrame = nil
 
         let metaURL = dir.appendingPathComponent("meta.json")
         if let data = try? JSONEncoder().encode(doc) {
@@ -112,7 +143,7 @@ final class SequenceTemplateStore {
         try? FileManager.default.removeItem(at: dir)
     }
 
-    // MARK: - Draft (placeholders + logo frame + images)
+    // MARK: - Draft
 
     private var draftMetaURL: URL {
         draftDir.appendingPathComponent("spreadsheet-sequence-placeholders.json")
@@ -122,22 +153,23 @@ final class SequenceTemplateStore {
         draftDir.appendingPathComponent(Self.draftBackgroundFilename)
     }
 
-    private var draftLogoURL: URL {
-        draftDir.appendingPathComponent(Self.draftLogoFilename)
+    private var draftLegacyLogoURL: URL {
+        draftDir.appendingPathComponent(Self.draftLegacyLogoFilename)
     }
 
     func loadDraftMeta() -> SequenceDraftMeta {
-        // Migrate legacy `[SequencePlaceholder]` JSON → SequenceDraftMeta
         guard let data = try? Data(contentsOf: draftMetaURL) else { return SequenceDraftMeta() }
-        if let meta = try? JSONDecoder().decode(SequenceDraftMeta.self, from: data) {
+        if var meta = try? JSONDecoder().decode(SequenceDraftMeta.self, from: data) {
+            meta.normalizeLogos()
             return meta
         }
         if let list = try? JSONDecoder().decode([SequencePlaceholder].self, from: data) {
             return SequenceDraftMeta(
                 placeholders: list,
-                logoFrame: nil,
+                logos: [],
                 hasBackground: FileManager.default.fileExists(atPath: draftBackgroundURL.path),
-                hasLogo: FileManager.default.fileExists(atPath: draftLogoURL.path)
+                logoFrame: nil,
+                hasLogo: FileManager.default.fileExists(atPath: draftLegacyLogoURL.path)
             )
         }
         return SequenceDraftMeta()
@@ -151,26 +183,62 @@ final class SequenceTemplateStore {
         NSImage(contentsOf: draftBackgroundURL)
     }
 
-    func loadDraftLogoImage() -> NSImage? {
-        NSImage(contentsOf: draftLogoURL)
+    func loadDraftLogoImages(items: [SequenceLogoItem]) -> [UUID: NSImage] {
+        var result: [UUID: NSImage] = [:]
+        try? FileManager.default.createDirectory(at: draftLogosDir, withIntermediateDirectories: true)
+        for item in items {
+            let primary = draftLogosDir.appendingPathComponent(item.imageFilename)
+            if let img = NSImage(contentsOf: primary) {
+                result[item.id] = img
+                continue
+            }
+            // Legacy single draft logo.
+            if item.imageFilename == Self.draftLegacyLogoFilename,
+               let img = NSImage(contentsOf: draftLegacyLogoURL) {
+                result[item.id] = img
+            }
+        }
+        return result
     }
 
     func saveDraft(
         placeholders: [SequencePlaceholder],
-        logoFrame: SequencePlaceholderFrame?,
+        logos: [(item: SequenceLogoItem, image: NSImage)],
         backgroundImage: NSImage?,
-        logoImage: NSImage?
+        backgroundScalePercent: Double = 100
     ) {
         let hasBG = writePNG(backgroundImage, to: draftBackgroundURL)
-        let hasLogo = writePNG(logoImage, to: draftLogoURL)
         if !hasBG { try? FileManager.default.removeItem(at: draftBackgroundURL) }
-        if !hasLogo { try? FileManager.default.removeItem(at: draftLogoURL) }
 
+        try? FileManager.default.createDirectory(at: draftLogosDir, withIntermediateDirectories: true)
+        if let existing = try? FileManager.default.contentsOfDirectory(at: draftLogosDir, includingPropertiesForKeys: nil) {
+            for url in existing {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+        try? FileManager.default.removeItem(at: draftLegacyLogoURL)
+
+        var saved: [SequenceLogoItem] = []
+        for entry in logos {
+            var item = entry.item
+            let name = SpreadsheetSequenceDocument.logoFilename(for: item.id)
+            let url = draftLogosDir.appendingPathComponent(name)
+            guard writePNG(entry.image, to: url) else { continue }
+            item.imageFilename = name
+            saved.append(item)
+        }
+
+        let clampedBG = min(
+            SequenceLogoItem.maxScalePercent,
+            max(SequenceLogoItem.minScalePercent, backgroundScalePercent.rounded())
+        )
         let meta = SequenceDraftMeta(
             placeholders: placeholders,
-            logoFrame: hasLogo ? logoFrame : nil,
+            logos: saved,
             hasBackground: hasBG,
-            hasLogo: hasLogo
+            backgroundScalePercent: hasBG ? clampedBG : 100,
+            logoFrame: nil,
+            hasLogo: !saved.isEmpty
         )
         guard let data = try? JSONEncoder().encode(meta) else { return }
         try? data.write(to: draftMetaURL, options: .atomic)
@@ -180,8 +248,7 @@ final class SequenceTemplateStore {
         var meta = loadDraftMeta()
         meta.placeholders = placeholders
         meta.hasBackground = FileManager.default.fileExists(atPath: draftBackgroundURL.path)
-        meta.hasLogo = FileManager.default.fileExists(atPath: draftLogoURL.path)
-        if !meta.hasLogo { meta.logoFrame = nil }
+        meta.hasLogo = !meta.logos.isEmpty
         guard let data = try? JSONEncoder().encode(meta) else { return }
         try? data.write(to: draftMetaURL, options: .atomic)
     }
@@ -189,7 +256,8 @@ final class SequenceTemplateStore {
     func clearDraftPlaceholders() {
         try? FileManager.default.removeItem(at: draftMetaURL)
         try? FileManager.default.removeItem(at: draftBackgroundURL)
-        try? FileManager.default.removeItem(at: draftLogoURL)
+        try? FileManager.default.removeItem(at: draftLegacyLogoURL)
+        try? FileManager.default.removeItem(at: draftLogosDir)
     }
 
     // MARK: - PNG helpers
@@ -208,17 +276,5 @@ final class SequenceTemplateStore {
     private func pngData(from image: NSImage) -> Data? {
         guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
         return rep.representation(using: .png, properties: [:])
-    }
-}
-
-enum SequenceImageKind {
-    case background
-    case logo
-
-    func filename(in document: SpreadsheetSequenceDocument) -> String? {
-        switch self {
-        case .background: return document.backgroundImageFilename
-        case .logo: return document.logoImageFilename
-        }
     }
 }

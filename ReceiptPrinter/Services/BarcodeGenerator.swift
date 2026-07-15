@@ -20,9 +20,7 @@ enum BarcodeGenerator {
         rasterizeWithPNG(image, maxWidth: maxWidth, threshold: threshold)?.raster
     }
 
-    /// Diagnostics-friendly rasterization: returns the 1-bit raster AND a PNG of the exact
-    /// normalized grayscale bitmap that was thresholded to produce it, so `final-rendered-image.png`
-    /// and `monochrome-raster.bin` describe the same pixels for one job.
+    /// Diagnostics-friendly rasterization: 1-bit raster + PNG of the 8-bit RGB intermediate.
     struct RasterizeOutput {
         let raster: RasterImage
         let grayPNG: Data?
@@ -38,29 +36,57 @@ enum BarcodeGenerator {
         let height = max(1, Int((Double(width) * aspect).rounded()))
         let widthBytes = width / 8
 
-        let colorSpace = CGColorSpaceCreateDeviceGray()
-        guard let ctx = CGContext(
+        // Normalize color depth/alpha via 8-bit sRGB, then luminance → hard threshold.
+        // Do NOT Floyd–Steinberg the whole ticket: dither shreds CJK glyph edges into
+        // speckles that thermal prints look like “乱码”. Color logos are already converted
+        // to binary B&W at import; soft photos get contrast stretch when needed.
+        let rgbSpace = CGColorSpaceCreateDeviceRGB()
+        guard let rgbCtx = CGContext(
             data: nil,
             width: width,
             height: height,
             bitsPerComponent: 8,
-            bytesPerRow: width,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.none.rawValue
+            bytesPerRow: width * 4,
+            space: rgbSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
+        rgbCtx.interpolationQuality = .none
+        rgbCtx.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
+        rgbCtx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        rgbCtx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let rgbPtr = rgbCtx.data?.bindMemory(to: UInt8.self, capacity: width * height * 4) else {
+            return nil
+        }
 
-        ctx.interpolationQuality = .none
-        ctx.setFillColor(gray: 1, alpha: 1)
-        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var gray = [UInt8](repeating: 0, count: width * height)
+        var minG = 255
+        var maxG = 0
+        for i in 0..<(width * height) {
+            let o = i * 4
+            let r = Double(rgbPtr[o])
+            let g = Double(rgbPtr[o + 1])
+            let b = Double(rgbPtr[o + 2])
+            let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
+            let y = Int(luma.rounded())
+            let v = UInt8(min(255, max(0, y)))
+            gray[i] = v
+            if Int(v) < minG { minG = Int(v) }
+            if Int(v) > maxG { maxG = Int(v) }
+        }
 
-        guard let pixelData = ctx.data else { return nil }
-        let pixels = pixelData.bindMemory(to: UInt8.self, capacity: width * height)
+        let range = maxG - minG
+        if range > 1 && range < 80 {
+            let scale = 255.0 / Double(range)
+            for i in 0..<gray.count {
+                gray[i] = UInt8(min(255, max(0, Int(((Double(gray[i]) - Double(minG)) * scale).rounded()))))
+            }
+        }
 
         var data = Data(repeating: 0, count: widthBytes * height)
+        let thr = Int(threshold)
         for y in 0..<height {
             for x in 0..<width {
-                if pixels[y * width + x] < threshold {
+                if Int(gray[y * width + x]) < thr {
                     let byteIndex = y * widthBytes + x / 8
                     let bit = 7 - (x % 8)
                     data[byteIndex] |= UInt8(1 << bit)
@@ -69,8 +95,8 @@ enum BarcodeGenerator {
         }
 
         var grayPNG: Data?
-        if let normalized = ctx.makeImage() {
-            let rep = NSBitmapImageRep(cgImage: normalized)
+        if let rgbImage = rgbCtx.makeImage() {
+            let rep = NSBitmapImageRep(cgImage: rgbImage)
             grayPNG = rep.representation(using: .png, properties: [:])
         }
 

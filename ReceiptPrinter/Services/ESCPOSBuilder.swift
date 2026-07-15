@@ -347,20 +347,40 @@ final class ESCPOSBuilder {
         return self
     }
 
+    /// Whole-page bitmaps as successive short `GS v 0` bands (no gap feed between bands).
+    /// POS-80 often misreads one tall `GS v 0` as text; banded strips keep logo+text layout.
+    @discardableResult
+    func imageBanded(_ nsImage: NSImage, maxWidth: Int? = nil, bandHeight: Int = 160) -> Self {
+        let targetWidth = maxWidth ?? config.dotsPerLine
+        guard let raster = BarcodeGenerator.rasterizeImage(nsImage, maxWidth: targetWidth) else { return self }
+        appendRasterImageBanded(raster, bandHeight: max(24, bandHeight))
+        return self
+    }
+
     private func appendRasterImage(_ raster: RasterImage) {
+        appendRasterImageBanded(raster, bandHeight: raster.height)
+    }
+
+    private func appendRasterImageBanded(_ raster: RasterImage, bandHeight: Int) {
         // Cancel Chinese character mode before bit-image; otherwise clones often print raster as GBK text.
         data.append(contentsOf: [0x1C, 0x2E])
         let widthBytes = raster.widthBytes
         let xL = UInt8(widthBytes & 0xFF)
         let xH = UInt8((widthBytes >> 8) & 0xFF)
-        let yL = UInt8(raster.height & 0xFF)
-        let yH = UInt8((raster.height >> 8) & 0xFF)
-        // GS v 0: xL/xH = bytes per row, yL/yH = number of rows. Payload MUST be exactly
-        // widthBytes*height, else the printer reads trailing image bytes as commands (garbage).
-        let expectedRasterBytes = widthBytes * raster.height
-        assert(expectedRasterBytes == raster.data.count, "GS v 0 raster byte count mismatch")
-        data.append(contentsOf: [0x1D, 0x76, 0x30, 0x00, xL, xH, yL, yH])
-        data.append(raster.data)
+        let band = max(1, min(bandHeight, raster.height))
+        var y = 0
+        while y < raster.height {
+            let rows = min(band, raster.height - y)
+            let start = y * widthBytes
+            let end = start + rows * widthBytes
+            let slice = raster.data.subdata(in: start..<end)
+            let yL = UInt8(rows & 0xFF)
+            let yH = UInt8((rows >> 8) & 0xFF)
+            // GS v 0: xL/xH = bytes per row, yL/yH = number of rows.
+            data.append(contentsOf: [0x1D, 0x76, 0x30, 0x00, xL, xH, yL, yH])
+            data.append(slice)
+            y += rows
+        }
         feed(lines: 1)
     }
 

@@ -3,6 +3,9 @@ import SwiftUI
 
 /// Receipt body editor: wrap-to-columns, no horizontal pan, paste as plain text.
 final class ReceiptEditorTextView: NSTextView {
+    /// When set, vertical `scrollRangeToVisible` is suppressed (outer SwiftUI ScrollView owns scroll).
+    var suppressInternalVerticalScroll = false
+
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         [.string]
     }
@@ -38,6 +41,7 @@ final class ReceiptEditorTextView: NSTextView {
 
     /// Keep the clip view locked horizontally — selection drag must not pan the editor sideways.
     override func scrollRangeToVisible(_ charRange: NSRange) {
+        if suppressInternalVerticalScroll { return }
         guard let layoutManager, let textContainer,
               let scrollView = enclosingScrollView else {
             super.scrollRangeToVisible(charRange)
@@ -63,12 +67,76 @@ final class ReceiptEditorTextView: NSTextView {
         if target != visible {
             scrollToVisible(target)
         }
-        // Force horizontal origin back if AppKit nudged it.
         var origin = scrollView.contentView.bounds.origin
         if abs(origin.x) > 0.5 {
             origin.x = 0
             scrollView.contentView.setBoundsOrigin(origin)
             scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+    }
+}
+
+/// Container: either embeds a plain NSTextView (sequence page) or an NSScrollView (quick print).
+final class AttributedTextHostView: NSView {
+    let textView: ReceiptEditorTextView
+    private(set) var scrollView: NSScrollView?
+    var embedsWithoutScroll = false
+
+    init(textView: ReceiptEditorTextView) {
+        self.textView = textView
+        super.init(frame: .zero)
+        wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func installEmbeddedLayout() {
+        scrollView?.removeFromSuperview()
+        scrollView = nil
+        textView.removeFromSuperview()
+        textView.translatesAutoresizingMaskIntoConstraints = true
+        textView.autoresizingMask = [.width, .height]
+        textView.frame = bounds
+        addSubview(textView)
+        embedsWithoutScroll = true
+        textView.suppressInternalVerticalScroll = true
+        // Allow layout taller than the host; outer SwiftUI ScrollView owns scrolling.
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+    }
+
+    func installScrollLayout() {
+        textView.removeFromSuperview()
+        let scroll = scrollView ?? NSScrollView(frame: bounds)
+        scroll.translatesAutoresizingMaskIntoConstraints = true
+        scroll.autoresizingMask = [.width, .height]
+        scroll.frame = bounds
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+        scroll.horizontalScrollElasticity = .none
+        scroll.verticalScrollElasticity = .allowed
+        scroll.scrollerStyle = .overlay
+        scroll.documentView = textView
+        if scroll.superview !== self {
+            subviews.forEach { $0.removeFromSuperview() }
+            addSubview(scroll)
+        }
+        scrollView = scroll
+        embedsWithoutScroll = false
+        textView.suppressInternalVerticalScroll = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.height]
+    }
+
+    override func layout() {
+        super.layout()
+        if embedsWithoutScroll {
+            textView.frame = bounds
+        } else {
+            scrollView?.frame = bounds
         }
     }
 }
@@ -80,23 +148,18 @@ struct AttributedTextView: NSViewRepresentable {
     var editorFontSize: CGFloat = AttributedTextView.defaultFontSize
     /// When true, text view is transparent so a canvas background image can show through.
     var clearCanvasBackground: Bool = false
+    /// Embed NSTextView without an inner NSScrollView so outer SwiftUI ScrollView
+    /// scrolls text + overlays together (Excel sequence page).
+    var disablesInternalVerticalScroll: Bool = false
+    /// Reports laid-out content height (points), including textContainerInset.
+    var onLaidOutContentHeight: ((CGFloat) -> Void)?
     var onTextViewReady: ((NSTextView) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.borderType = .noBorder
-        scrollView.horizontalScrollElasticity = .none
-        scrollView.verticalScrollElasticity = .allowed
-        scrollView.scrollerStyle = .overlay
-        applyBackground(scrollView: scrollView, textView: nil)
-
+    func makeNSView(context: Context) -> AttributedTextHostView {
         let textView = ReceiptEditorTextView(frame: .zero)
         textView.delegate = context.coordinator
         textView.isRichText = true
@@ -104,12 +167,9 @@ struct AttributedTextView: NSViewRepresentable {
         textView.allowsUndo = true
         textView.isEditable = true
         textView.isSelectable = true
-        applyBackground(scrollView: scrollView, textView: textView)
-        // Inset + lineFragmentPadding keep large CJK glyphs from clipping on the left edge.
         textView.textContainerInset = NSSize(width: Self.editorInsetWidth, height: 12)
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
-        textView.autoresizingMask = [.height]
         textView.maxSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         textView.minSize = .zero
         textView.textContainer?.widthTracksTextView = false
@@ -119,19 +179,34 @@ struct AttributedTextView: NSViewRepresentable {
         textView.defaultParagraphStyle = Self.defaultParagraphStyle()
         textView.textStorage?.setAttributedString(attributedString)
 
-        scrollView.documentView = textView
-        applyPaperLayout(to: textView, scrollView: scrollView)
+        let host = AttributedTextHostView(textView: textView)
+        if disablesInternalVerticalScroll {
+            host.installEmbeddedLayout()
+        } else {
+            host.installScrollLayout()
+        }
+        applyBackground(host: host)
+        applyPaperLayout(host: host)
 
         context.coordinator.textView = textView
         onTextViewReady?(textView)
-        return scrollView
+        return host
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? NSTextView else { return }
+    func updateNSView(_ host: AttributedTextHostView, context: Context) {
+        let textView = host.textView
         context.coordinator.parent = self
-        applyBackground(scrollView: scrollView, textView: textView)
-        applyPaperLayout(to: textView, scrollView: scrollView)
+
+        if disablesInternalVerticalScroll != host.embedsWithoutScroll {
+            if disablesInternalVerticalScroll {
+                host.installEmbeddedLayout()
+            } else {
+                host.installScrollLayout()
+            }
+        }
+
+        applyBackground(host: host)
+        applyPaperLayout(host: host)
 
         var typing = textView.typingAttributes
         let currentFont = (typing[.font] as? NSFont) ?? Self.editorFont(ofSize: editorFontSize)
@@ -146,50 +221,90 @@ struct AttributedTextView: NSViewRepresentable {
             textView.textStorage?.setAttributedString(attributedString)
             context.coordinator.isUpdatingFromView = false
         }
-    }
-
-    private func applyBackground(scrollView: NSScrollView, textView: NSTextView?) {
-        if clearCanvasBackground {
-            scrollView.drawsBackground = false
-            scrollView.backgroundColor = .clear
-            textView?.drawsBackground = false
-            textView?.backgroundColor = .clear
-        } else {
-            scrollView.drawsBackground = true
-            scrollView.backgroundColor = NSColor.windowBackgroundColor
-            textView?.drawsBackground = true
-            textView?.backgroundColor = .white
+        applyPaperLayout(host: host)
+        if disablesInternalVerticalScroll {
+            context.coordinator.reportLaidOutHeight(from: textView)
         }
     }
 
-    private func applyPaperLayout(to textView: NSTextView, scrollView: NSScrollView) {
+    private func applyBackground(host: AttributedTextHostView) {
+        let textView = host.textView
+        if clearCanvasBackground {
+            host.layer?.backgroundColor = NSColor.clear.cgColor
+            host.scrollView?.drawsBackground = false
+            host.scrollView?.backgroundColor = .clear
+            textView.drawsBackground = false
+            textView.backgroundColor = .clear
+        } else {
+            host.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+            host.scrollView?.drawsBackground = true
+            host.scrollView?.backgroundColor = NSColor.windowBackgroundColor
+            textView.drawsBackground = true
+            textView.backgroundColor = .white
+        }
+    }
+
+    private func applyPaperLayout(host: AttributedTextHostView) {
+        let textView = host.textView
         let contentWidth = Self.editorContentWidth(config: printerConfig, fontSize: editorFontSize)
         let padding = Self.editorLineFragmentPadding
         let insetW = textView.textContainerInset.width
-        // Padding is inside the container — expand container so wrap width stays = contentWidth.
+        let insetH = textView.textContainerInset.height
         let containerWidth = contentWidth + padding * 2
         let paperWidth = containerWidth + insetW * 2
         textView.textContainer?.lineFragmentPadding = padding
         textView.textContainer?.containerSize = NSSize(width: containerWidth, height: .greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = false
-        let height = max(textView.frame.height, scrollView.contentSize.height)
-        textView.frame = NSRect(x: 0, y: 0, width: paperWidth, height: height)
-        textView.minSize = NSSize(width: paperWidth, height: 0)
-        // Cap width so the document never exceeds paper — prevents horizontal pan on selection.
-        textView.maxSize = NSSize(width: paperWidth, height: CGFloat.greatestFiniteMagnitude)
 
-        if abs(scrollView.contentView.bounds.origin.x) > 0.5 {
-            var origin = scrollView.contentView.bounds.origin
-            origin.x = 0
-            scrollView.contentView.setBoundsOrigin(origin)
-            scrollView.reflectScrolledClipView(scrollView.contentView)
+        if host.embedsWithoutScroll {
+            // Host frame comes from SwiftUI documentHeight; do not clamp maxSize to it or
+            // NSTextView clips the last soft-wrapped lines even when the outer ScrollView grows.
+            let h = max(host.bounds.height, 1)
+            textView.frame = NSRect(x: 0, y: 0, width: paperWidth, height: h)
+            textView.minSize = NSSize(width: paperWidth, height: h)
+            textView.maxSize = NSSize(width: paperWidth, height: CGFloat.greatestFiniteMagnitude)
+            if let lm = textView.layoutManager, let tc = textView.textContainer {
+                lm.ensureLayout(for: tc)
+                _ = insetH
+            }
+        } else if let scrollView = host.scrollView {
+            let height = max(textView.frame.height, scrollView.contentSize.height)
+            textView.frame = NSRect(x: 0, y: 0, width: paperWidth, height: height)
+            textView.minSize = NSSize(width: paperWidth, height: 0)
+            textView.maxSize = NSSize(width: paperWidth, height: CGFloat.greatestFiniteMagnitude)
+            if abs(scrollView.contentView.bounds.origin.x) > 0.5 {
+                var origin = scrollView.contentView.bounds.origin
+                origin.x = 0
+                scrollView.contentView.setBoundsOrigin(origin)
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
         }
+    }
+
+    /// Layout height of attributed text at the editor column width (points).
+    static func measureEditorHeight(
+        attributedString: NSAttributedString,
+        config: PrinterConfig,
+        fontSize: CGFloat
+    ) -> CGFloat {
+        let contentWidth = editorContentWidth(config: config, fontSize: fontSize)
+        let padding = editorLineFragmentPadding
+        let containerWidth = contentWidth + padding * 2
+        let storage = NSTextStorage(attributedString: attributedString)
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: containerWidth, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = padding
+        container.widthTracksTextView = false
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: container)
+        let used = layoutManager.usedRect(for: container)
+        return max(40, ceil(used.height + 24))
     }
 
     static let editorInsetWidth: CGFloat = 12
     static let editorLineFragmentPadding: CGFloat = 6
 
-    /// Width of one print line in editor points (matches ESC/POS column count for this font size).
     static func editorContentWidth(config: PrinterConfig, fontSize: CGFloat) -> CGFloat {
         let size = RichTextPrintRenderer.textSize(forPointSize: fontSize)
         let cols = RichTextPrintRenderer.effectiveColumns(for: size, config: config)
@@ -224,16 +339,9 @@ struct AttributedTextView: NSViewRepresentable {
         ]
     }
 
-    // MARK: - Centralized default receipt style (single source of truth)
-    //
-    // Requirement: default text prints at 2× normal size.
-    // `normalFontSize` is the 1× baseline; `defaultFontSize` = 2× baseline and is the size
-    // applied to new text, typing, plain-text loads, preview, and print. It maps to
-    // `TextSize.double` via `RichTextPrintRenderer.textSize(forPointSize:)`.
     static let normalFontSize: CGFloat = 14
     static let defaultWidthMultiplier: CGFloat = 2
     static let defaultHeightMultiplier: CGFloat = 2
-    /// Default editor point size = 2× normal → `TextSize.double` (GS ! width+height ×2).
     static let defaultFontSize: CGFloat = normalFontSize * defaultHeightMultiplier
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -241,6 +349,7 @@ struct AttributedTextView: NSViewRepresentable {
         weak var textView: NSTextView?
         var isUpdatingFromView = false
         var isUpdatingFromSwiftUI = false
+        private var lastReportedHeight: CGFloat = -1
 
         init(_ parent: AttributedTextView) {
             self.parent = parent
@@ -251,6 +360,20 @@ struct AttributedTextView: NSViewRepresentable {
             isUpdatingFromSwiftUI = true
             parent.attributedString = textView.attributedString()
             isUpdatingFromSwiftUI = false
+            reportLaidOutHeight(from: textView)
+        }
+
+        func reportLaidOutHeight(from textView: NSTextView) {
+            guard parent.disablesInternalVerticalScroll,
+                  let lm = textView.layoutManager,
+                  let tc = textView.textContainer else { return }
+            lm.ensureLayout(for: tc)
+            let used = lm.usedRect(for: tc)
+            let inset = textView.textContainerInset.height
+            let contentH = ceil(used.height + inset * 2 + 40)
+            guard abs(contentH - lastReportedHeight) > 0.5 else { return }
+            lastReportedHeight = contentH
+            parent.onLaidOutContentHeight?(contentH)
         }
     }
 }

@@ -3,10 +3,13 @@ import AppKit
 
 /// Draggable / resizable logo box on the sequence-print canvas (above body, under placeholders).
 struct LogoBoxOverlay: View {
+    var title: String = "Logo"
     var image: NSImage
     @Binding var frame: SequencePlaceholderFrame
     @Binding var isSelected: Bool
     var paperSize: CGSize
+    /// Called after a corner-resize ends so the parent can sync scalePercent.
+    var onFrameChanged: (() -> Void)? = nil
     var onDelete: () -> Void
 
     @State private var dragStart: SequencePlaceholderFrame?
@@ -25,7 +28,7 @@ struct LogoBoxOverlay: View {
 
             if isSelected {
                 HStack {
-                    Text("Logo")
+                    Text(title)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.orange)
                         .padding(.horizontal, 4)
@@ -77,7 +80,10 @@ struct LogoBoxOverlay: View {
                 next.y = start.y + value.translation.height
                 frame = next.clamped(to: paperSize, minSize: CGSize(width: 36, height: 24))
             }
-            .onEnded { _ in dragStart = nil }
+            .onEnded { _ in
+                dragStart = nil
+                onFrameChanged?()
+            }
     }
 
     private var resizeGesture: some Gesture {
@@ -90,6 +96,9 @@ struct LogoBoxOverlay: View {
                 next.height = start.height + value.translation.height
                 frame = next.clamped(to: paperSize, minSize: CGSize(width: 36, height: 24))
             }
-            .onEnded { _ in resizeStart = nil }
+            .onEnded { _ in
+                resizeStart = nil
+                onFrameChanged?()
+            }
     }
 }

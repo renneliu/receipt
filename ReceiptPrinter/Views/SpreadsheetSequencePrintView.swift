@@ -28,15 +28,17 @@ struct SpreadsheetSequencePrintView: View {
     @State private var savedTemplates: [(document: SpreadsheetSequenceDocument, body: NSAttributedString)] = []
     @State private var documentID = UUID()
     @State private var backgroundImage: NSImage?
-    @State private var logoImage: NSImage?
-    @State private var logoFrame: SequencePlaceholderFrame = SequencePlaceholderFrame(
-        x: 40, y: 12, width: 120, height: 60
-    )
-    @State private var isLogoSelected = false
+    @State private var backgroundScalePercent: Double = 100
+    @State private var logos: [SequenceLogoItem] = []
+    @State private var logoImages: [UUID: NSImage] = [:]
+    @State private var selectedLogoID: UUID?
+    /// Live NSTextView usedRect height (embed mode); corrects soft-wrap measure underestimates.
+    @State private var liveEditorHeight: CGFloat = 0
 
     private let draftStore = QuickPrintStore(filename: "spreadsheet-sequence-draft.rtfd")
     private let templateStore = SequenceTemplateStore()
-    private let paperCanvasHeight: CGFloat = 720
+    private let paperCanvasMinHeight: CGFloat = 480
+
     private var columns: Int { appState.settings.printerConfig.columnsPerLine }
 
     private var paperWidth: CGFloat {
@@ -46,15 +48,75 @@ struct SpreadsheetSequencePrintView: View {
         )
     }
 
+    /// Canvas / ticket design height: max(Enter rows, soft-wrap ink, live layout, overlays).
+    private var documentHeight: CGFloat {
+        let fontSize = CGFloat(editorFontSize)
+        let newlineCount = newlineLineCount(in: attributedText.string)
+        let newlineH = heightForNewlineCount(newlineCount, fontSize: fontSize)
+        let softWrapH = AttributedTextView.measureEditorHeight(
+            attributedString: attributedText,
+            config: appState.settings.printerConfig,
+            fontSize: fontSize
+        )
+        let logoBottom = logos.map { $0.frame.y + $0.frame.height }.max() ?? 0
+        let phBottom = placeholders.map { $0.frame.y + $0.frame.height }.max() ?? 0
+        let overlayBottom = max(logoBottom, phBottom)
+        return max(
+            paperCanvasMinHeight,
+            newlineH,
+            softWrapH,
+            liveEditorHeight,
+            overlayBottom + 40
+        )
+    }
+
+    private func newlineLineCount(in text: String) -> Int {
+        if text.isEmpty { return 1 }
+        return text.split(separator: "\n", omittingEmptySubsequences: false).count
+    }
+
+    /// Height of N hard lines (one Enter = one row), matching editor typography.
+    private func heightForNewlineCount(_ count: Int, fontSize: CGFloat) -> CGFloat {
+        let n = max(1, count)
+        let attrs = AttributedTextView.defaultTypingAttributes(fontSize: fontSize)
+        // Trailing space keeps the last empty line measurable.
+        let stub = String(repeating: "\n", count: n - 1) + " "
+        let measured = AttributedTextView.measureEditorHeight(
+            attributedString: NSAttributedString(string: stub, attributes: attrs),
+            config: appState.settings.printerConfig,
+            fontSize: fontSize
+        )
+        return measured
+    }
+
+    private var caretDocumentY: CGFloat {
+        guard let tv = editorController.textView,
+              let lm = tv.layoutManager,
+              let tc = tv.textContainer else {
+            return documentHeight
+        }
+        let sel = tv.selectedRange()
+        let glyph = lm.glyphRange(forCharacterRange: sel, actualCharacterRange: nil)
+        var rect = lm.boundingRect(forGlyphRange: glyph, in: tc)
+        rect.origin.y += tv.textContainerOrigin.y
+        return min(documentHeight, max(0, rect.maxY))
+    }
+
     private var canvasSize: CGSize {
-        CGSize(width: paperWidth, height: paperCanvasHeight)
+        CGSize(width: paperWidth, height: documentHeight)
     }
 
     private var pageMedia: RichTextPrintRenderer.SequencePageMedia {
-        RichTextPrintRenderer.SequencePageMedia(
+        let layers = logos
+            .sorted { $0.zIndex < $1.zIndex }
+            .compactMap { item -> RichTextPrintRenderer.SequenceLogoLayer? in
+                guard let image = logoImages[item.id] else { return nil }
+                return .init(image: image, frame: item.frame)
+            }
+        return RichTextPrintRenderer.SequencePageMedia(
             background: backgroundImage,
-            logo: logoImage,
-            logoFrame: logoImage == nil ? nil : logoFrame,
+            backgroundScalePercent: backgroundScalePercent,
+            logos: layers,
             canvasSize: canvasSize
         )
     }
@@ -102,7 +164,10 @@ struct SpreadsheetSequencePrintView: View {
         .onChange(of: placeholders) { _, _ in
             persistDraftMedia()
         }
-        .onChange(of: logoFrame) { _, _ in
+        .onChange(of: logos) { _, _ in
+            persistDraftMedia()
+        }
+        .onChange(of: backgroundScalePercent) { _, _ in
             persistDraftMedia()
         }
         .sheet(item: $previewPayload) { payload in
@@ -118,65 +183,109 @@ struct SpreadsheetSequencePrintView: View {
     }
 
     private var paperCanvas: some View {
-        let height = paperCanvasHeight
-        return ZStack(alignment: .topLeading) {
-            // Background under everything (non-interactive).
-            if let bg = backgroundImage {
-                Image(nsImage: bg)
-                    .resizable()
-                    .scaledToFit()
+        let height = documentHeight
+        return ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: true) {
+                ZStack(alignment: .topLeading) {
+                    if let bg = backgroundImage {
+                        let fitted = RichTextPrintRenderer.fitCenterRect(
+                            imageSize: bg.size,
+                            in: NSRect(x: 0, y: 0, width: paperWidth, height: height)
+                        )
+                        let p = max(SequenceLogoItem.minScalePercent, min(SequenceLogoItem.maxScalePercent, backgroundScalePercent)) / 100
+                        let w = fitted.width * p
+                        let h = fitted.height * p
+                        Image(nsImage: bg)
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(width: w, height: h)
+                            .position(x: paperWidth / 2, y: height / 2)
+                            .allowsHitTesting(false)
+                    }
+
+                    AttributedTextView(
+                        attributedString: $attributedText,
+                        printerConfig: appState.settings.printerConfig,
+                        editorFontSize: CGFloat(editorFontSize),
+                        clearCanvasBackground: backgroundImage != nil,
+                        disablesInternalVerticalScroll: true,
+                        onLaidOutContentHeight: { laidOut in
+                            if abs(laidOut - liveEditorHeight) > 0.5 {
+                                liveEditorHeight = laidOut
+                            }
+                        },
+                        onTextViewReady: { textView in
+                            editorController.textView = textView
+                        }
+                    )
                     .frame(width: paperWidth, height: height)
-                    .allowsHitTesting(false)
-            }
 
-            AttributedTextView(
-                attributedString: $attributedText,
-                printerConfig: appState.settings.printerConfig,
-                editorFontSize: CGFloat(editorFontSize),
-                clearCanvasBackground: backgroundImage != nil
-            ) { textView in
-                editorController.textView = textView
-            }
-            .frame(width: paperWidth, height: height)
+                    ZStack {
+                        ForEach(Array(logos.enumerated()), id: \.element.id) { index, item in
+                            if let image = logoImages[item.id] {
+                                LogoBoxOverlay(
+                                    title: "Logo \(index + 1)",
+                                    image: image,
+                                    frame: bindingLogoFrame(id: item.id),
+                                    isSelected: Binding(
+                                        get: { selectedLogoID == item.id },
+                                        set: { selected in
+                                            if selected {
+                                                selectedLogoID = item.id
+                                                selectedPlaceholderID = nil
+                                            } else if selectedLogoID == item.id {
+                                                selectedLogoID = nil
+                                            }
+                                        }
+                                    ),
+                                    paperSize: canvasSize,
+                                    onFrameChanged: {
+                                        syncLogoScaleFromFrame(id: item.id)
+                                    },
+                                    onDelete: { removeLogo(id: item.id) }
+                                )
+                            }
+                        }
+                    }
+                    .frame(width: paperWidth, height: height)
 
-            if let logo = logoImage {
-                LogoBoxOverlay(
-                    image: logo,
-                    frame: $logoFrame,
-                    isSelected: $isLogoSelected,
-                    paperSize: canvasSize,
-                    onDelete: { clearLogo() }
-                )
+                    PlaceholderBoxOverlay(
+                        placeholders: $placeholders,
+                        selectedID: $selectedPlaceholderID,
+                        values: currentRowValues,
+                        paperSize: canvasSize,
+                        printerConfig: appState.settings.printerConfig,
+                        fontSize: CGFloat(editorFontSize)
+                    )
+                    .frame(width: paperWidth, height: height)
+                    .onChange(of: selectedPlaceholderID) { _, newID in
+                        if newID != nil { selectedLogoID = nil }
+                    }
+
+                    // Anchor for scrolling the caret into the outer ScrollView.
+                    Color.clear
+                        .frame(width: 1, height: 1)
+                        .position(x: 8, y: caretDocumentY)
+                        .id("caret-anchor")
+                }
                 .frame(width: paperWidth, height: height)
-                .onTapGesture {
-                    selectedPlaceholderID = nil
-                    isLogoSelected = true
+                .background(Color.white)
+                .background(
+                    RoundedRectangle(cornerRadius: 2)
+                        .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+                .id("doc-top")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .onChange(of: attributedText) { _, _ in
+                // Keep typing caret visible when Enters grow the document past the viewport.
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        proxy.scrollTo("caret-anchor", anchor: .center)
+                    }
                 }
             }
-
-            PlaceholderBoxOverlay(
-                placeholders: $placeholders,
-                selectedID: $selectedPlaceholderID,
-                values: currentRowValues,
-                paperSize: canvasSize,
-                printerConfig: appState.settings.printerConfig,
-                fontSize: CGFloat(editorFontSize)
-            )
-            .frame(width: paperWidth, height: height)
-            .onChange(of: selectedPlaceholderID) { _, newID in
-                if newID != nil { isLogoSelected = false }
-            }
-        }
-        .frame(width: paperWidth, height: height)
-        .background(Color.white)
-        .background(
-            RoundedRectangle(cornerRadius: 2)
-                .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .onTapGesture {
-            // Click empty canvas: deselect logo / keep placeholder selection via overlay.
         }
     }
 
@@ -213,33 +322,118 @@ struct SpreadsheetSequencePrintView: View {
             }
 
             Section("版面图片") {
-                Text("背景在文字下方（等比完整居中）；Logo 为可拖动框。热敏打印请尽量用高对比黑白图。")
+                Text("背景在文字下方（等比居中，可用百分比缩放）；彩色 Logo/背景导入时自动转为黑白以保证热敏清晰。可添加多个 Logo。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack {
                     Button(backgroundImage == nil ? "添加背景图…" : "更换背景图…") {
                         pickImage { img in
-                            backgroundImage = img
+                            backgroundImage = ImagePreprocessor.toBinaryBlackWhite(img)
+                            backgroundScalePercent = 100
                             persistDraftMedia()
                         }
                     }
                     if backgroundImage != nil {
                         Button("清除背景", role: .destructive) {
                             backgroundImage = nil
+                            backgroundScalePercent = 100
                             persistDraftMedia()
                         }
                     }
                 }
-                HStack {
-                    Button(logoImage == nil ? "添加 Logo…" : "更换 Logo…") {
-                        pickImage { img in
-                            setLogo(img)
-                        }
+                if backgroundImage != nil {
+                    HStack(spacing: 8) {
+                        Text("背景大小")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField(
+                            "",
+                            value: Binding(
+                                get: { backgroundScalePercent },
+                                set: { setBackgroundScale($0) }
+                            ),
+                            format: .number.precision(.fractionLength(0))
+                        )
+                        .frame(width: 52)
+                        Text("%")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Stepper(
+                            "",
+                            value: Binding(
+                                get: { backgroundScalePercent },
+                                set: { setBackgroundScale($0) }
+                            ),
+                            in: SequenceLogoItem.minScalePercent...SequenceLogoItem.maxScalePercent,
+                            step: 5
+                        )
+                        .labelsHidden()
                     }
-                    if logoImage != nil {
-                        Button("清除 Logo", role: .destructive) {
-                            clearLogo()
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.secondary.opacity(0.08))
+                    )
+                }
+                Button("添加 Logo…") {
+                    pickImage { img in
+                        addLogo(img)
+                    }
+                }
+                if !logos.isEmpty {
+                    ForEach(Array(logos.enumerated()), id: \.element.id) { index, item in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Button {
+                                    selectedLogoID = item.id
+                                    selectedPlaceholderID = nil
+                                } label: {
+                                    Text("Logo \(index + 1)")
+                                        .fontWeight(selectedLogoID == item.id ? .semibold : .regular)
+                                }
+                                .buttonStyle(.plain)
+                                Spacer()
+                                Button("删除", role: .destructive) {
+                                    removeLogo(id: item.id)
+                                }
+                                .controlSize(.small)
+                            }
+                            HStack(spacing: 8) {
+                                Text("大小")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                TextField(
+                                    "",
+                                    value: Binding(
+                                        get: { logos.first(where: { $0.id == item.id })?.scalePercent ?? 100 },
+                                        set: { setLogoScale(id: item.id, percent: $0) }
+                                    ),
+                                    format: .number.precision(.fractionLength(0))
+                                )
+                                .frame(width: 52)
+                                Text("%")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Stepper(
+                                    "",
+                                    value: Binding(
+                                        get: { logos.first(where: { $0.id == item.id })?.scalePercent ?? 100 },
+                                        set: { setLogoScale(id: item.id, percent: $0) }
+                                    ),
+                                    in: SequenceLogoItem.minScalePercent...SequenceLogoItem.maxScalePercent,
+                                    step: 5
+                                )
+                                .labelsHidden()
+                            }
                         }
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(selectedLogoID == item.id ? Color.orange.opacity(0.12) : Color.secondary.opacity(0.08))
+                        )
+                    }
+                    Button("清除全部 Logo", role: .destructive) {
+                        clearAllLogos()
                     }
                 }
             }
@@ -342,7 +536,7 @@ struct SpreadsheetSequencePrintView: View {
                     saveName = "序列打印 \(Date().formatted(date: .abbreviated, time: .shortened))"
                     showSaveSheet = true
                 }
-                .disabled(attributedText.length == 0 && placeholders.isEmpty && backgroundImage == nil && logoImage == nil)
+                .disabled(attributedText.length == 0 && placeholders.isEmpty && backgroundImage == nil && logos.isEmpty)
                 Button("载入模板…") {
                     savedTemplates = templateStore.loadAll()
                     showLoadSheet = true
@@ -538,24 +732,40 @@ struct SpreadsheetSequencePrintView: View {
     }
 
     private func loadDraftMedia() {
-        let meta = templateStore.loadDraftMeta()
+        var meta = templateStore.loadDraftMeta()
+        meta.normalizeLogos()
         placeholders = meta.placeholders
-        if let frame = meta.logoFrame {
-            logoFrame = frame
-        }
+        logos = meta.logos
+        logoImages = templateStore.loadDraftLogoImages(items: logos)
         backgroundImage = templateStore.loadDraftBackgroundImage()
-        logoImage = templateStore.loadDraftLogoImage()
-        if logoImage == nil {
-            isLogoSelected = false
+        backgroundScalePercent = min(
+            SequenceLogoItem.maxScalePercent,
+            max(SequenceLogoItem.minScalePercent, meta.backgroundScalePercent)
+        )
+        if backgroundImage == nil { backgroundScalePercent = 100 }
+        logos.removeAll { logoImages[$0.id] == nil }
+        if selectedLogoID.map({ logoImages[$0] == nil }) == true {
+            selectedLogoID = nil
         }
     }
 
     private func persistDraftMedia() {
+        let pairs = logos.compactMap { item -> (item: SequenceLogoItem, image: NSImage)? in
+            guard let image = logoImages[item.id] else { return nil }
+            return (item, image)
+        }
         templateStore.saveDraft(
             placeholders: placeholders,
-            logoFrame: logoImage == nil ? nil : logoFrame,
+            logos: pairs,
             backgroundImage: backgroundImage,
-            logoImage: logoImage
+            backgroundScalePercent: backgroundScalePercent
+        )
+    }
+
+    private func setBackgroundScale(_ percent: Double) {
+        backgroundScalePercent = min(
+            SequenceLogoItem.maxScalePercent,
+            max(SequenceLogoItem.minScalePercent, percent.rounded())
         )
     }
 
@@ -577,25 +787,63 @@ struct SpreadsheetSequencePrintView: View {
         completion(image)
     }
 
-    private func setLogo(_ image: NSImage) {
-        logoImage = image
-        let w = min(paperWidth * 0.35, max(80, image.size.width))
-        let aspect = image.size.height > 0 ? image.size.width / image.size.height : 2
-        let h = max(36, w / max(aspect, 0.2))
-        logoFrame = SequencePlaceholderFrame(
-            x: (paperWidth - w) / 2,
-            y: 16,
-            width: w,
-            height: h
-        ).clamped(to: canvasSize, minSize: CGSize(width: 36, height: 24))
-        isLogoSelected = true
+    private func bindingLogoFrame(id: UUID) -> Binding<SequencePlaceholderFrame> {
+        Binding(
+            get: {
+                logos.first(where: { $0.id == id })?.frame
+                    ?? SequencePlaceholderFrame(x: 0, y: 0, width: 80, height: 40)
+            },
+            set: { newFrame in
+                guard let idx = logos.firstIndex(where: { $0.id == id }) else { return }
+                logos[idx].frame = newFrame.clamped(to: canvasSize, minSize: CGSize(width: 36, height: 24))
+            }
+        )
+    }
+
+    private func syncLogoScaleFromFrame(id: UUID) {
+        guard let idx = logos.firstIndex(where: { $0.id == id }) else { return }
+        logos[idx].syncScaleFromFrame(paper: canvasSize)
+        persistDraftMedia()
+    }
+
+    private func setLogoScale(id: UUID, percent: Double) {
+        guard let idx = logos.firstIndex(where: { $0.id == id }) else { return }
+        logos[idx].applyScalePercent(percent, paper: canvasSize)
+        selectedLogoID = id
         selectedPlaceholderID = nil
         persistDraftMedia()
     }
 
-    private func clearLogo() {
-        logoImage = nil
-        isLogoSelected = false
+    private func addLogo(_ image: NSImage) {
+        let mono = ImagePreprocessor.toBinaryBlackWhite(image)
+        let id = UUID()
+        let item = SequenceLogoItem.makeDefault(
+            id: id,
+            imageFilename: SpreadsheetSequenceDocument.logoFilename(for: id),
+            imageSize: mono.size,
+            paperWidth: paperWidth,
+            paperSize: canvasSize,
+            staggerIndex: logos.count,
+            zIndex: (logos.map(\.zIndex).max() ?? 0) + 1
+        )
+        logos.append(item)
+        logoImages[id] = mono
+        selectedLogoID = id
+        selectedPlaceholderID = nil
+        persistDraftMedia()
+    }
+
+    private func removeLogo(id: UUID) {
+        logos.removeAll { $0.id == id }
+        logoImages.removeValue(forKey: id)
+        if selectedLogoID == id { selectedLogoID = nil }
+        persistDraftMedia()
+    }
+
+    private func clearAllLogos() {
+        logos = []
+        logoImages = [:]
+        selectedLogoID = nil
         persistDraftMedia()
     }
 
@@ -605,8 +853,10 @@ struct SpreadsheetSequencePrintView: View {
         selectedPlaceholderID = nil
         selectedRowIndex = 0
         backgroundImage = nil
-        logoImage = nil
-        isLogoSelected = false
+        backgroundScalePercent = 100
+        logos = []
+        logoImages = [:]
+        selectedLogoID = nil
         draftStore.clear()
         templateStore.clearDraftPlaceholders()
         message = ""
@@ -712,10 +962,10 @@ struct SpreadsheetSequencePrintView: View {
             config: config,
             media: media
         )
-        let firstRaster = BarcodeGenerator.rasterizeWithPNG(
-            previewImage,
-            maxWidth: config.dotsPerLine
-        )
+        let hasMedia = media.background != nil || !media.logos.isEmpty
+        let firstRaster = hasMedia
+            ? BarcodeGenerator.rasterizeWithPNG(previewImage, maxWidth: config.dotsPerLine)
+            : nil
         let pngData = firstRaster?.grayPNG
             ?? previewImage.tiffRepresentation.flatMap {
                 NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:])
@@ -744,12 +994,14 @@ struct SpreadsheetSequencePrintView: View {
             headerYL: height & 0xFF,
             headerYH: (height >> 8) & 0xFF,
             expectedRasterBytes: expected,
-            renderMode: .raster,
-            usedNativeText: false,
-            usedRaster: true,
+            renderMode: hasMedia ? .raster : .nativeText,
+            usedNativeText: !hasMedia,
+            usedRaster: hasMedia,
             dpi: 203,
             printableWidthDots: config.dotsPerLine,
-            printerModelHint: "POS-80 sequence raster pages"
+            printerModelHint: hasMedia
+                ? "POS-80 sequence banded GS v 0 (logo+text composite)"
+                : "POS-80 sequence native GBK"
         )
 
         sequenceProgress = "正在打印序列…"
@@ -772,46 +1024,54 @@ struct SpreadsheetSequencePrintView: View {
         guard !name.isEmpty else { return }
         let newID = UUID()
         documentID = newID
-        var doc = SpreadsheetSequenceDocument(
+        let doc = SpreadsheetSequenceDocument(
             id: newID,
             name: name,
             placeholders: placeholders,
             paperWidthMM: appState.settings.printerConfig.paperWidthMM,
             editorFontSize: editorFontSize,
-            logoFrame: logoImage == nil ? nil : logoFrame
+            backgroundScalePercent: backgroundImage == nil ? 100 : backgroundScalePercent,
+            logos: logos
         )
+        let pairs = logos.compactMap { item -> (item: SequenceLogoItem, image: NSImage)? in
+            guard let image = logoImages[item.id] else { return nil }
+            return (item, image)
+        }
         templateStore.save(
             document: doc,
             body: attributedText,
             backgroundImage: backgroundImage,
-            logoImage: logoImage
+            logos: pairs
         )
-        // Refresh filenames from what was written
-        doc.backgroundImageFilename = backgroundImage == nil
-            ? nil : SpreadsheetSequenceDocument.backgroundFilename
-        doc.logoImageFilename = logoImage == nil ? nil : SpreadsheetSequenceDocument.logoFilename
         message = "已保存模板「\(name)」"
     }
 
     private func loadTemplate(_ doc: SpreadsheetSequenceDocument, body: NSAttributedString) {
-        documentID = doc.id
+        var normalized = doc
+        normalized.normalizeLogos()
+        documentID = normalized.id
         attributedText = body
-        placeholders = doc.placeholders
-        editorFontSize = doc.editorFontSize
+        placeholders = normalized.placeholders
+        editorFontSize = normalized.editorFontSize
         selectedPlaceholderID = nil
-        backgroundImage = templateStore.loadImage(document: doc, kind: .background)
-        logoImage = templateStore.loadImage(document: doc, kind: .logo)
-        if let frame = doc.logoFrame {
-            logoFrame = frame.clamped(to: canvasSize, minSize: CGSize(width: 36, height: 24))
-        } else if logoImage != nil {
-            let w = min(paperWidth * 0.35, 140)
-            logoFrame = SequencePlaceholderFrame(x: (paperWidth - w) / 2, y: 16, width: w, height: 60)
-                .clamped(to: canvasSize, minSize: CGSize(width: 36, height: 24))
+        backgroundImage = templateStore.loadBackground(document: normalized)
+        backgroundScalePercent = backgroundImage == nil
+            ? 100
+            : min(
+                SequenceLogoItem.maxScalePercent,
+                max(SequenceLogoItem.minScalePercent, normalized.backgroundScalePercent)
+            )
+        logos = normalized.logos.map { item in
+            var copy = item
+            copy.frame = copy.frame.clamped(to: canvasSize, minSize: CGSize(width: 36, height: 24))
+            return copy
         }
-        isLogoSelected = false
+        logoImages = templateStore.loadLogoImages(document: normalized)
+        logos.removeAll { logoImages[$0.id] == nil }
+        selectedLogoID = nil
         draftStore.save(body)
         persistDraftMedia()
-        message = "已载入「\(doc.name)」"
+        message = "已载入「\(normalized.name)」"
     }
 
     private func mergeValues(headers: [String], row: [String]) -> [String: String] {

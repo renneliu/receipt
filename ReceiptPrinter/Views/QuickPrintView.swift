@@ -34,10 +34,11 @@ struct QuickPrintView: View {
                         AttributedTextView(
                             attributedString: $attributedText,
                             printerConfig: appState.settings.printerConfig,
-                            editorFontSize: CGFloat(editorFontSize)
-                        ) { textView in
-                            editorController.textView = textView
-                        }
+                            editorFontSize: CGFloat(editorFontSize),
+                            onTextViewReady: { textView in
+                                editorController.textView = textView
+                            }
+                        )
                         .frame(
                             width: AttributedTextView.editorPaperWidth(
                                 config: appState.settings.printerConfig,
