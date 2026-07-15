@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Excel / CSV row-sequence printing: rich-text body + draggable column placeholders.
-/// Print path matches Quick Print (native GBK via `RichTextPrintRenderer`), not whole-page raster.
+/// Print: software-composite bitmap → `initializeForRaster` + GS v 0 (no Chinese mode).
 struct SpreadsheetSequencePrintView: View {
     @EnvironmentObject private var appState: AppState
     @StateObject private var editorController = RichTextEditorController()
@@ -27,15 +27,35 @@ struct SpreadsheetSequencePrintView: View {
     @State private var showLoadSheet = false
     @State private var savedTemplates: [(document: SpreadsheetSequenceDocument, body: NSAttributedString)] = []
     @State private var documentID = UUID()
+    @State private var backgroundImage: NSImage?
+    @State private var logoImage: NSImage?
+    @State private var logoFrame: SequencePlaceholderFrame = SequencePlaceholderFrame(
+        x: 40, y: 12, width: 120, height: 60
+    )
+    @State private var isLogoSelected = false
 
     private let draftStore = QuickPrintStore(filename: "spreadsheet-sequence-draft.rtfd")
     private let templateStore = SequenceTemplateStore()
+    private let paperCanvasHeight: CGFloat = 720
     private var columns: Int { appState.settings.printerConfig.columnsPerLine }
 
     private var paperWidth: CGFloat {
         AttributedTextView.editorPaperWidth(
             config: appState.settings.printerConfig,
             fontSize: CGFloat(editorFontSize)
+        )
+    }
+
+    private var canvasSize: CGSize {
+        CGSize(width: paperWidth, height: paperCanvasHeight)
+    }
+
+    private var pageMedia: RichTextPrintRenderer.SequencePageMedia {
+        RichTextPrintRenderer.SequencePageMedia(
+            background: backgroundImage,
+            logo: logoImage,
+            logoFrame: logoImage == nil ? nil : logoFrame,
+            canvasSize: canvasSize
         )
     }
 
@@ -74,13 +94,16 @@ struct SpreadsheetSequencePrintView: View {
         .navigationTitle("Excel表格序列打印")
         .onAppear {
             loadSavedContent()
-            placeholders = templateStore.loadDraftPlaceholders()
+            loadDraftMedia()
         }
         .onChange(of: attributedText) { _, newValue in
             draftStore.save(newValue)
         }
-        .onChange(of: placeholders) { _, newValue in
-            templateStore.saveDraftPlaceholders(newValue)
+        .onChange(of: placeholders) { _, _ in
+            persistDraftMedia()
+        }
+        .onChange(of: logoFrame) { _, _ in
+            persistDraftMedia()
         }
         .sheet(item: $previewPayload) { payload in
             BitmapPrintPreviewView(image: payload.image)
@@ -95,34 +118,66 @@ struct SpreadsheetSequencePrintView: View {
     }
 
     private var paperCanvas: some View {
-        let height: CGFloat = 720
+        let height = paperCanvasHeight
         return ZStack(alignment: .topLeading) {
+            // Background under everything (non-interactive).
+            if let bg = backgroundImage {
+                Image(nsImage: bg)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: paperWidth, height: height)
+                    .allowsHitTesting(false)
+            }
+
             AttributedTextView(
                 attributedString: $attributedText,
                 printerConfig: appState.settings.printerConfig,
-                editorFontSize: CGFloat(editorFontSize)
+                editorFontSize: CGFloat(editorFontSize),
+                clearCanvasBackground: backgroundImage != nil
             ) { textView in
                 editorController.textView = textView
             }
             .frame(width: paperWidth, height: height)
 
+            if let logo = logoImage {
+                LogoBoxOverlay(
+                    image: logo,
+                    frame: $logoFrame,
+                    isSelected: $isLogoSelected,
+                    paperSize: canvasSize,
+                    onDelete: { clearLogo() }
+                )
+                .frame(width: paperWidth, height: height)
+                .onTapGesture {
+                    selectedPlaceholderID = nil
+                    isLogoSelected = true
+                }
+            }
+
             PlaceholderBoxOverlay(
                 placeholders: $placeholders,
                 selectedID: $selectedPlaceholderID,
                 values: currentRowValues,
-                paperSize: CGSize(width: paperWidth, height: height),
+                paperSize: canvasSize,
                 printerConfig: appState.settings.printerConfig,
                 fontSize: CGFloat(editorFontSize)
             )
             .frame(width: paperWidth, height: height)
+            .onChange(of: selectedPlaceholderID) { _, newID in
+                if newID != nil { isLogoSelected = false }
+            }
         }
         .frame(width: paperWidth, height: height)
+        .background(Color.white)
         .background(
             RoundedRectangle(cornerRadius: 2)
                 .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
         .frame(maxHeight: .infinity, alignment: .top)
+        .onTapGesture {
+            // Click empty canvas: deselect logo / keep placeholder selection via overlay.
+        }
     }
 
     private var sidePanel: some View {
@@ -136,7 +191,7 @@ struct SpreadsheetSequencePrintView: View {
             }
 
             Section("导入表格") {
-                Text("导入 CSV/XLSX 后会按列自动创建可拖动占位框。正文也可手写 {{列名}}。打印走 GBK 文本，不用整页位图。")
+                Text("导入 CSV/XLSX 后会按列自动创建可拖动占位框。打印为软件合成位图（无中文模式），避免混排乱码。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("导入 Excel / CSV…") {
@@ -154,6 +209,38 @@ struct SpreadsheetSequencePrintView: View {
                     Text(importInfo)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("版面图片") {
+                Text("背景在文字下方（等比完整居中）；Logo 为可拖动框。热敏打印请尽量用高对比黑白图。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button(backgroundImage == nil ? "添加背景图…" : "更换背景图…") {
+                        pickImage { img in
+                            backgroundImage = img
+                            persistDraftMedia()
+                        }
+                    }
+                    if backgroundImage != nil {
+                        Button("清除背景", role: .destructive) {
+                            backgroundImage = nil
+                            persistDraftMedia()
+                        }
+                    }
+                }
+                HStack {
+                    Button(logoImage == nil ? "添加 Logo…" : "更换 Logo…") {
+                        pickImage { img in
+                            setLogo(img)
+                        }
+                    }
+                    if logoImage != nil {
+                        Button("清除 Logo", role: .destructive) {
+                            clearLogo()
+                        }
+                    }
                 }
             }
 
@@ -255,7 +342,7 @@ struct SpreadsheetSequencePrintView: View {
                     saveName = "序列打印 \(Date().formatted(date: .abbreviated, time: .shortened))"
                     showSaveSheet = true
                 }
-                .disabled(attributedText.length == 0 && placeholders.isEmpty)
+                .disabled(attributedText.length == 0 && placeholders.isEmpty && backgroundImage == nil && logoImage == nil)
                 Button("载入模板…") {
                     savedTemplates = templateStore.loadAll()
                     showLoadSheet = true
@@ -426,7 +513,7 @@ struct SpreadsheetSequencePrintView: View {
             width: m.unitWidth * 10,
             height: m.lineHeight * 2
         )
-        frame = frame.clamped(to: CGSize(width: paperWidth, height: 720))
+        frame = frame.clamped(to: canvasSize)
         let box = SequencePlaceholder(
             bindingKey: bindingKey,
             frame: frame,
@@ -442,6 +529,7 @@ struct SpreadsheetSequencePrintView: View {
         if selectedPlaceholderID == id {
             selectedPlaceholderID = nil
         }
+        persistDraftMedia()
     }
 
     private func loadSavedContent() {
@@ -449,11 +537,76 @@ struct SpreadsheetSequencePrintView: View {
         attributedText = saved
     }
 
+    private func loadDraftMedia() {
+        let meta = templateStore.loadDraftMeta()
+        placeholders = meta.placeholders
+        if let frame = meta.logoFrame {
+            logoFrame = frame
+        }
+        backgroundImage = templateStore.loadDraftBackgroundImage()
+        logoImage = templateStore.loadDraftLogoImage()
+        if logoImage == nil {
+            isLogoSelected = false
+        }
+    }
+
+    private func persistDraftMedia() {
+        templateStore.saveDraft(
+            placeholders: placeholders,
+            logoFrame: logoImage == nil ? nil : logoFrame,
+            backgroundImage: backgroundImage,
+            logoImage: logoImage
+        )
+    }
+
+    private func pickImage(completion: @escaping (NSImage) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [
+            .png, .jpeg, .tiff, .gif, .bmp,
+            UTType(filenameExtension: "webp") ?? .png
+        ].compactMap { $0 }
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        guard let image = NSImage(contentsOf: url) else {
+            message = "无法读取图片"
+            return
+        }
+        completion(image)
+    }
+
+    private func setLogo(_ image: NSImage) {
+        logoImage = image
+        let w = min(paperWidth * 0.35, max(80, image.size.width))
+        let aspect = image.size.height > 0 ? image.size.width / image.size.height : 2
+        let h = max(36, w / max(aspect, 0.2))
+        logoFrame = SequencePlaceholderFrame(
+            x: (paperWidth - w) / 2,
+            y: 16,
+            width: w,
+            height: h
+        ).clamped(to: canvasSize, minSize: CGSize(width: 36, height: 24))
+        isLogoSelected = true
+        selectedPlaceholderID = nil
+        persistDraftMedia()
+    }
+
+    private func clearLogo() {
+        logoImage = nil
+        isLogoSelected = false
+        persistDraftMedia()
+    }
+
     private func clearContent() {
         attributedText = NSAttributedString(string: "", attributes: AttributedTextView.defaultTypingAttributes())
         placeholders = []
         selectedPlaceholderID = nil
         selectedRowIndex = 0
+        backgroundImage = nil
+        logoImage = nil
+        isLogoSelected = false
         draftStore.clear()
         templateStore.clearDraftPlaceholders()
         message = ""
@@ -485,31 +638,13 @@ struct SpreadsheetSequencePrintView: View {
             let table = try SpreadsheetImportService.load(from: url)
             spreadsheet = table
             selectedRowIndex = 0
-            let created = ensurePlaceholders(for: table.headers)
             importInfo = "来自 \(url.lastPathComponent)"
-            message = "已导入 \(table.rows.count) 行 · \(table.headers.count) 列 · 新建占位框 \(created)"
+            message = "已导入 \(table.rows.count) 行 · \(table.headers.count) 列（请手动添加占位框）"
         } catch {
             appState.lastError = error.localizedDescription
             importInfo = error.localizedDescription
             message = error.localizedDescription
         }
-    }
-
-    /// Create one draggable box per column header (skip keys that already have a box).
-    @discardableResult
-    private func ensurePlaceholders(for headers: [String]) -> Int {
-        let existing = Set(placeholders.map(\.bindingKey))
-        var created = 0
-        for (i, header) in headers.enumerated() {
-            let name = header.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty, !existing.contains(name) else { continue }
-            addPlaceholder(bindingKey: name, staggerIndex: placeholders.count + i)
-            created += 1
-        }
-        if let first = placeholders.first {
-            selectedPlaceholderID = first.id
-        }
-        return created
     }
 
     private func composedForCurrentRow() -> NSAttributedString {
@@ -527,9 +662,10 @@ struct SpreadsheetSequencePrintView: View {
 
     private func previewCurrent() async {
         let composed = composedForCurrentRow()
-        let image = RichTextPrintRenderer.renderImage(
+        let image = RichTextPrintRenderer.renderSequencePageImage(
             attributedString: composed,
-            config: appState.settings.printerConfig
+            config: appState.settings.printerConfig,
+            media: pageMedia
         )
         previewPayload = QuickPrintPreviewPayload(image: image)
     }
@@ -545,8 +681,6 @@ struct SpreadsheetSequencePrintView: View {
         isSequencePrinting = true
         defer { isSequencePrinting = false }
 
-        // One CUPS job: each row as a bit-image page with a cut after every ticket.
-        // Native GBK text garbled on page 2+ on this POS-80; raster avoids Chinese mode.
         sequenceProgress = "正在合成 \(sheet.rows.count) 张…"
         var pages: [NSAttributedString] = []
         var firstLines: [String] = []
@@ -567,10 +701,16 @@ struct SpreadsheetSequencePrintView: View {
 
         var config = appState.settings.printerConfig
         config.cutPaper = true
-        let payload = RichTextPrintRenderer.renderSequenceESCPOS(pages: pages, config: config)
-        let previewImage = RichTextPrintRenderer.renderImage(
+        let media = pageMedia
+        let payload = RichTextPrintRenderer.renderSequenceESCPOS(
+            pages: pages,
+            config: config,
+            media: media
+        )
+        let previewImage = RichTextPrintRenderer.renderSequencePageImage(
             attributedString: pages[0],
-            config: config
+            config: config,
+            media: media
         )
         let firstRaster = BarcodeGenerator.rasterizeWithPNG(
             previewImage,
@@ -632,14 +772,24 @@ struct SpreadsheetSequencePrintView: View {
         guard !name.isEmpty else { return }
         let newID = UUID()
         documentID = newID
-        let doc = SpreadsheetSequenceDocument(
+        var doc = SpreadsheetSequenceDocument(
             id: newID,
             name: name,
             placeholders: placeholders,
             paperWidthMM: appState.settings.printerConfig.paperWidthMM,
-            editorFontSize: editorFontSize
+            editorFontSize: editorFontSize,
+            logoFrame: logoImage == nil ? nil : logoFrame
         )
-        templateStore.save(document: doc, body: attributedText)
+        templateStore.save(
+            document: doc,
+            body: attributedText,
+            backgroundImage: backgroundImage,
+            logoImage: logoImage
+        )
+        // Refresh filenames from what was written
+        doc.backgroundImageFilename = backgroundImage == nil
+            ? nil : SpreadsheetSequenceDocument.backgroundFilename
+        doc.logoImageFilename = logoImage == nil ? nil : SpreadsheetSequenceDocument.logoFilename
         message = "已保存模板「\(name)」"
     }
 
@@ -649,8 +799,18 @@ struct SpreadsheetSequencePrintView: View {
         placeholders = doc.placeholders
         editorFontSize = doc.editorFontSize
         selectedPlaceholderID = nil
+        backgroundImage = templateStore.loadImage(document: doc, kind: .background)
+        logoImage = templateStore.loadImage(document: doc, kind: .logo)
+        if let frame = doc.logoFrame {
+            logoFrame = frame.clamped(to: canvasSize, minSize: CGSize(width: 36, height: 24))
+        } else if logoImage != nil {
+            let w = min(paperWidth * 0.35, 140)
+            logoFrame = SequencePlaceholderFrame(x: (paperWidth - w) / 2, y: 16, width: w, height: 60)
+                .clamped(to: canvasSize, minSize: CGSize(width: 36, height: 24))
+        }
+        isLogoSelected = false
         draftStore.save(body)
-        templateStore.saveDraftPlaceholders(placeholders)
+        persistDraftMedia()
         message = "已载入「\(doc.name)」"
     }
 
@@ -696,9 +856,11 @@ struct SpreadsheetSequencePrintView: View {
             from: NSRange(location: 0, length: content.length),
             documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
         )
-        let artifacts = RichTextPrintRenderer.buildArtifacts(
+        // Same raster path as sequence so background/logo appear and Chinese stays stable.
+        let artifacts = RichTextPrintRenderer.buildSequenceRasterArtifacts(
             attributedString: content,
             config: config,
+            media: pageMedia,
             sourceText: content.string,
             attributedRTFD: rtfd
         )

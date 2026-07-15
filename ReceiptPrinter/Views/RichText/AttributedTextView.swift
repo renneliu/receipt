@@ -78,6 +78,8 @@ struct AttributedTextView: NSViewRepresentable {
     var printerConfig: PrinterConfig = .default80mm
     /// Controls column-grid width so soft wrap matches ESC/POS print columns.
     var editorFontSize: CGFloat = AttributedTextView.defaultFontSize
+    /// When true, text view is transparent so a canvas background image can show through.
+    var clearCanvasBackground: Bool = false
     var onTextViewReady: ((NSTextView) -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -90,11 +92,10 @@ struct AttributedTextView: NSViewRepresentable {
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
-        scrollView.drawsBackground = true
-        scrollView.backgroundColor = NSColor.windowBackgroundColor
         scrollView.horizontalScrollElasticity = .none
         scrollView.verticalScrollElasticity = .allowed
         scrollView.scrollerStyle = .overlay
+        applyBackground(scrollView: scrollView, textView: nil)
 
         let textView = ReceiptEditorTextView(frame: .zero)
         textView.delegate = context.coordinator
@@ -103,8 +104,7 @@ struct AttributedTextView: NSViewRepresentable {
         textView.allowsUndo = true
         textView.isEditable = true
         textView.isSelectable = true
-        textView.drawsBackground = true
-        textView.backgroundColor = .white
+        applyBackground(scrollView: scrollView, textView: textView)
         // Inset + lineFragmentPadding keep large CJK glyphs from clipping on the left edge.
         textView.textContainerInset = NSSize(width: Self.editorInsetWidth, height: 12)
         textView.isHorizontallyResizable = false
@@ -130,6 +130,7 @@ struct AttributedTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         context.coordinator.parent = self
+        applyBackground(scrollView: scrollView, textView: textView)
         applyPaperLayout(to: textView, scrollView: scrollView)
 
         var typing = textView.typingAttributes
@@ -144,6 +145,20 @@ struct AttributedTextView: NSViewRepresentable {
             context.coordinator.isUpdatingFromView = true
             textView.textStorage?.setAttributedString(attributedString)
             context.coordinator.isUpdatingFromView = false
+        }
+    }
+
+    private func applyBackground(scrollView: NSScrollView, textView: NSTextView?) {
+        if clearCanvasBackground {
+            scrollView.drawsBackground = false
+            scrollView.backgroundColor = .clear
+            textView?.drawsBackground = false
+            textView?.backgroundColor = .clear
+        } else {
+            scrollView.drawsBackground = true
+            scrollView.backgroundColor = NSColor.windowBackgroundColor
+            textView?.drawsBackground = true
+            textView?.backgroundColor = .white
         }
     }
 

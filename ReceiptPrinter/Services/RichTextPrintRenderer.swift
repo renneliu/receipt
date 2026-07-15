@@ -27,7 +27,31 @@ enum RichTextPrintRenderer {
 
     // MARK: - Public
 
+    /// Media layered under/over sequence ticket text (editor canvas coordinates for logo).
+    struct SequencePageMedia {
+        var background: NSImage? = nil
+        var logo: NSImage? = nil
+        var logoFrame: SequencePlaceholderFrame? = nil
+        /// Editor paper size used for logo frame mapping (points).
+        var canvasSize: CGSize = .zero
+    }
+
     static func renderImage(attributedString: NSAttributedString, config: PrinterConfig, padding: CGFloat = 8) -> NSImage {
+        renderSequencePageImage(
+            attributedString: attributedString,
+            config: config,
+            media: SequencePageMedia(),
+            padding: padding
+        )
+    }
+
+    /// White → fitCenter background → text → logo. Used for sequence preview and print.
+    static func renderSequencePageImage(
+        attributedString: NSAttributedString,
+        config: PrinterConfig,
+        media: SequencePageMedia,
+        padding: CGFloat = 8
+    ) -> NSImage {
         let lines = layoutLines(from: attributedString, config: config)
         let width = CGFloat(config.dotsPerLine)
         let contentWidth = width - padding * 2
@@ -36,13 +60,40 @@ enum RichTextPrintRenderer {
         for line in lines {
             heights.append(lineHeight(for: line, baseCell: baseCell))
         }
-        let totalH = heights.reduce(padding * 2, +) + CGFloat(max(0, heights.count - 1)) * 2
-        let pixelHeight = max(80, ceil(totalH))
+        let contentHeight = heights.reduce(padding * 2, +) + CGFloat(max(0, heights.count - 1)) * 2
+
+        let canvas = media.canvasSize
+        let scale: CGFloat
+        if canvas.width > 1 {
+            scale = width / canvas.width
+        } else {
+            scale = 1
+        }
+        var pixelHeight = max(80, ceil(contentHeight))
+        if canvas.height > 1 {
+            pixelHeight = max(pixelHeight, ceil(canvas.height * scale))
+        }
+        if let frame = media.logoFrame, media.logo != nil {
+            pixelHeight = max(pixelHeight, ceil((frame.y + frame.height) * scale + padding))
+        }
         let size = NSSize(width: width, height: pixelHeight)
 
         return NSImage(size: size, flipped: true) { _ in
             NSColor.white.setFill()
             NSRect(origin: .zero, size: size).fill()
+
+            if let bg = media.background {
+                let rect = fitCenterRect(imageSize: bg.size, in: NSRect(origin: .zero, size: size))
+                bg.draw(
+                    in: rect,
+                    from: .zero,
+                    operation: .sourceOver,
+                    fraction: 1.0,
+                    respectFlipped: true,
+                    hints: [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)]
+                )
+            }
+
             var drawY = padding
             for (index, line) in lines.enumerated() {
                 let h = heights[index]
@@ -58,8 +109,43 @@ enum RichTextPrintRenderer {
                 )
                 drawY += h + 2
             }
+
+            if let logo = media.logo, let frame = media.logoFrame, canvas.width > 1 {
+                let dest = NSRect(
+                    x: frame.x * scale,
+                    y: frame.y * scale,
+                    width: frame.width * scale,
+                    height: frame.height * scale
+                )
+                logo.draw(
+                    in: dest,
+                    from: .zero,
+                    operation: .sourceOver,
+                    fraction: 1.0,
+                    respectFlipped: true,
+                    hints: [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)]
+                )
+            }
             return true
         }
+    }
+
+    /// Aspect-fit, centered (may letterbox).
+    static func fitCenterRect(imageSize: NSSize, in bounds: NSRect) -> NSRect {
+        guard imageSize.width > 0, imageSize.height > 0, bounds.width > 0, bounds.height > 0 else {
+            return bounds
+        }
+        let sx = bounds.width / imageSize.width
+        let sy = bounds.height / imageSize.height
+        let s = min(sx, sy)
+        let w = imageSize.width * s
+        let h = imageSize.height * s
+        return NSRect(
+            x: bounds.minX + (bounds.width - w) / 2,
+            y: bounds.minY + (bounds.height - h) / 2,
+            width: w,
+            height: h
+        )
     }
 
     /// Native-text ESC/POS from the shared layout line list (the path that prints Chinese on this POS-80).
@@ -78,11 +164,20 @@ enum RichTextPrintRenderer {
 
     /// Sequence tickets as per-page bit-images (`GS v 0` via `initializeForRaster`).
     /// Cuts after each page so every Excel row becomes its own ticket.
-    static func renderSequenceESCPOS(pages: [NSAttributedString], config: PrinterConfig) -> Data {
+    /// Text + background + logo are composited in software first — never `FS &` then GS v 0.
+    static func renderSequenceESCPOS(
+        pages: [NSAttributedString],
+        config: PrinterConfig,
+        media: SequencePageMedia = SequencePageMedia()
+    ) -> Data {
         let builder = ESCPOSBuilder(config: config).initializeForRaster()
         let feedBeforeCut = max(config.feedLinesBeforeCut, minimumFeedsBeforeCut)
         for (index, page) in pages.enumerated() {
-            let image = renderImage(attributedString: page, config: config)
+            let image = renderSequencePageImage(
+                attributedString: page,
+                config: config,
+                media: media
+            )
             builder.image(image, maxWidth: config.dotsPerLine)
             if config.cutPaper {
                 builder.cut(feedLines: feedBeforeCut, reassertChinese: false)
@@ -94,6 +189,52 @@ enum RichTextPrintRenderer {
             }
         }
         return builder.build()
+    }
+
+    /// Raster artifacts for sequence / current print when media may include images.
+    static func buildSequenceRasterArtifacts(
+        attributedString: NSAttributedString,
+        config: PrinterConfig,
+        media: SequencePageMedia,
+        sourceText: String,
+        attributedRTFD: Data?
+    ) -> PrintArtifacts {
+        let image = renderSequencePageImage(
+            attributedString: attributedString,
+            config: config,
+            media: media
+        )
+        let pngData = Self.pngData(from: image) ?? Data()
+        let payload = renderSequenceESCPOS(pages: [attributedString], config: config, media: media)
+        let firstRaster = BarcodeGenerator.rasterizeWithPNG(image, maxWidth: config.dotsPerLine)
+        let raster = firstRaster?.raster
+        let widthBytes = raster?.widthBytes ?? 0
+        let height = raster?.height ?? 0
+        let rasterData = raster?.data ?? Data()
+        let expected = widthBytes * height
+
+        return PrintArtifacts(
+            sourceText: sourceText,
+            attributedRTFD: attributedRTFD,
+            pngData: firstRaster?.grayPNG ?? pngData,
+            rasterData: rasterData,
+            payload: payload,
+            imagePixelWidth: Int(image.size.width),
+            imagePixelHeight: Int(image.size.height),
+            rasterWidthBytes: widthBytes,
+            rasterHeight: height,
+            headerXL: widthBytes & 0xFF,
+            headerXH: (widthBytes >> 8) & 0xFF,
+            headerYL: height & 0xFF,
+            headerYH: (height >> 8) & 0xFF,
+            expectedRasterBytes: expected,
+            renderMode: .raster,
+            usedNativeText: false,
+            usedRaster: true,
+            dpi: 203,
+            printableWidthDots: config.dotsPerLine,
+            printerModelHint: "POS-80 sequence raster"
+        )
     }
 
     /// Diagnostic capture: preview PNG for reference + the EXACT native-text payload that will be sent.

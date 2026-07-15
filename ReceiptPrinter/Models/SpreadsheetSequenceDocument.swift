@@ -38,17 +38,32 @@ struct SequencePlaceholderFrame: Codable, Equatable {
     }
 }
 
-/// Saved sequence-print template (body RTFD stored beside this JSON).
+/// Saved sequence-print template (body RTFD + optional images stored beside this JSON).
 struct SpreadsheetSequenceDocument: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
     var name: String
     var placeholders: [SequencePlaceholder] = []
     var paperWidthMM: Int = 80
     var editorFontSize: Double = AttributedTextView.defaultFontSize
+    /// Relative filenames inside the template folder (e.g. `background.png`).
+    var backgroundImageFilename: String? = nil
+    var logoImageFilename: String? = nil
+    var logoFrame: SequencePlaceholderFrame? = nil
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
+
+    static let backgroundFilename = "background.png"
+    static let logoFilename = "logo.png"
 
     mutating func touch() {
         updatedAt = Date()
     }
+}
+
+/// Session / draft meta for placeholders + logo frame (images stored as sibling files).
+struct SequenceDraftMeta: Codable, Equatable {
+    var placeholders: [SequencePlaceholder] = []
+    var logoFrame: SequencePlaceholderFrame? = nil
+    var hasBackground: Bool = false
+    var hasLogo: Bool = false
 }
