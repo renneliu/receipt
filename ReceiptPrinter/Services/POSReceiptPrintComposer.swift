@@ -11,6 +11,7 @@ enum POSReceiptPrintComposer {
         template: POSReceiptTemplate,
         items: [POSLineItem],
         surcharge: String,
+        surchargePercentLabel: String? = nil,
         backgroundImage: NSImage?,
         logoImages: [UUID: NSImage],
         config: PrinterConfig,
@@ -22,6 +23,7 @@ enum POSReceiptPrintComposer {
             template: template,
             items: items,
             surcharge: surcharge,
+            surchargePercentLabel: surchargePercentLabel,
             now: now,
             ticketAutoNumber: ticketAutoNumber,
             config: config,
@@ -77,7 +79,9 @@ enum POSReceiptPrintComposer {
                 fontSize: $0.fontSize,
                 alignment: $0.alignment,
                 asRule: $0.asRule,
-                ruleDashed: $0.ruleDashed
+                ruleDashed: $0.ruleDashed,
+                isBold: $0.isBold,
+                annotation: $0.annotation
             )
         }
 
@@ -101,13 +105,17 @@ enum POSReceiptPrintComposer {
         // POS designer needs WYSIWYG fonts → print the preview bitmap as banded GS v 0.
         // Native-GBK grid path collapses all overlay fontSize (log: usedNativeText=true → 字体全没).
         // Band init re-asserts FS . per strip so raster bytes are not read as GBK.
+        // End on cut only — trailing ESC @ after cut left ticket 2+ garbled on POS-80.
         let feed = max(config.feedLinesBeforeCut, 12)
+        let warmup = Self.whiteStrip(width: config.dotsPerLine, height: 24)
         let payload = ESCPOSBuilder(config: config)
+            .initializeForRaster()
+            .align(.left)
+            .imageBanded(warmup, maxWidth: config.dotsPerLine, bandHeight: 24)
             .initializeForRaster()
             .align(.left)
             .imageBanded(preview, maxWidth: config.dotsPerLine, bandHeight: 48)
             .cut(feedLines: feed, reassertChinese: false)
-            .leaveRasterSafe()
             .build()
         let artifacts = PrintArtifacts(
             sourceText: composed.string,
@@ -133,6 +141,16 @@ enum POSReceiptPrintComposer {
         )
 
         return Result(artifacts: artifacts, previewImage: preview)
+    }
+
+    private static func whiteStrip(width: Int, height: Int) -> NSImage {
+        let w = max(8, width)
+        let h = max(8, height)
+        return NSImage(size: NSSize(width: w, height: h), flipped: false) { rect in
+            NSColor.white.setFill()
+            rect.fill()
+            return true
+        }
     }
 
     /// Simple Code128-like bars (same approach as TemplateRenderer preview).

@@ -53,9 +53,10 @@ struct POSReceiptRootView: View {
         }
         .navigationTitle("POS小票打印")
         .onAppear {
-            if session.settings.lastPane == "template" {
-                pane = .template
-            }
+            // Always land on 主页面 when opening POS 小票.
+            pane = .main
+            session.settings.lastPane = "main"
+            session.settings.save()
         }
         .onChange(of: pane) { _, newValue in
             session.settings.lastPane = newValue == .template ? "template" : "main"
@@ -67,6 +68,7 @@ struct POSReceiptRootView: View {
                 session.syncEditingIntoTemplates()
                 if let t = session.activeTemplate {
                     session.loadImages(for: t)
+                    session.reloadExcelCatalog(for: t)
                 }
             }
         }

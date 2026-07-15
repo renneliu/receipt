@@ -9,6 +9,8 @@ actor PrintController {
 
     /// Proves serialization in logs: must never observe > 1.
     private var inFlight = 0
+    /// Set after a raster cut so the next job settles briefly (CUPS idle alone was not enough).
+    private var needsPostRasterSettle = false
 
     struct Config: Sendable {
         var printerName: String
@@ -101,6 +103,14 @@ actor PrintController {
             return record
         }
 
+        // Serialize against the previous CUPS job; return after send so UI is not blocked.
+        _ = await service.waitUntilIdle(printerName: config.printerName, timeoutSeconds: 90)
+        if needsPostRasterSettle {
+            // Short cut-recovery settle; payload already has triple ESC@/FS. + white warmup.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            needsPostRasterSettle = false
+        }
+
         let result = service.transmit(
             printerName: config.printerName,
             data: artifacts.payload,
@@ -121,6 +131,10 @@ actor PrintController {
         store.writeTransportLog(id: jobId, text: Self.transportLog(record: record, result: result))
         store.writeMetadata(record)
         store.upsert(record)
+
+        if artifacts.usedRaster {
+            needsPostRasterSettle = true
+        }
 
         return record
     }

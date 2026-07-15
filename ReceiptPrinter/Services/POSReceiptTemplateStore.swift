@@ -54,6 +54,7 @@ final class POSReceiptTemplateStore {
                     for i in elements.indices {
                         if elements[i]["isDashed"] == nil { elements[i]["isDashed"] = false }
                         if elements[i]["isLocked"] == nil { elements[i]["isLocked"] = false }
+                        if elements[i]["displayName"] == nil { elements[i]["displayName"] = "" }
                         if elements[i]["ticketSection"] == nil {
                             let kindRaw = elements[i]["kind"] as? String ?? ""
                             let fieldRaw = elements[i]["fieldKind"] as? String

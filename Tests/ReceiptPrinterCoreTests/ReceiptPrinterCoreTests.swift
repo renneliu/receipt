@@ -391,6 +391,7 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         XCTAssertEqual(POSReceiptTotals.quantitySubtotal(items: items), 5)
         XCTAssertEqual(POSReceiptTotals.amountSubtotal(items: items), 12.0, accuracy: 0.001)
         XCTAssertEqual(POSReceiptTotals.amountTotal(items: items, surcharge: "2"), 14.0, accuracy: 0.001)
+        XCTAssertEqual(POSReceiptTotals.itemCount(items: items), 2)
         XCTAssertEqual(POSReceiptTotals.formatAmount(12), "12.00")
         XCTAssertEqual(POSReceiptTotals.formatQuantity(5), "5")
     }
@@ -669,5 +670,30 @@ final class ReceiptPrinterCoreTests: XCTestCase {
 
         store.delete(a)
         store.delete(b)
+    }
+
+    func testPOSSurchargePercentAnnotation() {
+        var template = POSReceiptTemplate.makeBlank(name: "附加费")
+        template.elements.append(POSReceiptElement(
+            kind: .fieldPlaceholder,
+            frame: SequencePlaceholderFrame(x: 12, y: 200, width: 80, height: 28),
+            fieldKind: .surcharge,
+            ticketSection: .footer
+        ))
+        let layout = POSReceiptLayoutEngine.expand(
+            template: template,
+            items: [POSLineItem(code: "1", name: "A", quantity: "1", amount: "100")],
+            surcharge: "10.00",
+            surchargePercentLabel: "10%"
+        )
+        let surcharge = layout.texts.first { $0.text == "10.00" }
+        XCTAssertEqual(surcharge?.annotation, "(10%)")
+        let plain = POSReceiptLayoutEngine.expand(
+            template: template,
+            items: [POSLineItem(code: "1", name: "A", quantity: "1", amount: "100")],
+            surcharge: "10.00",
+            surchargePercentLabel: nil
+        )
+        XCTAssertNil(plain.texts.first { $0.text == "10.00" }?.annotation)
     }
 }

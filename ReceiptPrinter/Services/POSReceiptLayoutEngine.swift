@@ -159,6 +159,8 @@ enum POSReceiptLayoutEngine {
         /// Horizontal rule drawn as a vector stroke (solid/dashed); avoids hyphen gaps at large font.
         var asRule: Bool = false
         var ruleDashed: Bool = false
+        /// Smaller trailing note, e.g. `"(10%)"` after surcharge amount.
+        var annotation: String? = nil
     }
 
     struct PlacedLogo: Equatable {
@@ -182,6 +184,7 @@ enum POSReceiptLayoutEngine {
         template: POSReceiptTemplate,
         items: [POSLineItem],
         surcharge: String,
+        surchargePercentLabel: String? = nil,
         now: Date = Date(),
         ticketAutoNumber: String? = nil,
         config: PrinterConfig = .default80mm,
@@ -244,6 +247,7 @@ enum POSReceiptLayoutEngine {
         let amtTotal = POSReceiptTotals.formatAmount(
             POSReceiptTotals.amountTotal(items: items, surcharge: surchargeValue)
         )
+        let itemCountText = "\(POSReceiptTotals.itemCount(items: items))"
 
         for el in template.elements.sorted(by: { $0.zIndex < $1.zIndex }) {
             switch el.kind {
@@ -325,13 +329,29 @@ enum POSReceiptLayoutEngine {
                     continue // handled in packed pass below
                 } else {
                     let frame = anchoredFrame(el, totalShift: totalShift)
+                    let text = value(
+                        for: kind,
+                        item: POSLineItem(),
+                        qtySub: qtySub,
+                        amtSub: amtSub,
+                        surcharge: surchargeValue,
+                        amtTotal: amtTotal,
+                        itemCount: itemCountText
+                    )
+                    let note: String? = {
+                        guard kind == .surcharge,
+                              let label = surchargePercentLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+                              !label.isEmpty else { return nil }
+                        return "(\(label))"
+                    }()
                     texts.append(PlacedText(
-                        text: value(for: kind, item: POSLineItem(), qtySub: qtySub, amtSub: amtSub, surcharge: surchargeValue, amtTotal: amtTotal),
+                        text: text,
                         frame: frame,
                         fontSize: el.fontSize,
                         isBold: el.isBold,
                         alignment: el.alignment,
-                        asOverlay: true
+                        asOverlay: true,
+                        annotation: note
                     ))
                 }
             }
@@ -373,7 +393,8 @@ enum POSReceiptLayoutEngine {
                     qtySub: qtySub,
                     amtSub: amtSub,
                     surcharge: surchargeValue,
-                    amtTotal: amtTotal
+                    amtTotal: amtTotal,
+                    itemCount: itemCountText
                 )
                 let placedText: String
                 if slot.kind == .name {
@@ -451,7 +472,8 @@ enum POSReceiptLayoutEngine {
         qtySub: String,
         amtSub: String,
         surcharge: String,
-        amtTotal: String
+        amtTotal: String,
+        itemCount: String
     ) -> String {
         switch kind {
         case .code: return item.code
@@ -462,6 +484,7 @@ enum POSReceiptLayoutEngine {
         case .amountSubtotal: return amtSub
         case .surcharge: return POSReceiptTotals.formatAmount(POSReceiptTotals.parseNumber(surcharge))
         case .amountTotal: return amtTotal
+        case .itemCount: return itemCount
         }
     }
 

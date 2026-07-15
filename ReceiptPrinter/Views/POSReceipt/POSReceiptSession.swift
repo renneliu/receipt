@@ -3,6 +3,16 @@ import Combine
 import Foundation
 import SwiftUI
 
+enum POSDraftField: Hashable, CaseIterable {
+    case code, name, quantity, amount
+
+    static func lastEnabled(template: POSReceiptTemplate) -> POSDraftField {
+        if template.enableAmount { return .amount }
+        if template.enableQuantity { return .quantity }
+        return .name
+    }
+}
+
 /// Shared session for POS receipt main + template panes.
 @MainActor
 final class POSReceiptSession: ObservableObject {
@@ -13,16 +23,27 @@ final class POSReceiptSession: ObservableObject {
     @Published var logoImages: [UUID: NSImage] = [:]
     @Published var lineItems: [POSLineItem] = []
     @Published var selectedItemId: UUID?
+    /// Persists while editing a list row; not cleared when the List loses selection focus.
+    @Published var editingLineItemId: UUID?
     @Published var draftCode = ""
     @Published var draftName = ""
     @Published var draftQuantity = ""
     @Published var draftAmount = ""
     @Published var surcharge = "0"
+    /// Set when surcharge comes from percent shortcuts (`"10%"`); cleared on manual edit.
+    @Published var surchargePercentLabel: String?
     @Published var nextAutoCode = 1
+    /// After the first line item used an auto-generated code, subsequent lines prefill code and focus 项目名称.
+    @Published var prefersNameFieldForNextLine = false
     @Published var message = ""
     @Published var excelRowCount: Int?
+    @Published var excelCatalog: [POSExcelCatalogEntry] = []
+    @Published var excelCatalogPage = 0
+    @Published var printHistory: [POSPrintHistoryRecord] = []
 
     let store = POSReceiptTemplateStore()
+
+    static let excelCatalogPageSize = 12
 
     var activeTemplate: POSReceiptTemplate? {
         guard let id = settings.activeTemplateId else { return templates.first }
@@ -32,9 +53,13 @@ final class POSReceiptSession: ObservableObject {
     init() {
         settings = POSReceiptSettings.load()
         reloadTemplates()
+        printHistory = POSPrintHistoryStore.loadAll()
         if let t = activeTemplate {
             surcharge = t.defaultSurcharge
+            surchargePercentLabel = nil
             loadImages(for: t)
+            // Do NOT load Excel here: unzip uses Process.waitUntilExit and crashes
+            // AttributeGraph if run during SwiftUI StateObject init/layout (crash 20:13:24).
         }
     }
 
@@ -55,11 +80,15 @@ final class POSReceiptSession: ObservableObject {
         settings.save()
         if let t = templates.first(where: { $0.id == id }) {
             surcharge = t.defaultSurcharge
+            surchargePercentLabel = nil
             loadImages(for: t)
             nextAutoCode = 1
+            prefersNameFieldForNextLine = false
             lineItems = []
             clearDraft()
             selectedItemId = nil
+            editingLineItemId = nil
+            reloadExcelCatalog(for: t)
         }
     }
 
@@ -230,6 +259,251 @@ final class POSReceiptSession: ObservableObject {
         draftAmount = ""
     }
 
+    /// Prefer the in-memory editing copy when it matches the active template (has latest Excel binding).
+    func templateForExcelRefresh() -> POSReceiptTemplate? {
+        if let editing = editingTemplate,
+           editing.id == settings.activeTemplateId || editing.id == activeTemplate?.id,
+           editing.excelBookmarkData != nil {
+            return editing
+        }
+        if let active = activeTemplate, active.excelBookmarkData != nil {
+            return active
+        }
+        return nil
+    }
+
+    /// Re-read the bound spreadsheet off the main thread and refresh the quick-pick catalog.
+    func refreshBoundExcel() async -> Bool {
+        guard let source = templateForExcelRefresh(),
+              let bookmark = source.excelBookmarkData else {
+            message = "当前模板未绑定 Excel"
+            return false
+        }
+        let templateId = source.id
+        let map = source.excelColumnMap
+        let fileName = source.excelDisplayName ?? "表格"
+        message = "正在刷新 Excel…"
+        let result = await Self.loadCatalogOffMain(bookmarkData: bookmark, map: map)
+        switch result {
+        case .success(let packed):
+            if var updated = templates.first(where: { $0.id == templateId }) {
+                updated.excelCachedHeaders = packed.headers
+                store.saveMeta(updated)
+                if editingTemplate?.id == templateId {
+                    editingTemplate?.excelCachedHeaders = packed.headers
+                }
+                reloadTemplates()
+            }
+            excelRowCount = packed.rowCount
+            excelCatalog = packed.entries
+            let maxPage = max(0, (excelCatalog.count - 1) / Self.excelCatalogPageSize)
+            excelCatalogPage = min(excelCatalogPage, maxPage)
+            message = "Excel 已刷新：\(fileName)，\(packed.rowCount) 行 / \(packed.entries.count) 个快捷项"
+            return true
+        case .failure(let error):
+            message = "刷新失败：\(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func reloadExcelCatalog(for template: POSReceiptTemplate) {
+        guard template.excelBookmarkData != nil else {
+            excelCatalog = []
+            excelCatalogPage = 0
+            excelRowCount = nil
+            return
+        }
+        let templateId = template.id
+        let map = template.excelColumnMap
+        let bookmark = template.excelBookmarkData
+        Task {
+            let result = await Self.loadCatalogOffMain(bookmarkData: bookmark, map: map)
+            guard settings.activeTemplateId == templateId
+                    || activeTemplate?.id == templateId
+                    || editingTemplate?.id == templateId else { return }
+            switch result {
+            case .success(let packed):
+                excelRowCount = packed.rowCount
+                excelCatalog = packed.entries
+                let maxPage = max(0, (excelCatalog.count - 1) / Self.excelCatalogPageSize)
+                excelCatalogPage = min(excelCatalogPage, maxPage)
+            case .failure(let error):
+                excelCatalog = []
+                excelCatalogPage = 0
+                message = error.localizedDescription
+            }
+        }
+    }
+
+    private struct ExcelCatalogLoad: Sendable {
+        var rowCount: Int
+        var entries: [POSExcelCatalogEntry]
+        var headers: [String]
+    }
+
+    private nonisolated static func loadCatalogOffMain(
+        bookmarkData: Data?,
+        map: POSExcelColumnMap
+    ) async -> Result<ExcelCatalogLoad, Error> {
+        await Task.detached(priority: .userInitiated) {
+            do {
+                guard let bookmarkData else {
+                    throw POSExcelLookupError.noExcel
+                }
+                let resolved = try POSExcelLookupService.resolveBookmark(bookmarkData)
+                let accessed = resolved.url.startAccessingSecurityScopedResource()
+                defer {
+                    if accessed { resolved.url.stopAccessingSecurityScopedResource() }
+                }
+                let table = try SpreadsheetImportService.load(from: resolved.url)
+                let entries = POSExcelLookupService.catalogEntries(table: table, map: map)
+                return .success(ExcelCatalogLoad(
+                    rowCount: table.rows.count,
+                    entries: entries,
+                    headers: table.headers
+                ))
+            } catch {
+                return .failure(error)
+            }
+        }.value
+    }
+
+    var excelCatalogPageCount: Int {
+        guard !excelCatalog.isEmpty else { return 1 }
+        return (excelCatalog.count + Self.excelCatalogPageSize - 1) / Self.excelCatalogPageSize
+    }
+
+    var excelCatalogPageEntries: [POSExcelCatalogEntry] {
+        let start = excelCatalogPage * Self.excelCatalogPageSize
+        let end = min(start + Self.excelCatalogPageSize, excelCatalog.count)
+        guard start < end else { return [] }
+        return Array(excelCatalog[start..<end])
+    }
+
+    func applyDraft(from item: POSLineItem, template: POSReceiptTemplate) {
+        if template.enableCode {
+            draftCode = sanitizeCode(item.code)
+        }
+        draftName = item.name
+        if template.enableQuantity {
+            draftQuantity = item.quantity
+        }
+        if template.enableAmount {
+            draftAmount = item.amount
+        }
+    }
+
+    func beginEditingLineItem(_ item: POSLineItem, template: POSReceiptTemplate) {
+        selectedItemId = item.id
+        editingLineItemId = item.id
+        applyDraft(from: item, template: template)
+    }
+
+    func endEditingLineItem() {
+        editingLineItemId = nil
+        selectedItemId = nil
+    }
+
+    func isDraftComplete(template: POSReceiptTemplate) -> Bool {
+        let nameOK = !draftName.trimmingCharacters(in: .whitespaces).isEmpty
+        let qtyOK = !template.enableQuantity || !draftQuantity.trimmingCharacters(in: .whitespaces).isEmpty
+        let amtOK = !template.enableAmount || !draftAmount.trimmingCharacters(in: .whitespaces).isEmpty
+        return nameOK && qtyOK && amtOK
+    }
+
+    func firstEmptyDraftField(template: POSReceiptTemplate) -> POSDraftField? {
+        let order: [(POSDraftField, Bool, String)] = [
+            (.code, template.enableCode, draftCode),
+            (.name, true, draftName),
+            (.quantity, template.enableQuantity, draftQuantity),
+            (.amount, template.enableAmount, draftAmount)
+        ]
+        for (field, enabled, value) in order {
+            guard enabled else { continue }
+            if field == .code, !value.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+            if value.trimmingCharacters(in: .whitespaces).isEmpty {
+                return field
+            }
+        }
+        return nil
+    }
+
+    func prepareNextLineDraft(template: POSReceiptTemplate) {
+        draftName = ""
+        draftQuantity = ""
+        draftAmount = ""
+        if template.enableCode, prefersNameFieldForNextLine {
+            draftCode = "\(nextAutoCode)"
+        } else if template.enableCode {
+            draftCode = ""
+        } else {
+            draftCode = ""
+        }
+    }
+
+    func applySurchargePercent(_ fraction: Double) {
+        let subtotal = POSReceiptTotals.amountSubtotal(items: lineItems)
+        surcharge = POSReceiptTotals.formatAmount(subtotal * fraction)
+        let pct = Int((fraction * 100).rounded())
+        surchargePercentLabel = "\(pct)%"
+    }
+
+    func setSurchargeManually(_ raw: String) {
+        surcharge = raw
+        surchargePercentLabel = nil
+    }
+
+    func clearLineItemsForNextTicket(resetSurchargeFrom template: POSReceiptTemplate?) {
+        lineItems = []
+        endEditingLineItem()
+        clearDraft()
+        nextAutoCode = 1
+        prefersNameFieldForNextLine = false
+        if let template {
+            surcharge = template.defaultSurcharge
+        }
+        surchargePercentLabel = nil
+    }
+
+    func recordSuccessfulPrint(
+        template: POSReceiptTemplate,
+        items: [POSLineItem],
+        surcharge: String,
+        surchargePercentLabel: String?,
+        previewPNG: Data
+    ) {
+        let record = POSPrintHistoryRecord(
+            templateId: template.id,
+            templateName: template.name,
+            items: items,
+            surcharge: surcharge,
+            surchargePercentLabel: surchargePercentLabel ?? "",
+            previewPNG: previewPNG
+        )
+        POSPrintHistoryStore.append(record)
+        printHistory = POSPrintHistoryStore.loadAll()
+    }
+
+    func deletePrintHistory(id: UUID) {
+        POSPrintHistoryStore.delete(id: id)
+        printHistory = POSPrintHistoryStore.loadAll()
+    }
+
+    func clearPrintHistory() {
+        POSPrintHistoryStore.clear()
+        printHistory = []
+    }
+
+    func loadPrintHistory(_ record: POSPrintHistoryRecord) {
+        lineItems = record.items
+        surcharge = record.surcharge
+        surchargePercentLabel = record.surchargePercentLabel.isEmpty ? nil : record.surchargePercentLabel
+        endEditingLineItem()
+        clearDraft()
+        nextAutoCode = max(1, (record.items.compactMap { Int($0.code) }.max() ?? 0) + 1)
+        prefersNameFieldForNextLine = !record.items.isEmpty
+    }
+
     func sanitizeCode(_ raw: String) -> String {
         raw.filter { $0.isLetter || $0.isNumber }
     }
@@ -244,5 +518,9 @@ final class POSReceiptSession: ObservableObject {
 
     var amountTotalText: String {
         POSReceiptTotals.formatAmount(POSReceiptTotals.amountTotal(items: lineItems, surcharge: surcharge))
+    }
+
+    var itemCountText: String {
+        "\(POSReceiptTotals.itemCount(items: lineItems))"
     }
 }

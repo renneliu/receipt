@@ -7,6 +7,8 @@ struct POSElementBoxOverlay: View {
     var title: String
     var previewText: String
     var fontSize: CGFloat
+    /// 0 left, 1 center, 2 right — matches `POSReceiptElement.alignment`.
+    var textAlignment: Int = 0
     var paperSize: CGSize
     var gridEnabled: Bool
     var gridSize: CGFloat
@@ -21,6 +23,22 @@ struct POSElementBoxOverlay: View {
 
     @State private var dragStart: SequencePlaceholderFrame?
     @State private var resizeStart: SequencePlaceholderFrame?
+
+    private var frameAlignment: Alignment {
+        switch textAlignment {
+        case 1: return .center
+        case 2: return .trailing
+        default: return .leading
+        }
+    }
+
+    private var multilineAlignment: TextAlignment {
+        switch textAlignment {
+        case 1: return .center
+        case 2: return .trailing
+        default: return .leading
+        }
+    }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -54,9 +72,10 @@ struct POSElementBoxOverlay: View {
                     Text(previewText.isEmpty ? " " : previewText)
                         .font(.system(size: fontSize, design: .monospaced))
                         .foregroundStyle(.primary)
+                        .multilineTextAlignment(multilineAlignment)
                         .lineLimit(4)
                         .minimumScaleFactor(0.5)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: frameAlignment)
                 }
                 .padding(4)
             }

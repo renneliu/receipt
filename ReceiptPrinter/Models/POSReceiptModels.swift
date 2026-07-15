@@ -3,7 +3,7 @@ import CoreGraphics
 
 // MARK: - Line item & settings
 
-struct POSLineItem: Identifiable, Equatable, Codable {
+struct POSLineItem: Identifiable, Equatable, Codable, Sendable {
     var id: UUID = UUID()
     var code: String = ""
     var name: String = ""
@@ -44,6 +44,8 @@ enum POSFieldKind: String, Codable, CaseIterable, Identifiable {
     case amountSubtotal
     case surcharge
     case amountTotal
+    /// Count of line items on the ticket (printable summary).
+    case itemCount
 
     var id: String { rawValue }
 
@@ -57,6 +59,7 @@ enum POSFieldKind: String, Codable, CaseIterable, Identifiable {
         case .amountSubtotal: return "金额小计"
         case .surcharge: return "附加费"
         case .amountTotal: return "金额合计"
+        case .itemCount: return "总计"
         }
     }
 
@@ -70,7 +73,7 @@ enum POSFieldKind: String, Codable, CaseIterable, Identifiable {
 
     var isSummaryField: Bool {
         switch self {
-        case .quantitySubtotal, .amountSubtotal, .surcharge, .amountTotal: return true
+        case .quantitySubtotal, .amountSubtotal, .surcharge, .amountTotal, .itemCount: return true
         default: return false
         }
     }
@@ -138,6 +141,8 @@ struct POSReceiptElement: Codable, Identifiable, Equatable {
     var kind: POSElementKind
     var frame: SequencePlaceholderFrame
     var zIndex: Int = 0
+    /// User-facing name in the element list (empty → derived title).
+    var displayName: String = ""
     /// Static text for `.textBox`.
     var content: String = ""
     var fontSize: CGFloat = AttributedTextView.defaultFontSize
@@ -187,7 +192,7 @@ struct POSReceiptElement: Codable, Identifiable, Equatable {
     }
 }
 
-struct POSExcelColumnMap: Codable, Equatable {
+struct POSExcelColumnMap: Codable, Equatable, Sendable {
     var codeHeader: String?
     var nameHeader: String?
     var quantityHeader: String?
@@ -269,6 +274,10 @@ enum POSReceiptTotals {
 
     static func amountTotal(items: [POSLineItem], surcharge: String) -> Double {
         amountSubtotal(items: items) + parseNumber(surcharge)
+    }
+
+    static func itemCount(items: [POSLineItem]) -> Int {
+        items.count
     }
 
     static func formatQuantity(_ value: Double) -> String {

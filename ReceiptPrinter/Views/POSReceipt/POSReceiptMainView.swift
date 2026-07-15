@@ -1,24 +1,24 @@
+import AppKit
+import PDFKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct POSReceiptMainView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var session: POSReceiptSession
 
-    @FocusState private var focusedField: Field?
+    @FocusState private var focusedField: POSDraftField?
     @State private var previewPayload: PreviewPayload?
     @State private var isPrinting = false
+    @State private var showHistory = false
+    @State private var isRefreshingExcel = false
 
     private struct PreviewPayload: Identifiable {
         let id = UUID()
         let image: NSImage
     }
 
-    private enum Field: Hashable {
-        case code, name, quantity, amount
-    }
-
     private var template: POSReceiptTemplate? {
-        // Prefer live editing copy when它就是当前使用模板，方便改字号后立刻预览。
         if let editing = session.editingTemplate,
            editing.id == session.settings.activeTemplateId || editing.id == session.activeTemplate?.id {
             return editing
@@ -26,35 +26,54 @@ struct POSReceiptMainView: View {
         return session.activeTemplate
     }
 
-    var body: some View {
-        HSplitView {
-            formColumn
-                .frame(minWidth: 280, idealWidth: 340)
+    private var hasExcelBound: Bool {
+        template?.excelBookmarkData != nil
+    }
 
-            listColumn
-                .frame(minWidth: 320)
+    private var hasExcelCatalog: Bool {
+        hasExcelBound && !session.excelCatalog.isEmpty
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let excelHeight = min(220, max(140, geo.size.height * 0.28))
+            VStack(spacing: 8) {
+                HSplitView {
+                    ScrollView {
+                        formColumn
+                    }
+                    .frame(minWidth: 280, idealWidth: 340)
+
+                    listColumn
+                        .frame(minWidth: 320)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if hasExcelBound {
+                    excelQuickPickSection
+                        .frame(height: excelHeight)
+                }
+            }
         }
         .padding(8)
-        .background(
-            Button("") { Task { await printTicket() } }
-                .keyboardShortcut(.return, modifiers: .command)
-                .opacity(0)
-        )
         .sheet(item: $previewPayload) { payload in
             BitmapPrintPreviewView(image: payload.image)
                 .frame(width: 420, height: 640)
         }
+        .sheet(isPresented: $showHistory) {
+            printHistorySheet
+        }
         .onAppear {
-            if let t = template {
-                session.loadImages(for: t)
-            }
-            if template?.enableCode == true {
-                focusedField = .code
-            } else {
-                focusedField = .name
-            }
+            refreshExcelIfNeeded()
+            focusInitialField()
+        }
+        .onChange(of: template?.id) { _, _ in
+            refreshExcelIfNeeded()
+            focusInitialField()
         }
     }
+
+    // MARK: - Columns
 
     private var formColumn: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -68,6 +87,26 @@ struct POSReceiptMainView: View {
                     .padding(10)
                     .background(Color(nsColor: .controlBackgroundColor))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
+                if hasExcelBound {
+                    HStack {
+                        Text(template?.excelDisplayName ?? "已绑定 Excel")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer()
+                        Button(isRefreshingExcel ? "刷新中…" : "刷新已上传 Excel") {
+                            Task { await refreshExcelTapped() }
+                        }
+                        .controlSize(.small)
+                        .disabled(isRefreshingExcel)
+                    }
+                    if !session.message.isEmpty {
+                        Text(session.message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
 
             if let t = template {
@@ -111,7 +150,8 @@ struct POSReceiptMainView: View {
                 if t.hasElement(field: .quantitySubtotal)
                     || t.hasElement(field: .amountSubtotal)
                     || t.hasElement(field: .surcharge)
-                    || t.hasElement(field: .amountTotal) {
+                    || t.hasElement(field: .amountTotal)
+                    || t.hasElement(field: .itemCount) {
                     Divider()
                     Text("汇总").font(.headline)
                     if t.hasElement(field: .quantitySubtotal) {
@@ -130,9 +170,18 @@ struct POSReceiptMainView: View {
                     }
                     if t.hasElement(field: .surcharge) {
                         labeledField("附加费") {
-                            TextField("0.00", text: $session.surcharge)
-                                .textFieldStyle(.roundedBorder)
+                            TextField("0.00", text: Binding(
+                                get: { session.surcharge },
+                                set: { session.setSurchargeManually($0) }
+                            ))
+                            .textFieldStyle(.roundedBorder)
                         }
+                        if let pct = session.surchargePercentLabel {
+                            Text("打印注释：(\(pct))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        surchargePercentButtons
                     }
                     if t.hasElement(field: .amountTotal) {
                         HStack {
@@ -143,10 +192,15 @@ struct POSReceiptMainView: View {
                                 .monospacedDigit()
                         }
                     }
+                    if t.hasElement(field: .itemCount) {
+                        HStack {
+                            Text("总计")
+                            Spacer()
+                            Text(session.itemCountText).monospacedDigit()
+                        }
+                    }
                 }
             }
-
-            Spacer()
 
             if !session.message.isEmpty {
                 Text(session.message)
@@ -162,29 +216,75 @@ struct POSReceiptMainView: View {
                 }
                 .disabled(template == nil || session.lineItems.isEmpty || isPrinting)
                 .keyboardShortcut(.return, modifiers: .command)
+                Button("打印记录") { showHistory = true }
             }
         }
         .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var surchargePercentButtons: some View {
+        let options: [(label: String, fraction: Double)] = [
+            ("小计 10%", 0.10),
+            ("小计 20%", 0.20),
+            ("小计 50%", 0.50),
+            ("小计 100%", 1.00)
+        ]
+        return HStack(spacing: 6) {
+            ForEach(options, id: \.label) { option in
+                Button(option.label) {
+                    session.applySurchargePercent(option.fraction)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
     }
 
     private var listColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("条目").font(.headline)
+                if session.editingLineItemId != nil {
+                    Text("（编辑中）")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
                 Spacer()
+                if session.editingLineItemId != nil {
+                    Button("完成编辑") {
+                        commitEditToSelected()
+                        session.endEditingLineItem()
+                        session.clearDraft()
+                        focusInitialField()
+                    }
+                }
                 if session.selectedItemId != nil {
                     Button("删除选中") { deleteSelected() }
                 }
                 Button("清空") {
                     session.lineItems = []
-                    session.selectedItemId = nil
+                    session.endEditingLineItem()
                     session.clearDraft()
                     session.nextAutoCode = 1
+                    session.prefersNameFieldForNextLine = false
+                    focusInitialField()
                 }
             }
 
             if session.lineItems.isEmpty {
-                ContentUnavailableView("暂无条目", systemImage: "list.bullet", description: Text("在左侧输入后回车添加"))
+                VStack(spacing: 8) {
+                    Image(systemName: "list.bullet")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                    Text("暂无条目")
+                        .font(.headline)
+                    Text("在左侧输入后回车添加")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
+                .padding(.top, 12)
             } else {
                 List(selection: $session.selectedItemId) {
                     ForEach(session.lineItems) { item in
@@ -209,18 +309,87 @@ struct POSReceiptMainView: View {
                         }
                         .tag(item.id)
                         .contentShape(Rectangle())
+                        .listRowBackground(
+                            session.editingLineItemId == item.id
+                                ? Color.accentColor.opacity(0.12)
+                                : Color.clear
+                        )
+                        .onTapGesture {
+                            guard let t = template else { return }
+                            session.beginEditingLineItem(item, template: t)
+                        }
                     }
                 }
                 .onChange(of: session.selectedItemId) { _, id in
-                    guard let id, let item = session.lineItems.first(where: { $0.id == id }) else { return }
-                    session.draftCode = item.code
-                    session.draftName = item.name
-                    session.draftQuantity = item.quantity
-                    session.draftAmount = item.amount
+                    guard let id,
+                          let item = session.lineItems.first(where: { $0.id == id }),
+                          let t = template else { return }
+                    if session.editingLineItemId != id {
+                        session.beginEditingLineItem(item, template: t)
+                    }
                 }
             }
         }
         .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var excelQuickPickSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Excel 快捷添加")
+                    .font(.headline)
+                Button(isRefreshingExcel ? "刷新中…" : "刷新") {
+                    Task { await refreshExcelTapped() }
+                }
+                .controlSize(.small)
+                .disabled(isRefreshingExcel)
+                Spacer()
+                if hasExcelCatalog {
+                    Text("第 \(session.excelCatalogPage + 1) / \(session.excelCatalogPageCount) 页")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        session.excelCatalogPage = max(0, session.excelCatalogPage - 1)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .disabled(session.excelCatalogPage <= 0)
+                    Button {
+                        session.excelCatalogPage = min(session.excelCatalogPageCount - 1, session.excelCatalogPage + 1)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                    }
+                    .disabled(session.excelCatalogPage >= session.excelCatalogPageCount - 1)
+                }
+            }
+
+            if hasExcelCatalog {
+                let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 8) {
+                        ForEach(session.excelCatalogPageEntries) { entry in
+                            Button(entry.buttonTitle) {
+                                applyExcelCatalogEntry(entry)
+                            }
+                            .buttonStyle(.bordered)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, minHeight: 36)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            } else {
+                Text("暂无快捷项。请确认「项目名称」列已映射，或点「刷新已上传 Excel」。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }
+        .padding()
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func labeledField<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -230,11 +399,40 @@ struct POSReceiptMainView: View {
         }
     }
 
+    // MARK: - Excel
+
+    private func refreshExcelIfNeeded() {
+        guard let t = template else { return }
+        session.loadImages(for: t)
+        session.reloadExcelCatalog(for: t)
+    }
+
+    private func refreshExcelTapped() async {
+        isRefreshingExcel = true
+        defer { isRefreshingExcel = false }
+        _ = await session.refreshBoundExcel()
+    }
+
+    private func applyExcelCatalogEntry(_ entry: POSExcelCatalogEntry) {
+        guard let t = template else { return }
+        session.endEditingLineItem()
+        session.applyDraft(from: entry.item, template: t)
+        if session.isDraftComplete(template: t) {
+            finishLineItem()
+        } else {
+            focusFirstEmptyField()
+        }
+    }
+
     // MARK: - Enter flow
 
     private func handleCodeSubmit() {
+        deferSubmit { self.handleCodeSubmitDeferred() }
+    }
+
+    private func handleCodeSubmitDeferred() {
         guard let t = template else { return }
-        if session.selectedItemId != nil {
+        if session.editingLineItemId != nil {
             commitEditToSelected()
             return
         }
@@ -243,39 +441,42 @@ struct POSReceiptMainView: View {
             do {
                 let table = try POSExcelLookupService.loadTable(for: t)
                 session.excelRowCount = table.rows.count
-                // Persist refreshed headers if needed
                 if var updated = session.templates.first(where: { $0.id == t.id }) {
                     updated.excelCachedHeaders = table.headers
                     session.store.saveMeta(updated)
                     session.reloadTemplates()
                 }
                 if let hit = POSExcelLookupService.lookup(code: code, table: table, map: t.excelColumnMap) {
-                    session.draftCode = hit.code
-                    if !hit.name.isEmpty { session.draftName = hit.name }
-                    if t.enableQuantity, !hit.quantity.isEmpty { session.draftQuantity = hit.quantity }
-                    if t.enableAmount, !hit.amount.isEmpty { session.draftAmount = hit.amount }
-                    focusFirstEmpty(after: .code)
+                    session.applyDraft(from: hit, template: t)
+                    focusFirstEmptyField()
                     return
                 }
             } catch {
                 session.message = error.localizedDescription
             }
-            focusFirstEmpty(after: .code)
+            focusFirstEmptyField()
             return
         }
-        // No excel or empty code → jump to name
         focusedField = .name
     }
 
     private func handleNameSubmit() {
+        deferSubmit { self.handleNameSubmitDeferred() }
+    }
+
+    private func handleNameSubmitDeferred() {
         guard let t = template else { return }
-        if session.selectedItemId != nil {
+        if session.editingLineItemId != nil {
             commitEditToSelected()
             return
         }
-        if t.enableQuantity {
+        if session.isDraftComplete(template: t) {
+            finishLineItem()
+            return
+        }
+        if t.enableQuantity, session.draftQuantity.trimmingCharacters(in: .whitespaces).isEmpty {
             focusedField = .quantity
-        } else if t.enableAmount {
+        } else if t.enableAmount, session.draftAmount.trimmingCharacters(in: .whitespaces).isEmpty {
             focusedField = .amount
         } else {
             finishLineItem()
@@ -283,12 +484,20 @@ struct POSReceiptMainView: View {
     }
 
     private func handleQuantitySubmit() {
+        deferSubmit { self.handleQuantitySubmitDeferred() }
+    }
+
+    private func handleQuantitySubmitDeferred() {
         guard let t = template else { return }
-        if session.selectedItemId != nil {
+        if session.editingLineItemId != nil {
             commitEditToSelected()
             return
         }
-        if t.enableAmount {
+        if session.isDraftComplete(template: t) {
+            finishLineItem()
+            return
+        }
+        if t.enableAmount, session.draftAmount.trimmingCharacters(in: .whitespaces).isEmpty {
             focusedField = .amount
         } else {
             finishLineItem()
@@ -296,58 +505,70 @@ struct POSReceiptMainView: View {
     }
 
     private func handleAmountSubmit() {
-        if session.selectedItemId != nil {
+        deferSubmit { self.handleAmountSubmitDeferred() }
+    }
+
+    private func handleAmountSubmitDeferred() {
+        if session.editingLineItemId != nil {
             commitEditToSelected()
             return
         }
         finishLineItem()
     }
 
-    private func focusFirstEmpty(after field: Field) {
+    /// Let IME / TextField binding commit before reading draft values.
+    private func deferSubmit(_ action: @escaping () -> Void) {
+        DispatchQueue.main.async(execute: action)
+    }
+
+    private func focusFirstEmptyField() {
         guard let t = template else { return }
-        let order: [(Field, Bool, String)] = [
-            (.code, t.enableCode, session.draftCode),
-            (.name, true, session.draftName),
-            (.quantity, t.enableQuantity, session.draftQuantity),
-            (.amount, t.enableAmount, session.draftAmount)
-        ]
-        var passed = field == .code ? false : true
-        if field == .code { passed = true }
-        for (f, enabled, value) in order {
-            if f == field { passed = true; continue }
-            guard passed, enabled else { continue }
-            // code may be empty (auto); skip emptiness for code when deciding complete
-            if f == .code { continue }
-            if value.trimmingCharacters(in: .whitespaces).isEmpty {
-                focusedField = f
-                return
-            }
+        if let empty = session.firstEmptyDraftField(template: t) {
+            focusedField = empty
+            return
         }
-        // All filled → finish
-        if isDraftComplete(template: t) {
-            finishLineItem()
+        focusedField = POSDraftField.lastEnabled(template: t)
+    }
+
+    private func focusInitialField() {
+        guard let t = template else { return }
+        if session.prefersNameFieldForNextLine {
+            focusedField = .name
+        } else if t.enableCode {
+            focusedField = .code
         } else {
             focusedField = .name
         }
     }
 
-    private func isDraftComplete(template t: POSReceiptTemplate) -> Bool {
-        let nameOK = !session.draftName.trimmingCharacters(in: .whitespaces).isEmpty
-        let qtyOK = !t.enableQuantity || !session.draftQuantity.trimmingCharacters(in: .whitespaces).isEmpty
-        let amtOK = !t.enableAmount || !session.draftAmount.trimmingCharacters(in: .whitespaces).isEmpty
-        return nameOK && qtyOK && amtOK
+    private func focusAfterLineAdded(template t: POSReceiptTemplate) {
+        if session.prefersNameFieldForNextLine {
+            focusedField = .name
+        } else if t.enableCode {
+            focusedField = .code
+        } else {
+            focusedField = .name
+        }
     }
 
     private func finishLineItem() {
         guard let t = template else { return }
-        guard isDraftComplete(template: t) else {
-            focusFirstEmpty(after: .code)
+        guard session.editingLineItemId == nil else {
+            commitEditToSelected()
             return
         }
-        var code = session.draftCode.trimmingCharacters(in: .whitespaces)
+        guard session.isDraftComplete(template: t) else {
+            focusFirstEmptyField()
+            return
+        }
+        let rawCode = session.draftCode.trimmingCharacters(in: .whitespaces)
+        var code = rawCode
+        var usedAutoCode = false
         if t.enableCode, code.isEmpty {
             code = "\(session.nextAutoCode)"
+            usedAutoCode = true
             session.nextAutoCode += 1
+            session.prefersNameFieldForNextLine = true
         }
         let item = POSLineItem(
             code: code,
@@ -356,14 +577,17 @@ struct POSReceiptMainView: View {
             amount: session.draftAmount.trimmingCharacters(in: .whitespaces)
         )
         session.lineItems.append(item)
-        session.clearDraft()
-        session.selectedItemId = nil
-        session.message = "已添加条目"
-        focusedField = t.enableCode ? .code : .name
+        session.prepareNextLineDraft(template: t)
+        session.endEditingLineItem()
+        session.message = usedAutoCode && t.enableCode
+            ? "已添加条目（编号 \(code)）"
+            : "已添加条目"
+        focusAfterLineAdded(template: t)
     }
 
     private func commitEditToSelected() {
-        guard let id = session.selectedItemId,
+        let editId = session.editingLineItemId ?? session.selectedItemId
+        guard let id = editId,
               let idx = session.lineItems.firstIndex(where: { $0.id == id }),
               let t = template else { return }
         var item = session.lineItems[idx]
@@ -376,10 +600,73 @@ struct POSReceiptMainView: View {
     }
 
     private func deleteSelected() {
-        guard let id = session.selectedItemId else { return }
+        let id = session.editingLineItemId ?? session.selectedItemId
+        guard let id else { return }
         session.lineItems.removeAll { $0.id == id }
-        session.selectedItemId = nil
+        session.endEditingLineItem()
         session.clearDraft()
+        focusInitialField()
+    }
+
+    private var printHistorySheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("打印记录").font(.title2.weight(.semibold))
+                Spacer()
+                Button("清理全部", role: .destructive) {
+                    session.clearPrintHistory()
+                }
+                .disabled(session.printHistory.isEmpty)
+                Button("关闭") { showHistory = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+            if session.printHistory.isEmpty {
+                ContentUnavailableView("暂无记录", systemImage: "clock", description: Text("成功打印后会自动保存在此"))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(session.printHistory) { record in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(record.templateName).font(.headline)
+                                Spacer()
+                                Text(record.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(record.itemSummary)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                            Text("合计 \(record.amountTotalText)")
+                                .font(.caption.monospacedDigit())
+                            HStack {
+                                Button("载入条目") {
+                                    session.loadPrintHistory(record)
+                                    showHistory = false
+                                    session.message = "已载入历史条目"
+                                }
+                                Button("重新打印") {
+                                    Task {
+                                        showHistory = false
+                                        await reprintHistory(record)
+                                    }
+                                }
+                                Button("导出 PDF") { exportHistoryPDF(record) }
+                                Spacer()
+                                Button("删除", role: .destructive) {
+                                    session.deletePrintHistory(id: record.id)
+                                }
+                            }
+                            .controlSize(.small)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+        .padding()
+        .frame(minWidth: 520, minHeight: 420)
     }
 
     private func previewTicket() {
@@ -388,6 +675,7 @@ struct POSReceiptMainView: View {
             template: t,
             items: session.lineItems,
             surcharge: session.surcharge,
+            surchargePercentLabel: session.surchargePercentLabel,
             backgroundImage: session.backgroundImage,
             logoImages: session.logoImages,
             config: appState.settings.printerConfig
@@ -396,6 +684,19 @@ struct POSReceiptMainView: View {
     }
 
     private func printTicket() async {
+        await printCurrentTicket(clearAfterSuccess: true)
+    }
+
+    private func reprintHistory(_ record: POSPrintHistoryRecord) async {
+        guard template != nil else {
+            session.message = "请先选择模板"
+            return
+        }
+        session.loadPrintHistory(record)
+        await printCurrentTicket(clearAfterSuccess: true)
+    }
+
+    private func printCurrentTicket(clearAfterSuccess: Bool) async {
         guard let t = template, !session.lineItems.isEmpty else {
             session.message = "请先添加条目"
             return
@@ -406,12 +707,16 @@ struct POSReceiptMainView: View {
         }
         isPrinting = true
         defer { isPrinting = false }
+        let itemsSnapshot = session.lineItems
+        let surchargeSnapshot = session.surcharge
+        let percentSnapshot = session.surchargePercentLabel
         let autoEl = t.elements.first { $0.kind == .autoNumber }
         let ticketNumber = autoEl?.autoNumberStart
         let result = POSReceiptPrintComposer.compose(
             template: t,
-            items: session.lineItems,
-            surcharge: session.surcharge,
+            items: itemsSnapshot,
+            surcharge: surchargeSnapshot,
+            surchargePercentLabel: percentSnapshot,
             backgroundImage: session.backgroundImage,
             logoImages: session.logoImages,
             config: appState.settings.printerConfig,
@@ -423,8 +728,13 @@ struct POSReceiptMainView: View {
             statusPollingWasActive: statusPollingWasActive
         ) {
             if record.transportError == nil {
-                session.message = "已发送到打印机"
-                // Advance template auto-number start if present
+                session.recordSuccessfulPrint(
+                    template: t,
+                    items: itemsSnapshot,
+                    surcharge: surchargeSnapshot,
+                    surchargePercentLabel: percentSnapshot,
+                    previewPNG: result.artifacts.pngData
+                )
                 if var updated = session.templates.first(where: { $0.id == t.id }),
                    let idx = updated.elements.firstIndex(where: { $0.kind == .autoNumber }) {
                     let start = updated.elements[idx].autoNumberStart
@@ -432,9 +742,47 @@ struct POSReceiptMainView: View {
                     session.store.saveMeta(updated)
                     session.reloadTemplates()
                 }
+                if clearAfterSuccess {
+                    session.clearLineItemsForNextTicket(resetSurchargeFrom: t)
+                    focusInitialField()
+                }
+                session.message = "已发送到打印机"
             } else {
                 session.message = "打印失败: \(record.transportError ?? "")"
             }
+        }
+    }
+
+    private func exportHistoryPDF(_ record: POSPrintHistoryRecord) {
+        guard let image = NSImage(data: record.previewPNG) else {
+            session.message = "无法导出：预览图缺失"
+            return
+        }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.pdf]
+        panel.nameFieldStringValue = "POS小票-\(record.templateName)-\(Int(record.createdAt.timeIntervalSince1970)).pdf"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try Self.writePDF(image: image, to: url)
+            session.message = "已导出 PDF"
+        } catch {
+            session.message = "导出失败: \(error.localizedDescription)"
+        }
+    }
+
+    private static func writePDF(image: NSImage, to url: URL) throws {
+        // PDFKit handles bitmap→PDF orientation; manual CGContext + y-flip inverted the ticket.
+        guard let page = PDFPage(image: image) else {
+            throw NSError(domain: "POSPrintHistory", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "无法从预览图创建 PDF 页"
+            ])
+        }
+        let doc = PDFDocument()
+        doc.insert(page, at: 0)
+        guard doc.write(to: url) else {
+            throw NSError(domain: "POSPrintHistory", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "写入 PDF 失败"
+            ])
         }
     }
 }

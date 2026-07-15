@@ -68,6 +68,9 @@ enum RichTextPrintRenderer {
         /// Draw as a continuous stroke instead of hyphen glyphs.
         var asRule: Bool = false
         var ruleDashed: Bool = false
+        var isBold: Bool = false
+        /// Smaller trailing note drawn after `text` (e.g. surcharge percent).
+        var annotation: String? = nil
     }
 
     static func renderImage(attributedString: NSAttributedString, config: PrinterConfig, padding: CGFloat = 8) -> NSImage {
@@ -202,7 +205,8 @@ enum RichTextPrintRenderer {
                         continue
                     }
                     let pointSize = max(8, overlay.fontSize * scale)
-                    let font = NSFont.monospacedSystemFont(ofSize: pointSize, weight: .regular)
+                    let weight: NSFont.Weight = overlay.isBold ? .bold : .regular
+                    let font = NSFont.monospacedSystemFont(ofSize: pointSize, weight: weight)
                     let paragraph = NSMutableParagraphStyle()
                     paragraph.lineBreakMode = .byClipping
                     switch overlay.alignment {
@@ -215,9 +219,20 @@ enum RichTextPrintRenderer {
                         .foregroundColor: NSColor.black,
                         .paragraphStyle: paragraph
                     ]
-                    // Pre-wrapped names use \n; draw top-aligned within the field frame.
-                    let ns = overlay.text as NSString
-                    ns.draw(in: dest, withAttributes: attrs)
+                    if let annotation = overlay.annotation, !annotation.isEmpty {
+                        let styled = NSMutableAttributedString(string: overlay.text, attributes: attrs)
+                        let small = NSFont.monospacedSystemFont(ofSize: max(7, pointSize * 0.65), weight: .regular)
+                        styled.append(NSAttributedString(string: annotation, attributes: [
+                            .font: small,
+                            .foregroundColor: NSColor.black,
+                            .paragraphStyle: paragraph,
+                            .baselineOffset: pointSize * 0.08
+                        ]))
+                        styled.draw(in: dest)
+                    } else {
+                        // Pre-wrapped names use \n; draw top-aligned within the field frame.
+                        (overlay.text as NSString).draw(in: dest, withAttributes: attrs)
+                    }
                 }
             }
             return true

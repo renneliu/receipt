@@ -45,10 +45,11 @@ final class ESCPOSBuilder {
     /// Reset without Chinese character mode — used before GS v 0 raster (when supported).
     @discardableResult
     func initializeForRaster() -> Self {
-        data.append(contentsOf: [0x1B, 0x40])
-        data.append(contentsOf: [0x1C, 0x2E]) // FS . cancel Chinese mode
-        data.append(contentsOf: [0x1B, 0x40])
-        data.append(contentsOf: [0x1C, 0x2E]) // again — POS-80 can keep FS & across one ESC @
+        // Triple ESC @ / FS . — POS-80 can re-enable Chinese after cut; one pair is not enough.
+        for _ in 0..<3 {
+            data.append(contentsOf: [0x1B, 0x40])
+            data.append(contentsOf: [0x1C, 0x2E]) // FS . cancel Chinese mode
+        }
         chineseModeActive = false
         return self
     }

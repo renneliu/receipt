@@ -209,9 +209,17 @@ struct POSReceiptTemplateView: View {
     private var designerColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
             toolBar
-            ScrollView([.vertical, .horizontal]) {
-                canvas
-                    .padding(16)
+            ScrollViewReader { proxy in
+                ScrollView([.vertical, .horizontal]) {
+                    canvas
+                        .padding(16)
+                }
+                .onChange(of: selectedElementId) { _, id in
+                    guard let id else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        proxy.scrollTo(id, anchor: .center)
+                    }
+                }
             }
         }
         .padding(8)
@@ -237,6 +245,7 @@ struct POSReceiptTemplateView: View {
                 Button("金额小计") { addField(.amountSubtotal) }
                 Button("附加费") { addField(.surcharge) }
                 Button("金额合计") { addField(.amountTotal) }
+                Button("总计") { addField(.itemCount) }
             }
             HStack(spacing: 8) {
                 if let t = session.editingTemplate {
@@ -291,6 +300,7 @@ struct POSReceiptTemplateView: View {
 
                     ForEach(t.elements.sorted(by: { $0.zIndex < $1.zIndex })) { el in
                         elementOverlay(el, paper: paper, chromeOnly: liveCanvasImage != nil)
+                            .id(el.id)
                     }
                 }
                 .frame(width: paper.width, height: paper.height)
@@ -422,6 +432,7 @@ struct POSReceiptTemplateView: View {
                 title: elementTitle(el),
                 previewText: elementPreview(el),
                 fontSize: el.fontSize,
+                textAlignment: el.alignment,
                 paperSize: paper,
                 gridEnabled: gridOn,
                 gridSize: gridSize,
@@ -455,6 +466,8 @@ struct POSReceiptTemplateView: View {
     }
 
     private func elementTitle(_ el: POSReceiptElement) -> String {
+        let custom = el.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !custom.isEmpty { return custom }
         switch el.kind {
         case .textBox: return "文字"
         case .fieldPlaceholder: return el.fieldKind?.displayName ?? "字段"
@@ -477,6 +490,7 @@ struct POSReceiptTemplateView: View {
                 ? (session.editingTemplate?.defaultSurcharge ?? "0")
                 : "0.00"
             case .amountTotal: return "1.00"
+            case .itemCount: return "1"
             case .code: return "1"
             case .name: return "示例"
             case .quantity: return "1"
@@ -557,11 +571,57 @@ struct POSReceiptTemplateView: View {
                        session.editingTemplate?.elements.contains(where: { $0.id == id }) == true {
                         elementInspector(elementId: id)
                     } else {
-                        Text("选中画布元素以编辑").foregroundStyle(.secondary).font(.caption)
+                        Text("从画布或下方列表选中元素以编辑属性").foregroundStyle(.secondary).font(.caption)
                     }
+
+                    Divider()
+                    elementListSection
                 }
             }
             .padding()
+        }
+    }
+
+    private var elementListSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("元素列表").font(.headline)
+            let elements = (session.editingTemplate?.elements ?? [])
+                .sorted(by: { $0.zIndex < $1.zIndex })
+            if elements.isEmpty {
+                Text("暂无元素").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(elements) { el in
+                    Button {
+                        selectedElementId = el.id
+                    } label: {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(accent(for: el))
+                                .frame(width: 8, height: 8)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(elementTitle(el))
+                                    .lineLimit(1)
+                                    .foregroundStyle(.primary)
+                                Text("(\(Int(el.frame.x)), \(Int(el.frame.y)))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if selectedElementId == el.id {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.tint)
+                            }
+                        }
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(selectedElementId == el.id ? Color.accentColor.opacity(0.12) : .clear)
+                    )
+                }
+            }
         }
     }
 
@@ -573,6 +633,41 @@ struct POSReceiptTemplateView: View {
         session.editingTemplate = t
     }
 
+    private func duplicateElementWithStyle(id: UUID) {
+        guard var t = session.editingTemplate,
+              let source = t.elements.first(where: { $0.id == id }) else { return }
+        if source.kind == .fieldPlaceholder, source.fieldKind == .name {
+            excelStatus = "项目名称占位符不可复制"
+            return
+        }
+        if source.kind == .fieldPlaceholder, let kind = source.fieldKind, kind.isSummaryField,
+           t.hasElement(field: kind) {
+            // Allow style-preserving copy even for unique summary fields — second instance for layout.
+        }
+        var copy = source
+        let oldId = copy.id
+        copy.id = UUID()
+        copy.frame.x += 16
+        copy.frame.y += 16
+        copy.isLocked = false
+        let baseName = elementTitle(source)
+        if copy.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            copy.displayName = "\(baseName) 副本"
+        } else {
+            copy.displayName = "\(copy.displayName) 副本"
+        }
+        if copy.kind == .logo, let img = session.logoImages[oldId] {
+            session.logoImages[copy.id] = img
+        }
+        let maxZ = t.elements.map(\.zIndex).max() ?? 0
+        copy.zIndex = maxZ + 1
+        t.elements.append(copy)
+        session.editingTemplate = t
+        selectedElementId = copy.id
+        excelStatus = "已复制「\(elementTitle(copy))」（含样式）"
+        scheduleLiveCanvasRefresh(immediate: true)
+    }
+
     private func elementValue<T>(id: UUID, _ keyPath: KeyPath<POSReceiptElement, T>, default defaultValue: T) -> T {
         session.editingTemplate?.elements.first(where: { $0.id == id })?[keyPath: keyPath] ?? defaultValue
     }
@@ -581,6 +676,21 @@ struct POSReceiptTemplateView: View {
     private func elementInspector(elementId: UUID) -> some View {
         if let el = session.editingTemplate?.elements.first(where: { $0.id == elementId }) {
             Text("元素：\(elementTitle(el))").font(.headline)
+
+            labeled("显示名称") {
+                TextField("可选，便于列表识别", text: Binding(
+                    get: { elementValue(id: elementId, \.displayName, default: "") },
+                    set: { newValue in updateElement(id: elementId) { $0.displayName = newValue } }
+                ))
+                .textFieldStyle(.roundedBorder)
+            }
+
+            HStack {
+                Button("带样式复制") {
+                    duplicateElementWithStyle(id: elementId)
+                }
+                .help("复制为新元素，保留字号/粗体/对齐/尺寸等样式")
+            }
 
             Toggle(isOn: Binding(
                 get: { elementValue(id: elementId, \.isLocked, default: false) },
@@ -666,6 +776,18 @@ struct POSReceiptTemplateView: View {
                     get: { elementValue(id: elementId, \.isBold, default: false) },
                     set: { newValue in updateElement(id: elementId) { $0.isBold = newValue } }
                 ))
+                labeled("对齐") {
+                    Picker("", selection: Binding(
+                        get: { elementValue(id: elementId, \.alignment, default: 0) },
+                        set: { newValue in updateElement(id: elementId) { $0.alignment = newValue } }
+                    )) {
+                        Text("左对齐").tag(0)
+                        Text("居中").tag(1)
+                        Text("右对齐").tag(2)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
             }
 
             if el.kind == .logo {
@@ -717,19 +839,6 @@ struct POSReceiptTemplateView: View {
                     set: { newValue in updateElement(id: elementId) { $0.content = newValue } }
                 ))
                 .textFieldStyle(.roundedBorder)
-
-                labeled("对齐") {
-                    Picker("", selection: Binding(
-                        get: { elementValue(id: elementId, \.alignment, default: 0) },
-                        set: { newValue in updateElement(id: elementId) { $0.alignment = newValue } }
-                    )) {
-                        Text("左对齐").tag(0)
-                        Text("居中").tag(1)
-                        Text("右对齐").tag(2)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
             }
 
             if el.kind == .date {
@@ -1146,6 +1255,7 @@ struct POSReceiptTemplateView: View {
                 session.reloadTemplates()
                 if let updated = session.templates.first(where: { $0.id == t.id }) {
                     session.editingTemplate = updated
+                    session.reloadExcelCatalog(for: updated)
                 }
             }
         } catch {
@@ -1163,6 +1273,7 @@ struct POSReceiptTemplateView: View {
             if let updated = session.editingTemplate {
                 session.store.saveMeta(updated)
                 session.reloadTemplates()
+                session.reloadExcelCatalog(for: updated)
             }
         } catch {
             excelStatus = error.localizedDescription
@@ -1179,6 +1290,7 @@ struct POSReceiptTemplateView: View {
         if let t = session.editingTemplate {
             session.store.saveMeta(t)
             session.reloadTemplates()
+            session.reloadExcelCatalog(for: t)
         }
     }
 }
