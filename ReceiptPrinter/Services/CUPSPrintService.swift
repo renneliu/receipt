@@ -39,8 +39,13 @@ struct PrintTransportResult {
 struct CUPSPrintService {
     /// Tiny USB raw jobs can stall the POS-80 backend. Cap padding tightly —
     /// never pad with LF (0x0A): ~2000 LFs caused continuous paper feed (log evidence).
+    /// Also never pad with raw `0x20`: after feed/cut that left the head mid-mode, trailing
+    /// spaces were printed / desynced the next GBK job (diag `20260715-110113` 15-byte feed
+    /// → +49 space pad; print after feed garbled despite clean `ESC d` payload).
     private static let tinyJobThreshold = 48
     private static let tinyJobPadTarget = 64
+    /// Harmless filler: repeated `ESC @` resets toward a clean state for the next job.
+    private static let tinyJobPadUnit: [UInt8] = [0x1B, 0x40]
 
     static func sha256Hex(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
@@ -103,8 +108,12 @@ struct CUPSPrintService {
         var payload = data
         let padBytes: Int
         if payload.count < Self.tinyJobThreshold {
-            padBytes = Self.tinyJobPadTarget - payload.count
-            payload.append(Data(repeating: 0x20, count: padBytes))
+            var pad = Data()
+            while payload.count + pad.count < Self.tinyJobPadTarget {
+                pad.append(contentsOf: Self.tinyJobPadUnit)
+            }
+            padBytes = pad.count
+            payload.append(pad)
         } else {
             padBytes = 0
         }

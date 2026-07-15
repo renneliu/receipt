@@ -131,10 +131,6 @@ final class RichTextEditorController: ObservableObject {
         mutateAttributes { $0[.kern] = kern }
     }
 
-    func applyForegroundColor(_ color: NSColor) {
-        mutateAttributes { $0[.foregroundColor] = color }
-    }
-
     func clearFormatting() {
         guard let textView else { return }
         let range = textView.selectedRange()

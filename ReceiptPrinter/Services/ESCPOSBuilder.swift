@@ -14,6 +14,8 @@ final class ESCPOSBuilder {
     private var data = Data()
     private let config: PrinterConfig
     private var isDoubleSize = false
+    /// Avoid re-sending `FS &` before every fragment (can reset the printer's line buffer).
+    private var chineseModeActive = false
 
     init(config: PrinterConfig = .default80mm) {
         self.config = config
@@ -28,11 +30,14 @@ final class ESCPOSBuilder {
     @discardableResult
     func initialize() -> Self {
         data.append(contentsOf: [0x1B, 0x40])
+        chineseModeActive = false
         // This POS-80 prints Chinese correctly in GBK + FS & text mode.
         // Whole-page GS v 0 is often misread as text → garbled output (runtime evidence).
         if config.encoding == .gbk {
             data.append(contentsOf: [0x1C, 0x26]) // FS & enable Chinese character mode
             data.append(contentsOf: [0x1B, 0x74, 0x00]) // ESC t 0
+            chineseModeActive = true
+            // Mid-line FS . drops LF lines that mix CJK+ASCII (runtime). Stay in FS &.
         }
         return self
     }
@@ -96,6 +101,7 @@ final class ESCPOSBuilder {
         let mode: UInt8 = switch size {
         case .normal: 0x00
         case .tall: 0x01
+        // Successful jobs 20260714-224905 used GS ! 0x11 — keep width+height ×2.
         case .double: 0x11
         }
         data.append(contentsOf: [0x1D, 0x21, mode])
@@ -149,16 +155,36 @@ final class ESCPOSBuilder {
         }
     }
 
-    /// Segment halfwidth ASCII / CJK on the same LF line with FS . / FS &.
+    /// Encode GBK text for this POS-80.
+    ///
+    /// Proven successful path (diag 20260714-224905): ASCII under `FS .`, CJK under `FS &`.
+    /// Exception: when a line *starts* with CJK then toggles to ASCII mid-line, `FS .` drops
+    /// the whole LF line (diag 20260715-100353 `…哦为UI惹…`). Those lines stay in `FS &`.
     private func appendGBKPlain(_ string: String) {
         let cfEncoding = CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)
         let encoding = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cfEncoding))
         let cleaned = String(string.unicodeScalars.filter { $0.value != 0xFFFC })
         guard !cleaned.isEmpty else { return }
 
+        let hasASCII = cleaned.unicodeScalars.contains { (0x20...0x7E).contains($0.value) }
+        let hasCJK = cleaned.unicodeScalars.contains { $0.value > 0x7F }
+        let startsWithCJK = cleaned.unicodeScalars.first.map { $0.value > 0x7F } ?? false
+
+        if hasASCII && hasCJK && startsWithCJK {
+            if !chineseModeActive {
+                data.append(contentsOf: [0x1C, 0x26])
+                chineseModeActive = true
+            }
+            if let encoded = cleaned.data(using: encoding) {
+                data.append(encoded)
+            }
+            return
+        }
+
         for segment in Self.scriptRuns(cleaned) {
             let isCJK = segment.unicodeScalars.contains { $0.value > 0x7F }
             data.append(contentsOf: isCJK ? [0x1C, 0x26] : [0x1C, 0x2E])
+            chineseModeActive = isCJK
             if let encoded = segment.data(using: encoding) {
                 data.append(encoded)
             }
@@ -350,15 +376,22 @@ final class ESCPOSBuilder {
     }
 
     /// Paper advance for dedicated 「走纸」.
-    /// Empty LFs alone are unreliable; print a space each line so the head actually advances.
+    ///
+    /// Use only `ESC d n` — do NOT route spaces through `appendEncoded` / `appendGBKPlain`.
+    /// That path injects `FS .` before each ASCII space (diag `20260715-105854` feed:6 =
+    /// `1C 2E 20 0A` × N), leaves half-width mode, then CUPS tiny-job `0x20` padding follows
+    /// and the next GBK print comes out garbled (runtime evidence).
     @discardableResult
     func feedPaperAction(lines: Int) -> Self {
         let n = max(1, min(lines, 40))
-        for _ in 0..<n {
-            appendEncoded(" ")
-            data.append(0x0A)
-        }
         feed(lines: n)
+        // Re-assert Chinese mode, then grow past CUPS tiny-job threshold so transmit
+        // does not need to append filler after this command stream.
+        data.append(contentsOf: [0x1C, 0x26])
+        chineseModeActive = true
+        while data.count < 64 {
+            data.append(contentsOf: [0x1B, 0x64, 0x00]) // ESC d 0 — no-op line feed
+        }
         return self
     }
 
@@ -367,10 +400,14 @@ final class ESCPOSBuilder {
     @discardableResult
     func cutPaperAction(feedLines: Int = 12) -> Self {
         let n = max(12, min(feedLines, 40))
-        appendEncoded(" ")
         newline(2)
         feed(lines: n)
         data.append(contentsOf: [0x1D, 0x56, 0x00])
+        data.append(contentsOf: [0x1C, 0x26])
+        chineseModeActive = true
+        while data.count < 64 {
+            data.append(contentsOf: [0x1B, 0x40]) // ESC @ filler — keep ≥ tiny-job threshold
+        }
         return self
     }
 }

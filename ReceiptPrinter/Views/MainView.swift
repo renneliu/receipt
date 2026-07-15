@@ -28,6 +28,8 @@ struct MainView: View {
         switch appState.selectedSidebarItem {
         case .quickPrint:
             QuickPrintView()
+        case .spreadsheetSequence:
+            SpreadsheetSequencePrintView()
         case .templatePrint:
             TemplatePrintView()
         case .templates:

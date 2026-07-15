@@ -66,9 +66,9 @@ enum RichTextPrintRenderer {
     static func renderESCPOS(attributedString: NSAttributedString, config: PrinterConfig) -> Data {
         let lines = layoutLines(from: attributedString, config: config)
         let builder = ESCPOSBuilder(config: config).initialize()
-        for line in lines {
-            emit(line, into: builder, config: config)
-        }
+        // Same-style soft wraps as one block. Encoding restored to proven FS ./FS & path
+        // (successful diag 20260714-224905) with CJK-leading mixed-line exception.
+        emitBatched(lines, into: builder, config: config)
         let feedBeforeCut = max(config.feedLinesBeforeCut, minimumFeedsBeforeCut)
         if config.cutPaper {
             builder.cut(feedLines: feedBeforeCut)
@@ -116,84 +116,122 @@ enum RichTextPrintRenderer {
         return rep.representation(using: .png, properties: [:])
     }
 
-    private static func emit(_ line: LayoutLine, into builder: ESCPOSBuilder, config: PrinterConfig) {
-        switch line {
-        case .blank:
-            builder.newline()
-        case .divider(let kind):
-            let cols = max(8, config.columnsPerLine)
-            builder.resetStyle().align(.left)
-            switch kind {
-            case .solid:
-                builder.appendRawTextLine(String(repeating: "-", count: cols)).newline()
-            case .dashed:
-                var s = ""
-                for i in 0..<cols { s.append(i % 2 == 0 ? "-" : " ") }
-                builder.appendRawTextLine(s).newline()
+    private static func emitBatched(_ lines: [LayoutLine], into builder: ESCPOSBuilder, config: PrinterConfig) {
+        var index = 0
+        while index < lines.count {
+            switch lines[index] {
+            case .blank:
+                builder.newline()
+                index += 1
+            case .divider(let kind):
+                let cols = max(8, config.columnsPerLine)
+                builder.resetStyle().align(.left)
+                switch kind {
+                case .solid:
+                    builder.appendRawTextLine(String(repeating: "-", count: cols)).newline()
+                case .dashed:
+                    var s = ""
+                    for i in 0..<cols { s.append(i % 2 == 0 ? "-" : " ") }
+                    builder.appendRawTextLine(s).newline()
+                }
+                index += 1
+            case .text(_, let size, let bold, let underline, let align):
+                var batch: [String] = []
+                while index < lines.count {
+                    if case .text(let s, let sSize, let sBold, let sUnderline, let sAlign) = lines[index],
+                       sSize == size, sBold == bold, sUnderline == underline, sAlign == align {
+                        batch.append(s)
+                        index += 1
+                    } else {
+                        break
+                    }
+                }
+                builder.align(align)
+                    .bold(bold)
+                    .underline(underline)
+                    .applyTextSize(size)
+                for s in batch {
+                    builder.appendRawTextLine(s).newline()
+                }
+                builder.resetStyle()
             }
-        case .text(let string, let size, let bold, let underline, let align):
-            builder.align(align)
-                .bold(bold)
-                .underline(underline)
-                .applyTextSize(size)
-                .appendRawTextLine(string)
-                .newline()
-            builder.resetStyle()
         }
     }
 
     // MARK: - Shared layout (single source of truth)
 
+    /// Layout by paragraph (not by attributed-run).
+    ///
+    /// NSTextView often splits CJK vs Latin into different font attribute runs. Wrapping each run
+    /// separately forced ASCII onto its own printed line (runtime evidence: source had no newline
+    /// between `…哦为` and `UI`, but payload emitted `…哦为\\nUI\\n…`).
     static func layoutLines(from attributed: NSAttributedString, config: PrinterConfig) -> [LayoutLine] {
         var result: [LayoutLine] = []
         guard attributed.length > 0 else { return [.blank] }
 
-        let full = NSRange(location: 0, length: attributed.length)
-        attributed.enumerateAttributes(in: full, options: []) { attrs, range, _ in
-            if let attachment = attrs[.attachment] as? ReceiptDividerAttachment {
-                let kind: DividerKind = attachment.style == .dashed ? .dashed : .solid
+        let ns = attributed.string as NSString
+        var location = 0
+        while location < ns.length {
+            let paraRange = ns.paragraphRange(for: NSRange(location: location, length: 0))
+            defer { location = NSMaxRange(paraRange) }
+
+            var dividerKind: DividerKind?
+            attributed.enumerateAttribute(.attachment, in: paraRange, options: []) { value, _, stop in
+                guard let attachment = value as? ReceiptDividerAttachment else { return }
+                dividerKind = attachment.style == .dashed ? .dashed : .solid
+                stop.pointee = true
+            }
+            if let kind = dividerKind {
                 result.append(.divider(kind))
-                return
+                continue
             }
 
-            let chunk = (attributed.string as NSString).substring(with: range)
-            if chunk.isEmpty { return }
+            var contentRange = paraRange
+            if contentRange.length > 0 {
+                let last = ns.character(at: NSMaxRange(contentRange) - 1)
+                if last == 10 { // \n
+                    contentRange.length -= 1
+                } else if last == 13 { // \r
+                    contentRange.length -= 1
+                }
+            }
 
+            if contentRange.length == 0 {
+                result.append(.blank)
+                continue
+            }
+
+            let paragraph = ns.substring(with: contentRange)
+                .replacingOccurrences(of: "\u{FFFC}", with: "")
+            if paragraph.isEmpty {
+                result.append(.blank)
+                continue
+            }
+            if let divider = legacyDividerKind(for: paragraph) {
+                result.append(.divider(divider))
+                continue
+            }
+
+            let attrs = attributed.attributes(at: contentRange.location, effectiveRange: nil)
             let font = attrs[.font] as? NSFont
             let traits = font.map { NSFontManager.shared.traits(of: $0) } ?? []
             let isBold = traits.contains(.boldFontMask)
             let isUnderline = (attrs[.underlineStyle] as? Int).map { $0 != 0 } ?? false
             let pointSize = font?.pointSize ?? AttributedTextView.defaultFontSize
-            let requestedSize = textSize(forPointSize: pointSize)
+            let size = textSize(forPointSize: pointSize)
             let align = Self.escposAlign(from: attrs[.paragraphStyle] as? NSParagraphStyle)
-
-            let parts = chunk.components(separatedBy: "\n")
-            for (index, part) in parts.enumerated() {
-                let partClean = part.replacingOccurrences(of: "\u{FFFC}", with: "")
-                if partClean.isEmpty {
-                    if index < parts.count - 1 {
-                        result.append(.blank)
-                    }
-                    continue
-                }
-                if let divider = legacyDividerKind(for: partClean) {
-                    result.append(.divider(divider))
-                } else {
-                    // Bitmap pipeline: the requested size (default = double / 2×) is honored for
-                    // ALL text incl. mixed CJK+EN. No per-content size downgrade — that broke the 2× default.
-                    let size = requestedSize
-                    let maxCols = effectiveColumns(for: size, config: config)
-                    let wrapped = ReceiptTextLayout.wrap(partClean, maxColumns: maxCols)
-                    for w in wrapped {
-                        result.append(.text(
-                            string: w,
-                            size: size,
-                            bold: isBold,
-                            underline: isUnderline,
-                            align: align
-                        ))
-                    }
-                }
+            let maxCols = effectiveColumns(for: size, config: config)
+            // Halfwidth ASCII under continuous FS & (1 column). Do not use fullwidth —
+            // that forced English onto its own wrap lines (runtime: jsdhfk… alone).
+            let wrapped = ReceiptTextLayout.wrap(paragraph, maxColumns: maxCols, asciiAsDoubleWidth: false)
+            for w in wrapped {
+                result.append(.text(
+                    string: w,
+                    size: size,
+                    bold: isBold,
+                    underline: isUnderline,
+                    align: align
+                ))
             }
         }
         return result.isEmpty ? [.blank] : result
@@ -208,7 +246,7 @@ enum RichTextPrintRenderer {
     }
 
     static func textSize(forPointSize pointSize: CGFloat) -> TextSize {
-        // Editor default 28pt → ESC/POS double (GS ! 0x11).
+        // Editor default 28pt → TextSize.double → GS ! 0x11 (successful diag 20260714-224905).
         if pointSize >= AttributedTextView.defaultFontSize { return .double }
         if pointSize >= AttributedTextView.defaultFontSize * 0.65 { return .tall }
         return .normal
@@ -217,7 +255,7 @@ enum RichTextPrintRenderer {
     static func effectiveColumns(for size: TextSize, config: PrinterConfig) -> Int {
         let base = max(8, config.columnsPerLine)
         switch size {
-        case .double: return max(8, base / 2) // 48 → 24 cols → 12 CJK
+        case .double: return max(8, base / 2) // width×2 → 24 cols
         case .tall, .normal: return base
         }
     }

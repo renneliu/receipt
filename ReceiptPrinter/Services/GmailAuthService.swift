@@ -265,34 +265,65 @@ extension GmailAuthService: ASWebAuthenticationPresentationContextProviding {
     }
 }
 
+/// Local secrets store (Application Support).
+///
+/// Unsigned / frequently rebuilt `.app` bundles change their code directory hash on every
+/// build, so macOS Keychain ACLs no longer match and the "wants to use your confidential
+/// information" dialog appears on every launch. File storage under Application Support
+/// avoids Keychain entirely while keeping secrets off UserDefaults.
 enum KeychainHelper {
+    private static let service = "com.receiptprinter.app"
+
+    private static var secretsDirectory: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = appSupport
+            .appendingPathComponent("ReceiptPrinter", isDirectory: true)
+            .appendingPathComponent("Secrets", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private static func fileURL(for key: String) -> URL {
+        let safe = key.replacingOccurrences(of: "/", with: "_")
+        return secretsDirectory.appendingPathComponent("\(safe).bin")
+    }
+
     static func save(key: String, data: Data) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key,
-            kSecValueData as String: data
-        ]
-        SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+        let url = fileURL(for: key)
+        try? data.write(to: url, options: .atomic)
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path
+        )
+        // Drop any legacy Keychain copy so future launches never touch it again.
+        deleteLegacyKeychainItem(key: key)
     }
 
     static func load(key: String) -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess else { return nil }
-        return result as? Data
+        let url = fileURL(for: key)
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
+        return data
     }
 
     static func delete(key: String) {
+        try? FileManager.default.removeItem(at: fileURL(for: key))
+        deleteLegacyKeychainItem(key: key)
+    }
+
+    /// Best-effort cleanup of pre-1.1 Keychain entries. Does not read them (avoids the unlock dialog).
+    static func abandonLegacyKeychainItems() {
+        deleteLegacyKeychainItem(key: "ReceiptPrinter.GmailTokens")
+        deleteLegacyKeychainItem(key: "ReceiptPrinter.TMDBAPIKey")
+    }
+
+    private static func deleteLegacyKeychainItem(key: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key
         ]
         SecItemDelete(query as CFDictionary)
+        var withService = query
+        withService[kSecAttrService as String] = service
+        SecItemDelete(withService as CFDictionary)
     }
 }

@@ -3,11 +3,11 @@ import Foundation
 final class QuickPrintStore {
     private let fileURL: URL
 
-    init() {
+    init(filename: String = "quick-print.rtfd") {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = appSupport.appendingPathComponent("ReceiptPrinter", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        fileURL = dir.appendingPathComponent("quick-print.rtfd", isDirectory: true)
+        fileURL = dir.appendingPathComponent(filename, isDirectory: true)
     }
 
     func load() -> NSAttributedString? {
@@ -26,7 +26,8 @@ final class QuickPrintStore {
             from: range,
             documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
         ) {
-            let temp = fileURL.deletingLastPathComponent().appendingPathComponent("quick-print.rtfd.tmp")
+            let temp = fileURL.deletingLastPathComponent()
+                .appendingPathComponent(fileURL.lastPathComponent + ".tmp")
             try? data.write(to: temp, options: .atomic)
             _ = try? FileManager.default.replaceItemAt(fileURL, withItemAt: temp)
         }

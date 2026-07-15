@@ -1,14 +1,9 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Holds a rendered preview bitmap so `.sheet(item:)` receives the image by value
-/// (avoids SwiftUI presenting with a stale nil `previewImage`).
-struct QuickPrintPreviewPayload: Identifiable {
-    let id = UUID()
-    let image: NSImage
-}
-
-struct QuickPrintView: View {
+/// Dedicated page for Excel / CSV row-sequence printing with `{{列名}}` merge.
+struct SpreadsheetSequencePrintView: View {
     @EnvironmentObject private var appState: AppState
     @StateObject private var editorController = RichTextEditorController()
     @State private var attributedText = NSAttributedString(
@@ -18,10 +13,13 @@ struct QuickPrintView: View {
     @State private var isPrinting = false
     @State private var message = ""
     @State private var previewPayload: QuickPrintPreviewPayload?
-    @State private var feedLines = 6
     @State private var editorFontSize: Double = AttributedTextView.defaultFontSize
+    @State private var spreadsheet: SpreadsheetTable?
+    @State private var importInfo = ""
+    @State private var isSequencePrinting = false
+    @State private var sequenceProgress = ""
 
-    private let store = QuickPrintStore()
+    private let store = QuickPrintStore(filename: "spreadsheet-sequence-draft.rtfd")
     private var columns: Int { appState.settings.printerConfig.columnsPerLine }
 
     var body: some View {
@@ -64,7 +62,7 @@ struct QuickPrintView: View {
             sidePanel
                 .frame(minWidth: 260, idealWidth: 300, maxWidth: 360)
         }
-        .navigationTitle("快速打印")
+        .navigationTitle("Excel表格序列打印")
         .onAppear { loadSavedContent() }
         .onChange(of: attributedText) { _, newValue in
             store.save(newValue)
@@ -85,31 +83,64 @@ struct QuickPrintView: View {
                 )
             }
 
-            Section("走纸 / 切纸") {
-                HStack {
-                    Text("走纸行数")
-                    TextField(value: $feedLines, format: .number, prompt: Text("6")) {
-                        EmptyView()
-                    }
-                    .labelsHidden()
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 64)
-                    .onChange(of: feedLines) { _, value in
-                        feedLines = min(40, max(1, value))
-                    }
-                    Text("行")
-                        .foregroundStyle(.secondary)
-                    Spacer()
+            Section("导入表格") {
+                Text("正文写好带 {{列名}} 的模板后，按表格每一行合并并连续打印。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("导入 Excel / CSV…") {
+                    importSpreadsheet()
                 }
-                HStack {
-                    Button("走纸") {
-                        Task { await feedPaper() }
+                if let sheet = spreadsheet {
+                    Text("已导入 \(sheet.rows.count) 行 · \(sheet.headers.count) 列")
+                        .font(.caption)
+                    Text(sheet.headers.joined(separator: ", "))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+                if !importInfo.isEmpty {
+                    Text(importInfo)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let sheet = spreadsheet, !sheet.headers.isEmpty {
+                Section("插入列占位符") {
+                    FlowLayout(spacing: 6) {
+                        ForEach(sheet.headers, id: \.self) { header in
+                            let name = header.trimmingCharacters(in: .whitespaces)
+                            if !name.isEmpty {
+                                Button(name) {
+                                    editorController.insertPlaceholder(fieldName: name)
+                                    syncEditorToState()
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
                     }
-                    .disabled(appState.settings.selectedPrinterName == nil)
-                    Button("切纸") {
-                        Task { await cutPaper() }
+                    Button("用首行预览合并") {
+                        previewFirstRow()
                     }
-                    .disabled(appState.settings.selectedPrinterName == nil)
+                    .disabled(sheet.isEmpty)
+                }
+            }
+
+            Section("序列打印") {
+                Button(isSequencePrinting ? "打印中…" : "序列打印全部行") {
+                    Task { await sequencePrintAll() }
+                }
+                .disabled(
+                    isSequencePrinting
+                        || appState.settings.selectedPrinterName == nil
+                        || spreadsheet?.isEmpty != false
+                        || attributedText.length == 0
+                )
+                if !sequenceProgress.isEmpty {
+                    Text(sequenceProgress)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -136,8 +167,6 @@ struct QuickPrintView: View {
             }
             Spacer()
             Button("清空") { clearContent() }
-            Button("存为模板") { saveAsTemplate() }
-                .disabled(attributedText.length == 0)
             Button("预览") {
                 syncEditorToState()
                 let image = RichTextPrintRenderer.renderImage(
@@ -146,7 +175,7 @@ struct QuickPrintView: View {
                 )
                 previewPayload = QuickPrintPreviewPayload(image: image)
             }
-            Button(isPrinting ? "打印中..." : "打印") {
+            Button(isPrinting ? "打印中..." : "打印当前") {
                 syncEditorToState()
                 Task { await printDocument(attributedText) }
             }
@@ -158,16 +187,6 @@ struct QuickPrintView: View {
 
     private func loadSavedContent() {
         guard let saved = store.load(), saved.length > 0 else { return }
-        // Drop the old built-in sample that used to ship as the default draft.
-        let plain = saved.string
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if plain == "Hello 测试小票\n\nReceiptPrinter 快速打印"
-            || plain == "Hello 测试小票\nReceiptPrinter 快速打印" {
-            store.clear()
-            attributedText = NSAttributedString(string: "", attributes: AttributedTextView.defaultTypingAttributes())
-            return
-        }
         attributedText = saved
     }
 
@@ -175,6 +194,7 @@ struct QuickPrintView: View {
         attributedText = NSAttributedString(string: "", attributes: AttributedTextView.defaultTypingAttributes())
         store.clear()
         message = ""
+        sequenceProgress = ""
     }
 
     private func syncEditorToState() {
@@ -183,16 +203,68 @@ struct QuickPrintView: View {
         }
     }
 
-    private func saveAsTemplate() {
-        let plain = attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !plain.isEmpty else { return }
-        var template = ReceiptTemplate(name: "快速打印 \(Date().formatted(date: .abbreviated, time: .shortened))")
-        template.blocks = [
-            TemplateBlock(type: .text, content: plain, align: .left, size: .double)
-        ]
-        template.defaultData = [:]
-        appState.saveTemplate(template)
-        message = "已保存为模板「\(template.name)」"
+    private func importSpreadsheet() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [
+            .commaSeparatedText,
+            .tabSeparatedText,
+            .plainText,
+            UTType(filenameExtension: "xlsx") ?? .data,
+            UTType(filenameExtension: "csv") ?? .commaSeparatedText
+        ].compactMap { $0 }
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let table = try SpreadsheetImportService.load(from: url)
+            spreadsheet = table
+            importInfo = "来自 \(url.lastPathComponent)"
+            message = "已导入 \(table.rows.count) 行"
+        } catch {
+            appState.lastError = error.localizedDescription
+            importInfo = error.localizedDescription
+        }
+    }
+
+    private func previewFirstRow() {
+        guard let sheet = spreadsheet, let row = sheet.rows.first else { return }
+        let values = mergeValues(headers: sheet.headers, row: row)
+        let merged = QuickPrintMerge.apply(attributedText, values: values)
+        let image = RichTextPrintRenderer.renderImage(
+            attributedString: merged,
+            config: appState.settings.printerConfig
+        )
+        previewPayload = QuickPrintPreviewPayload(image: image)
+    }
+
+    private func sequencePrintAll() async {
+        guard let sheet = spreadsheet, !sheet.isEmpty else { return }
+        guard appState.settings.selectedPrinterName != nil else { return }
+        syncEditorToState()
+        isSequencePrinting = true
+        defer { isSequencePrinting = false }
+
+        for (index, row) in sheet.rows.enumerated() {
+            sequenceProgress = "正在打印 \(index + 1)/\(sheet.rows.count)"
+            let values = mergeValues(headers: sheet.headers, row: row)
+            let merged = QuickPrintMerge.apply(attributedText, values: values)
+            await printDocument(merged, cut: true)
+            if index < sheet.rows.count - 1 {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+        sequenceProgress = "序列打印完成：\(sheet.rows.count) 张"
+        message = sequenceProgress
+    }
+
+    private func mergeValues(headers: [String], row: [String]) -> [String: String] {
+        var values: [String: String] = [:]
+        for (colIndex, header) in headers.enumerated() {
+            let key = header.trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty else { continue }
+            values[key] = colIndex < row.count ? row[colIndex] : ""
+        }
+        return values
     }
 
     private func printDocument(_ content: NSAttributedString, cut: Bool = true) async {
@@ -223,72 +295,6 @@ struct QuickPrintView: View {
             } else {
                 message = "打印失败: \(record.transportError ?? "")"
             }
-        }
-    }
-
-    private func feedPaper() async {
-        guard let printer = appState.settings.selectedPrinterName else {
-            message = "未选择打印机，无法走纸"
-            return
-        }
-        message = "走纸中…"
-        let data = ESCPOSBuilder(config: appState.settings.printerConfig)
-            .initialize()
-            .align(.left)
-            .feedPaperAction(lines: feedLines)
-            .build()
-        // Serialize via PrintController so feed cannot race a following print job.
-        let config = PrintController.Config(
-            printerName: printer,
-            connectionType: "USB raw via CUPS `lp`",
-            statusPollingWasActive: false,
-            clearStuckJobsFirst: false
-        )
-        let record = await appState.printController.printRawOnce(
-            config: config,
-            payload: data,
-            sourceLabel: "feed:\(feedLines)",
-            renderMode: .nativeText
-        )
-        appState.ingest(record)
-        if let err = record.transportError {
-            appState.lastError = err
-            message = err
-        } else {
-            message = "已走纸 \(feedLines) 行"
-        }
-    }
-
-    private func cutPaper() async {
-        guard let printer = appState.settings.selectedPrinterName else {
-            message = "未选择打印机，无法切纸"
-            return
-        }
-        message = "切纸中…"
-        let feed = max(appState.settings.printerConfig.feedLinesBeforeCut, 12)
-        let data = ESCPOSBuilder(config: appState.settings.printerConfig)
-            .initialize()
-            .align(.left)
-            .cutPaperAction(feedLines: feed)
-            .build()
-        let config = PrintController.Config(
-            printerName: printer,
-            connectionType: "USB raw via CUPS `lp`",
-            statusPollingWasActive: false,
-            clearStuckJobsFirst: false
-        )
-        let record = await appState.printController.printRawOnce(
-            config: config,
-            payload: data,
-            sourceLabel: "cut:\(feed)",
-            renderMode: .nativeText
-        )
-        appState.ingest(record)
-        if let err = record.transportError {
-            appState.lastError = err
-            message = err
-        } else {
-            message = "已切纸"
         }
     }
 }

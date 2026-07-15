@@ -99,17 +99,20 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         // POS-80 reliable path: native GBK text (FS &), NOT whole-page GS v 0.
         XCTAssertFalse(escpos.contains(Data([0x1D, 0x76, 0x30])))
         XCTAssertTrue(escpos.contains(Data([0x1C, 0x26]))) // FS & Chinese mode
-        // ASCII "Hello" and GBK "测试" appear as text bytes.
-        XCTAssertTrue(escpos.contains(Data([0x48, 0x65, 0x6C, 0x6C, 0x6F])))
-        XCTAssertTrue(escpos.contains(Data([0xB2, 0xE2, 0xCA, 0xD4])))
+        // Proven mixed path (diag 20260714-224905): Latin under FS ., CJK under FS &.
+        XCTAssertTrue(escpos.contains(Data([0x48, 0x65, 0x6C, 0x6C, 0x6F]))) // Hello
+        XCTAssertTrue(escpos.contains(Data([0x1C, 0x2E]))) // FS . for Latin-leading runs
+        XCTAssertTrue(escpos.contains(Data([0xB2, 0xE2, 0xCA, 0xD4]))) // GBK 测试
 
         let lines = RichTextPrintRenderer.layoutLines(from: attributed, config: config)
         let textLines = lines.compactMap { line -> (String, TextSize)? in
             if case .text(let s, let size, _, _, _) = line { return (s, size) }
             return nil
         }
-        XCTAssertTrue(textLines.contains { $0.0.contains("Hello") && $0.0.contains("测试") })
-        XCTAssertTrue(textLines.contains { $0.0.contains("ReceiptPrinter") && $0.0.contains("快速") })
+        XCTAssertTrue(textLines.contains { $0.0.contains("Hello") })
+        XCTAssertTrue(textLines.contains { $0.0.contains("测试") })
+        XCTAssertTrue(textLines.contains { $0.0.contains("Receipt") })
+        XCTAssertTrue(textLines.contains { $0.0.contains("快速") })
     }
 
     func testQuickPrintAlignmentEmitsESCAlign() {
@@ -209,7 +212,33 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         XCTAssertFalse(escpos.contains(Data([0x1D, 0x76, 0x30])))
         XCTAssertTrue(escpos.contains(Data([0x1C, 0x26]))) // FS & Chinese text mode
         XCTAssertTrue(escpos.contains(Data([0xB2, 0xE2, 0xCA, 0xD4]))) // GBK 测试
+        // CJK-leading mixed source keeps English bytes; may still emit FS . for ASCII-only wrap tails.
+        XCTAssertTrue(escpos.contains(Data([0x45, 0x6E, 0x67, 0x6C, 0x69, 0x73, 0x68]))) // "English"
         XCTAssertFalse(escpos.contains(Data([0x3F, 0x3F]))) // no "??" replacement runs
+    }
+
+    func testMixedCJKAndASCIIStayOnSameWrappedLines() {
+        // Attribute-run splitting must NOT force ASCII onto its own printed line.
+        let config = PrinterConfig.default80mm
+        let source = "还为客人还未哦日哦为UI惹我尽量快点就撒开了的哈萨克了哈疯狂的时候疯狂脸上"
+        // Simulate NSTextView font-run boundaries between CJK and Latin.
+        let mutable = NSMutableAttributedString()
+        let font = AttributedTextView.editorFont(ofSize: AttributedTextView.defaultFontSize)
+        mutable.append(NSAttributedString(string: "还为客人还未哦日哦为", attributes: [.font: font]))
+        mutable.append(NSAttributedString(
+            string: "UI",
+            attributes: [.font: NSFont.monospacedSystemFont(ofSize: AttributedTextView.defaultFontSize, weight: .regular)]
+        ))
+        mutable.append(NSAttributedString(string: "惹我尽量快点就撒开了的哈萨克了哈疯狂的时候疯狂脸上", attributes: [.font: font]))
+        XCTAssertEqual(mutable.string, source)
+
+        let lines = RichTextPrintRenderer.layoutLines(from: mutable, config: config)
+        let texts = lines.compactMap { line -> String? in
+            if case .text(let s, _, _, _, _) = line { return s }
+            return nil
+        }
+        XCTAssertFalse(texts.contains("UI"), "ASCII must wrap with neighboring CJK, not its own line")
+        XCTAssertTrue(texts.contains { $0.contains("UI") && $0.contains("哦为") })
     }
 
     func testLegacyDashDividerUsesNativeText() {

@@ -70,6 +70,8 @@ final class AppState: ObservableObject {
     }
 
     func bootstrap() {
+        // Unlocks old Keychain-based secrets that caused a unlock dialog on every launch.
+        KeychainHelper.abandonLegacyKeychainItems()
         templates = templateStore.loadAll()
         cinemaRules = cinemaRuleStore.loadAll()
         orders = orderStore.loadAll()
@@ -244,6 +246,7 @@ final class AppState: ObservableObject {
 
 enum SidebarItem: String, CaseIterable, Identifiable {
     case quickPrint = "快速打印"
+    case spreadsheetSequence = "Excel表格序列打印"
     case templatePrint = "模板打印"
     case templates = "模板管理"
     case designer = "模板设计"
@@ -259,6 +262,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .quickPrint: return "printer"
+        case .spreadsheetSequence: return "tablecells"
         case .templatePrint: return "doc.richtext"
         case .templates: return "doc.text"
         case .designer: return "pencil.and.outline"
