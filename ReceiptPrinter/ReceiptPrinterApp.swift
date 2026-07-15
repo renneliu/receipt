@@ -247,6 +247,7 @@ final class AppState: ObservableObject {
 enum SidebarItem: String, CaseIterable, Identifiable {
     case quickPrint = "快速打印"
     case spreadsheetSequence = "Excel表格序列打印"
+    case posReceipt = "POS小票打印"
     case templatePrint = "模板打印"
     case templates = "模板管理"
     case designer = "模板设计"
@@ -263,6 +264,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         switch self {
         case .quickPrint: return "printer"
         case .spreadsheetSequence: return "tablecells"
+        case .posReceipt: return "cart"
         case .templatePrint: return "doc.richtext"
         case .templates: return "doc.text"
         case .designer: return "pencil.and.outline"

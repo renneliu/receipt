@@ -30,6 +30,8 @@ struct MainView: View {
             QuickPrintView()
         case .spreadsheetSequence:
             SpreadsheetSequencePrintView()
+        case .posReceipt:
+            POSReceiptRootView()
         case .templatePrint:
             TemplatePrintView()
         case .templates:

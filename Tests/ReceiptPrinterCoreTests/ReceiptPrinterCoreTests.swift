@@ -382,4 +382,292 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         XCTAssertTrue(escpos.contains(Data([0x1C, 0x26]))) // FS & native Chinese
         XCTAssertFalse(escpos.contains(Data([0x1D, 0x76, 0x30]))) // no GS v 0 without logos
     }
+
+    func testPOSReceiptTotalsQuantityAndAmount() {
+        let items = [
+            POSLineItem(code: "1", name: "A", quantity: "2", amount: "10.5"),
+            POSLineItem(code: "2", name: "B", quantity: "3", amount: "1.5")
+        ]
+        XCTAssertEqual(POSReceiptTotals.quantitySubtotal(items: items), 5)
+        XCTAssertEqual(POSReceiptTotals.amountSubtotal(items: items), 12.0, accuracy: 0.001)
+        XCTAssertEqual(POSReceiptTotals.amountTotal(items: items, surcharge: "2"), 14.0, accuracy: 0.001)
+        XCTAssertEqual(POSReceiptTotals.formatAmount(12), "12.00")
+        XCTAssertEqual(POSReceiptTotals.formatQuantity(5), "5")
+    }
+
+    func testPOSExcelLookupByMappedCodeColumn() {
+        let table = SpreadsheetTable(
+            headers: ["SKU", "品名", "Qty", "Price"],
+            rows: [
+                ["A01", "茶", "2", "18"],
+                ["B02", "咖啡", "1", "25"]
+            ]
+        )
+        let map = POSExcelColumnMap(
+            codeHeader: "SKU",
+            nameHeader: "品名",
+            quantityHeader: "Qty",
+            amountHeader: "Price"
+        )
+        let hit = POSExcelLookupService.lookup(code: "B02", table: table, map: map)
+        XCTAssertEqual(hit?.name, "咖啡")
+        XCTAssertEqual(hit?.quantity, "1")
+        XCTAssertEqual(hit?.amount, "25")
+        XCTAssertNil(POSExcelLookupService.lookup(code: "ZZZ", table: table, map: map))
+    }
+
+    func testPOSLineBandExpandShiftsFooterAndRepeatsRows() {
+        var template = POSReceiptTemplate.makeBlank(name: "t")
+        template.enableCode = true
+        template.enableQuantity = true
+        template.enableAmount = true
+        template.elements = [
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 12, y: 40, width: 80, height: 24),
+                fieldKind: .code
+            ),
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 100, y: 40, width: 120, height: 24),
+                fieldKind: .name
+            ),
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 12, y: 100, width: 100, height: 24),
+                fieldKind: .amountSubtotal,
+                ticketSection: .footer
+            ),
+            POSReceiptElement(
+                kind: .textBox,
+                frame: SequencePlaceholderFrame(x: 12, y: 8, width: 80, height: 20),
+                content: "店名",
+                ticketSection: .header
+            )
+        ]
+        let band = POSReceiptLayoutEngine.lineBand(template: template)
+        XCTAssertNotNil(band)
+        // pitch = height + 4
+        XCTAssertEqual(Double(band!.height), 28, accuracy: 0.1)
+
+        let items = [
+            POSLineItem(code: "1", name: "甲", quantity: "1", amount: "10"),
+            POSLineItem(code: "2", name: "乙", quantity: "2", amount: "20")
+        ]
+        let layout = POSReceiptLayoutEngine.expand(
+            template: template,
+            items: items,
+            surcharge: "0"
+        )
+        let names = layout.texts.filter { $0.text == "甲" || $0.text == "乙" }
+        XCTAssertEqual(names.count, 2)
+        let codeAndNameRow0 = layout.texts.filter { $0.text == "1" || $0.text == "甲" }
+        XCTAssertEqual(Set(codeAndNameRow0.map(\.frame.y)).count, 1, "编号与项目应在同一行")
+        let subtotal = layout.texts.first { $0.text == "30.00" }
+        XCTAssertNotNil(subtotal)
+        XCTAssertEqual(Double(subtotal?.frame.y ?? 0), 100 + 28, accuracy: 0.1)
+        let header = layout.texts.first { $0.text == "店名" }
+        XCTAssertEqual(Double(header?.frame.y ?? -1), 8, accuracy: 0.1)
+    }
+
+    func testPOSExplicitFooterShiftsEvenWhenAboveItemBand() {
+        var template = POSReceiptTemplate.makeBlank(name: "t")
+        template.enableCode = true
+        // Footer marker placed near header Y — only ticketSection decides shift.
+        template.elements = [
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 12, y: 80, width: 40, height: 28),
+                fieldKind: .code
+            ),
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 60, y: 80, width: 120, height: 28),
+                fieldKind: .name
+            ),
+            POSReceiptElement(
+                kind: .textBox,
+                frame: SequencePlaceholderFrame(x: 12, y: 40, width: 100, height: 20),
+                content: "页脚备注",
+                ticketSection: .footer
+            ),
+            POSReceiptElement(
+                kind: .textBox,
+                frame: SequencePlaceholderFrame(x: 12, y: 200, width: 100, height: 20),
+                content: "页眉误放",
+                ticketSection: .header
+            )
+        ]
+        let layout = POSReceiptLayoutEngine.expand(
+            template: template,
+            items: [
+                POSLineItem(code: "1", name: "A", quantity: "", amount: ""),
+                POSLineItem(code: "2", name: "B", quantity: "", amount: "")
+            ],
+            surcharge: "0"
+        )
+        let pitch = POSReceiptLayoutEngine.itemPitch(template: template)
+        let footer = layout.texts.first { $0.text == "页脚备注" }
+        let header = layout.texts.first { $0.text == "页眉误放" }
+        XCTAssertEqual(Double(footer?.frame.y ?? -1), 40 + Double(pitch), accuracy: 0.1)
+        XCTAssertEqual(Double(header?.frame.y ?? -1), 200, accuracy: 0.1)
+    }
+
+    func testPOSNameWrapsAndGrowsRowHeight() {
+        var template = POSReceiptTemplate.makeBlank(name: "t")
+        template.enableCode = true
+        // Narrow name frame forces width-based wrap (not legacy 字数).
+        template.elements = [
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 12, y: 40, width: 40, height: 28),
+                fieldKind: .code
+            ),
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 60, y: 40, width: 48, height: 28),
+                fontSize: 16,
+                fieldKind: .name
+            ),
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 12, y: 100, width: 100, height: 24),
+                fieldKind: .amountSubtotal
+            )
+        ]
+        // Long enough that even packed ~120pt@16 wraps; assert width-fit not fixed 字数.
+        let long = "一二三四五六七八九十一二三四五六七八九十"
+        let layout = POSReceiptLayoutEngine.expand(
+            template: template,
+            items: [
+                POSLineItem(code: "1", name: long, quantity: "", amount: "10"),
+                POSLineItem(code: "2", name: "短", quantity: "", amount: "5")
+            ],
+            surcharge: "0"
+        )
+        let nameBox = layout.texts.first { $0.text.contains("一") }
+        XCTAssertNotNil(nameBox)
+        XCTAssertTrue(nameBox!.text.contains("\n"), "长名称应按框宽换行")
+        XCTAssertGreaterThan(nameBox!.frame.height, 28, "长名称框应增高以容纳换行")
+        let short = layout.texts.first { $0.text == "短" }
+        XCTAssertNotNil(short)
+        XCTAssertGreaterThan(short!.frame.y, nameBox!.frame.y, "第二条应在第一条换行之后")
+        let subtotal = layout.texts.first { $0.text == "15.00" }
+        XCTAssertNotNil(subtotal)
+        XCTAssertGreaterThan(subtotal!.frame.y, nameBox!.frame.y)
+    }
+
+    func testPOSNameWrapPreservesEnglishWords() {
+        let lines = ReceiptTextLayout.wrapFittingWidth(
+            "Hello wonderful world",
+            maxWidth: 90,
+            fontSize: 16,
+            preserveEnglishWords: true
+        )
+        for line in lines {
+            XCTAssertFalse(line.hasSuffix("wonde") || line.hasPrefix("rful"))
+        }
+        XCTAssertGreaterThan(lines.count, 1)
+    }
+
+    func testPOSNameWrapFillsWidthWhenFontShrinks() {
+        let text = "快水工就看到符合高科技的风格"
+        let width: CGFloat = 120
+        let large = ReceiptTextLayout.wrapFittingWidth(text, maxWidth: width, fontSize: 28)
+        let small = ReceiptTextLayout.wrapFittingWidth(text, maxWidth: width, fontSize: 12)
+        XCTAssertGreaterThan(
+            small.first?.count ?? 0,
+            large.first?.count ?? 0,
+            "小号字体应在同一框宽内排入更多字"
+        )
+        let legacy = ReceiptTextLayout.wrap(text, maxColumns: 12, asciiAsDoubleWidth: false)
+        XCTAssertEqual(legacy.first?.count, 6, "旧字数换行与字号无关")
+        XCTAssertNotEqual(small.first?.count, legacy.first?.count)
+    }
+
+    func testPOSLineFieldsForceSameRowEvenIfTemplateYDiffers() {
+        var template = POSReceiptTemplate.makeBlank(name: "t")
+        template.enableCode = true
+        template.elements = [
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 12, y: 40, width: 40, height: 28),
+                fieldKind: .code
+            ),
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 80, y: 120, width: 120, height: 28),
+                fieldKind: .name
+            )
+        ]
+        let layout = POSReceiptLayoutEngine.expand(
+            template: template,
+            items: [POSLineItem(code: "9", name: "同行", quantity: "", amount: "")],
+            surcharge: "0"
+        )
+        let code = layout.texts.first { $0.text == "9" }
+        let name = layout.texts.first { $0.text == "同行" }
+        XCTAssertEqual(code?.frame.y, name?.frame.y)
+        XCTAssertEqual(Double(POSReceiptLayoutEngine.itemPitch(template: template)), 32, accuracy: 0.1)
+    }
+
+    func testPOSFirstItemStartsBelowLogo() {
+        var template = POSReceiptTemplate.makeBlank(name: "t")
+        template.enableCode = true
+        template.elements = [
+            POSReceiptElement(
+                kind: .logo,
+                frame: SequencePlaceholderFrame(x: 20, y: 10, width: 100, height: 80)
+            ),
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 12, y: 40, width: 40, height: 28),
+                fieldKind: .code
+            ),
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 60, y: 40, width: 120, height: 28),
+                fieldKind: .name
+            )
+        ]
+        let printY = POSReceiptLayoutEngine.printRowY(template: template)
+        XCTAssertGreaterThanOrEqual(printY, 10 + 80 + 4)
+        let layout = POSReceiptLayoutEngine.expand(
+            template: template,
+            items: [
+                POSLineItem(code: "1", name: "首条", quantity: "", amount: ""),
+                POSLineItem(code: "2", name: "次条", quantity: "", amount: "")
+            ],
+            surcharge: "0"
+        )
+        let first = layout.texts.first { $0.text == "首条" }
+        let second = layout.texts.first { $0.text == "次条" }
+        XCTAssertEqual(first?.frame.y, printY)
+        XCTAssertEqual(second?.frame.y, printY + POSReceiptLayoutEngine.itemPitch(template: template))
+    }
+
+    func testPOSTemplateRoundTripStoreIsolatesExcelMeta() throws {
+        let store = POSReceiptTemplateStore()
+        var a = POSReceiptTemplate.makeBlank(name: "A")
+        a.excelDisplayName = "a.csv"
+        a.excelCachedHeaders = ["编号", "项目"]
+        a.excelColumnMap.codeHeader = "编号"
+        store.saveMeta(a)
+
+        var b = POSReceiptTemplate.makeBlank(name: "B")
+        b.excelDisplayName = "b.csv"
+        b.excelCachedHeaders = ["code", "name"]
+        store.saveMeta(b)
+
+        let loaded = store.loadAll()
+        let la = loaded.first { $0.id == a.id }
+        let lb = loaded.first { $0.id == b.id }
+        XCTAssertEqual(la?.excelDisplayName, "a.csv")
+        XCTAssertEqual(la?.excelColumnMap.codeHeader, "编号")
+        XCTAssertEqual(lb?.excelDisplayName, "b.csv")
+        XCTAssertNotEqual(la?.excelCachedHeaders, lb?.excelCachedHeaders)
+
+        store.delete(a)
+        store.delete(b)
+    }
 }

@@ -46,8 +46,19 @@ final class ESCPOSBuilder {
     @discardableResult
     func initializeForRaster() -> Self {
         data.append(contentsOf: [0x1B, 0x40])
-        data.append(contentsOf: [0x1C, 0x2E])
+        data.append(contentsOf: [0x1C, 0x2E]) // FS . cancel Chinese mode
         data.append(contentsOf: [0x1B, 0x40])
+        data.append(contentsOf: [0x1C, 0x2E]) // again — POS-80 can keep FS & across one ESC @
+        chineseModeActive = false
+        return self
+    }
+
+    /// Leave printer out of Chinese mode after a raster job so the next ticket's
+    /// GS v 0 header is not parsed as GBK (1st ticket OK, 2nd+ garbled — runtime).
+    @discardableResult
+    func leaveRasterSafe() -> Self {
+        data.append(contentsOf: [0x1C, 0x2E])
+        chineseModeActive = false
         return self
     }
 

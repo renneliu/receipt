@@ -10,31 +10,52 @@ struct LogoBoxOverlay: View {
     var paperSize: CGSize
     /// Called after a corner-resize ends so the parent can sync scalePercent.
     var onFrameChanged: (() -> Void)? = nil
+    /// true while drag/resize is active so the parent can skip expensive live recomposes.
+    var onInteractionChanged: ((Bool) -> Void)? = nil
     var onDelete: () -> Void
+    /// When true, hide the logo bitmap (shown by live print underlay) and keep only chrome.
+    var chromeOnly: Bool = false
+    /// When true, position drag is disabled (resize still allowed).
+    var isLocked: Bool = false
 
     @State private var dragStart: SequencePlaceholderFrame?
     @State private var resizeStart: SequencePlaceholderFrame?
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            Image(nsImage: image)
-                .resizable()
-                .scaledToFit()
-                .frame(width: frame.width, height: frame.height)
-                .opacity(0.95)
+            if !chromeOnly {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: frame.width, height: frame.height)
+                    .opacity(0.95)
+            } else {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.white.opacity(0.001))
+            }
 
             RoundedRectangle(cornerRadius: 3)
-                .stroke(isSelected ? Color.orange : Color.orange.opacity(0.45), lineWidth: isSelected ? 2 : 1)
+                .stroke(
+                    isSelected ? Color.orange : Color.orange.opacity(chromeOnly ? 0.35 : 0.45),
+                    lineWidth: isSelected ? 2 : 1
+                )
 
             if isSelected {
                 HStack {
-                    Text(title)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
-                        .background(Color.white.opacity(0.85))
-                        .clipShape(RoundedRectangle(cornerRadius: 2))
+                    HStack(spacing: 2) {
+                        Text(title)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.orange)
+                        if isLocked {
+                            Image(systemName: "lock.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(Color.white.opacity(0.85))
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
                     Spacer(minLength: 0)
                     Button {
                         onDelete()
@@ -73,7 +94,11 @@ struct LogoBoxOverlay: View {
         DragGesture()
             .onChanged { value in
                 isSelected = true
-                if dragStart == nil { dragStart = frame }
+                guard !isLocked else { return }
+                if dragStart == nil {
+                    dragStart = frame
+                    onInteractionChanged?(true)
+                }
                 guard let start = dragStart else { return }
                 var next = start
                 next.x = start.x + value.translation.width
@@ -81,7 +106,9 @@ struct LogoBoxOverlay: View {
                 frame = next.clamped(to: paperSize, minSize: CGSize(width: 36, height: 24))
             }
             .onEnded { _ in
+                guard dragStart != nil else { return }
                 dragStart = nil
+                onInteractionChanged?(false)
                 onFrameChanged?()
             }
     }
@@ -89,7 +116,10 @@ struct LogoBoxOverlay: View {
     private var resizeGesture: some Gesture {
         DragGesture()
             .onChanged { value in
-                if resizeStart == nil { resizeStart = frame }
+                if resizeStart == nil {
+                    resizeStart = frame
+                    onInteractionChanged?(true)
+                }
                 guard let start = resizeStart else { return }
                 var next = start
                 next.width = start.width + value.translation.width
@@ -98,6 +128,7 @@ struct LogoBoxOverlay: View {
             }
             .onEnded { _ in
                 resizeStart = nil
+                onInteractionChanged?(false)
                 onFrameChanged?()
             }
     }

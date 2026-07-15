@@ -289,11 +289,6 @@ enum SequenceLayoutComposer {
     }
 
     private static func makeDividerLine(columns: Int, dashed: Bool) -> String {
-        var s = ""
-        let fill = dashed ? "- " : "-"
-        while ReceiptTextLayout.displayWidth(s) < columns {
-            s += fill
-        }
-        return truncateToColumns(s, maxColumns: columns)
+        ReceiptTextLayout.dividerLine(columns: columns, dashed: dashed)
     }
 }

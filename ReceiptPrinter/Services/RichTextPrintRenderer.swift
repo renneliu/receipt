@@ -63,6 +63,11 @@ enum RichTextPrintRenderer {
         var text: String
         var frame: SequencePlaceholderFrame
         var fontSize: CGFloat
+        /// 0 left, 1 center, 2 right — matches POS alignment.
+        var alignment: Int = 0
+        /// Draw as a continuous stroke instead of hyphen glyphs.
+        var asRule: Bool = false
+        var ruleDashed: Bool = false
     }
 
     static func renderImage(attributedString: NSAttributedString, config: PrinterConfig, padding: CGFloat = 8) -> NSImage {
@@ -101,15 +106,16 @@ enum RichTextPrintRenderer {
         } else {
             scale = 1
         }
-        // Ticket length: soft-wrap content + logo/overlay bottoms (scaled). No canvas-floor pad.
+
+        // Ticket length: soft-wrap body + canvas-placed logos/overlays (WYSIWYG frame coords).
         var pixelHeight = max(80, ceil(contentHeight))
         for layer in media.logos {
-            let h = ceil((layer.frame.y + layer.frame.height) * scale + padding)
-            pixelHeight = max(pixelHeight, h)
+            let y = layer.frame.y * scale
+            pixelHeight = max(pixelHeight, ceil(y + layer.frame.height * scale + padding))
         }
         for overlay in media.textOverlays {
-            let h = ceil((overlay.frame.y + overlay.frame.height) * scale + padding)
-            pixelHeight = max(pixelHeight, h)
+            let y = overlay.frame.y * scale
+            pixelHeight = max(pixelHeight, ceil(y + overlay.frame.height * scale + padding))
         }
         // Placeholders are composited into `attributedString` — their ink is in contentHeight.
         let size = NSSize(width: width, height: pixelHeight)
@@ -139,12 +145,12 @@ enum RichTextPrintRenderer {
                 )
             }
 
-            var drawY = padding
+            var drawYCursor = padding
             for (index, line) in lines.enumerated() {
                 let h = heights[index]
                 drawLine(
                     line,
-                    at: drawY,
+                    at: drawYCursor,
                     height: h,
                     contentWidth: contentWidth,
                     baseCell: baseCell,
@@ -152,11 +158,12 @@ enum RichTextPrintRenderer {
                     columns: config.columnsPerLine,
                     asciiAsDoubleWidth: false
                 )
-                drawY += h + 2
+                drawYCursor += h + 2
             }
 
             if canvas.width > 1 {
                 for layer in media.logos {
+                    // Canvas coords (same space as designer chrome) — not character-grid rows.
                     let dest = NSRect(
                         x: layer.frame.x * scale,
                         y: layer.frame.y * scale,
@@ -172,36 +179,50 @@ enum RichTextPrintRenderer {
                         hints: [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)]
                     )
                 }
-                for overlay in media.textOverlays where !overlay.text.isEmpty {
+                for overlay in media.textOverlays where !overlay.text.isEmpty || overlay.asRule {
                     let dest = NSRect(
                         x: overlay.frame.x * scale,
                         y: overlay.frame.y * scale,
                         width: overlay.frame.width * scale,
                         height: overlay.frame.height * scale
                     )
-                    // Editor fontSize is already in points on the paper canvas; print at the
-                    // same optical size (1 editor pt ≈ 1 printer pt after width scale of paper).
+                    if overlay.asRule {
+                        let midY = dest.midY
+                        let path = NSBezierPath()
+                        path.move(to: NSPoint(x: dest.minX, y: midY))
+                        path.line(to: NSPoint(x: dest.maxX, y: midY))
+                        path.lineWidth = max(1.5, min(4, overlay.fontSize * scale * 0.08))
+                        path.lineCapStyle = .butt
+                        if overlay.ruleDashed {
+                            let dash: [CGFloat] = [max(3, 4 * scale), max(2, 3 * scale)]
+                            path.setLineDash(dash, count: 2, phase: 0)
+                        }
+                        NSColor.black.setStroke()
+                        path.stroke()
+                        continue
+                    }
                     let pointSize = max(8, overlay.fontSize * scale)
                     let font = NSFont.monospacedSystemFont(ofSize: pointSize, weight: .regular)
+                    let paragraph = NSMutableParagraphStyle()
+                    paragraph.lineBreakMode = .byClipping
+                    switch overlay.alignment {
+                    case 1: paragraph.alignment = .center
+                    case 2: paragraph.alignment = .right
+                    default: paragraph.alignment = .left
+                    }
                     let attrs: [NSAttributedString.Key: Any] = [
                         .font: font,
-                        .foregroundColor: NSColor.black
+                        .foregroundColor: NSColor.black,
+                        .paragraphStyle: paragraph
                     ]
+                    // Pre-wrapped names use \n; draw top-aligned within the field frame.
                     let ns = overlay.text as NSString
-                    let textSize = ns.size(withAttributes: attrs)
-                    let textRect = NSRect(
-                        x: dest.midX - textSize.width / 2,
-                        y: dest.midY - textSize.height / 2,
-                        width: textSize.width,
-                        height: textSize.height
-                    )
-                    ns.draw(in: textRect, withAttributes: attrs)
+                    ns.draw(in: dest, withAttributes: attrs)
                 }
             }
             return true
         }
     }
-
     /// Aspect-fit, centered (may letterbox).
     static func fitCenterRect(imageSize: NSSize, in bounds: NSRect) -> NSRect {
         guard imageSize.width > 0, imageSize.height > 0, bounds.width > 0, bounds.height > 0 else {
