@@ -362,8 +362,6 @@ final class ESCPOSBuilder {
     }
 
     private func appendRasterImageBanded(_ raster: RasterImage, bandHeight: Int) {
-        // Cancel Chinese character mode before bit-image; otherwise clones often print raster as GBK text.
-        data.append(contentsOf: [0x1C, 0x2E])
         let widthBytes = raster.widthBytes
         let xL = UInt8(widthBytes & 0xFF)
         let xH = UInt8((widthBytes >> 8) & 0xFF)
@@ -376,6 +374,9 @@ final class ESCPOSBuilder {
             let slice = raster.data.subdata(in: start..<end)
             let yL = UInt8(rows & 0xFF)
             let yH = UInt8((rows >> 8) & 0xFF)
+            // Re-assert no Chinese mode before every band — leftover FS & mid-job turns
+            // raster bytes into garbled GBK glyphs on this POS-80.
+            data.append(contentsOf: [0x1C, 0x2E])
             // GS v 0: xL/xH = bytes per row, yL/yH = number of rows.
             data.append(contentsOf: [0x1D, 0x76, 0x30, 0x00, xL, xH, yL, yH])
             data.append(slice)

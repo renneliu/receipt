@@ -955,7 +955,9 @@ struct SpreadsheetSequencePrintView: View {
         let payload = RichTextPrintRenderer.renderSequenceESCPOS(
             pages: pages,
             config: config,
-            media: media
+            media: media,
+            editorFontSize: CGFloat(editorFontSize),
+            paperWidthPoints: paperWidth
         )
         let previewImage = RichTextPrintRenderer.renderSequencePageImage(
             attributedString: pages[0],
@@ -994,13 +996,13 @@ struct SpreadsheetSequencePrintView: View {
             headerYL: height & 0xFF,
             headerYH: (height >> 8) & 0xFF,
             expectedRasterBytes: expected,
-            renderMode: hasMedia ? .raster : .nativeText,
-            usedNativeText: !hasMedia,
+            renderMode: .nativeText,
+            usedNativeText: true,
             usedRaster: hasMedia,
             dpi: 203,
             printableWidthDots: config.dotsPerLine,
             printerModelHint: hasMedia
-                ? "POS-80 sequence banded GS v 0 (logo+text composite)"
+                ? "POS-80 sequence native GBK + media strip"
                 : "POS-80 sequence native GBK"
         )
 

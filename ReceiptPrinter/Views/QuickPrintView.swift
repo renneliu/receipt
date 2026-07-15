@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Holds a rendered preview bitmap so `.sheet(item:)` receives the image by value
 /// (avoids SwiftUI presenting with a stale nil `previewImage`).
@@ -21,8 +22,81 @@ struct QuickPrintView: View {
     @State private var feedLines = 6
     @State private var editorFontSize: Double = AttributedTextView.defaultFontSize
 
+    @State private var backgroundImage: NSImage?
+    @State private var backgroundScalePercent: Double = 100
+    @State private var logos: [SequenceLogoItem] = []
+    @State private var logoImages: [UUID: NSImage] = [:]
+    @State private var selectedLogoID: UUID?
+    @State private var autoNumber = QuickPrintAutoNumber()
+    @State private var autoNumberSelected = false
+    @State private var liveEditorHeight: CGFloat = 0
+
     private let store = QuickPrintStore()
+    private let mediaStore = QuickPrintMediaStore()
+    private let paperCanvasMinHeight: CGFloat = 480
+
     private var columns: Int { appState.settings.printerConfig.columnsPerLine }
+
+    private var paperWidth: CGFloat {
+        AttributedTextView.editorPaperWidth(
+            config: appState.settings.printerConfig,
+            fontSize: CGFloat(editorFontSize)
+        )
+    }
+
+    private var documentHeight: CGFloat {
+        let fontSize = CGFloat(editorFontSize)
+        let softWrapH = AttributedTextView.measureEditorHeight(
+            attributedString: attributedText,
+            config: appState.settings.printerConfig,
+            fontSize: fontSize
+        )
+        let logoBottom = logos.map { $0.frame.y + $0.frame.height }.max() ?? 0
+        let numberBottom = autoNumber.enabled
+            ? autoNumber.frame.y + autoNumber.frame.height
+            : 0
+        let overlayBottom = max(logoBottom, numberBottom)
+        return max(
+            paperCanvasMinHeight,
+            softWrapH,
+            liveEditorHeight,
+            overlayBottom + 40
+        )
+    }
+
+    private var canvasSize: CGSize {
+        CGSize(width: paperWidth, height: documentHeight)
+    }
+
+    private var pageMediaBase: RichTextPrintRenderer.SequencePageMedia {
+        let layers = logos
+            .sorted { $0.zIndex < $1.zIndex }
+            .compactMap { item -> RichTextPrintRenderer.SequenceLogoLayer? in
+                guard let image = logoImages[item.id] else { return nil }
+                return .init(image: image, frame: item.frame)
+            }
+        var media = RichTextPrintRenderer.SequencePageMedia(
+            background: backgroundImage,
+            backgroundScalePercent: backgroundScalePercent,
+            logos: layers,
+            textOverlays: [],
+            canvasSize: canvasSize
+        )
+        if autoNumber.enabled {
+            media.textOverlays = [
+                .init(
+                    text: autoNumber.formattedValue(offset: 0),
+                    frame: autoNumber.frame,
+                    fontSize: autoNumber.fontSize
+                )
+            ]
+        }
+        return media
+    }
+
+    private var needsCompositePrint: Bool {
+        backgroundImage != nil || !logos.isEmpty || autoNumber.enabled
+    }
 
     var body: some View {
         HSplitView {
@@ -31,26 +105,7 @@ struct QuickPrintView: View {
                     Color(nsColor: .windowBackgroundColor)
                     HStack {
                         Spacer(minLength: 0)
-                        AttributedTextView(
-                            attributedString: $attributedText,
-                            printerConfig: appState.settings.printerConfig,
-                            editorFontSize: CGFloat(editorFontSize),
-                            onTextViewReady: { textView in
-                                editorController.textView = textView
-                            }
-                        )
-                        .frame(
-                            width: AttributedTextView.editorPaperWidth(
-                                config: appState.settings.printerConfig,
-                                fontSize: CGFloat(editorFontSize)
-                            )
-                        )
-                        .frame(maxHeight: .infinity)
-                        .background(
-                            RoundedRectangle(cornerRadius: 2)
-                                .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
-                        )
-                        .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+                        paperCanvas
                         Spacer(minLength: 0)
                     }
                     .padding(.vertical, 12)
@@ -63,17 +118,129 @@ struct QuickPrintView: View {
             .frame(minWidth: 480)
 
             sidePanel
-                .frame(minWidth: 260, idealWidth: 300, maxWidth: 360)
+                .frame(minWidth: 280, idealWidth: 320, maxWidth: 400)
         }
         .navigationTitle("快速打印")
-        .onAppear { loadSavedContent() }
+        .onAppear {
+            loadSavedContent()
+            loadDraftMedia()
+        }
         .onChange(of: attributedText) { _, newValue in
             store.save(newValue)
         }
+        .onChange(of: logos) { _, _ in persistDraftMedia() }
+        .onChange(of: backgroundScalePercent) { _, _ in persistDraftMedia() }
+        .onChange(of: autoNumber) { _, _ in persistDraftMedia() }
         .sheet(item: $previewPayload) { payload in
             BitmapPrintPreviewView(image: payload.image)
                 .frame(width: 420, height: 640)
         }
+    }
+
+    private var paperCanvas: some View {
+        let height = documentHeight
+        return ScrollView(.vertical, showsIndicators: true) {
+            ZStack(alignment: .topLeading) {
+                if let bg = backgroundImage {
+                    let fitted = RichTextPrintRenderer.fitCenterRect(
+                        imageSize: bg.size,
+                        in: NSRect(x: 0, y: 0, width: paperWidth, height: height)
+                    )
+                    let p = max(
+                        SequenceLogoItem.minScalePercent,
+                        min(SequenceLogoItem.maxScalePercent, backgroundScalePercent)
+                    ) / 100
+                    let w = fitted.width * p
+                    let h = fitted.height * p
+                    Image(nsImage: bg)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: w, height: h)
+                        .position(x: paperWidth / 2, y: height / 2)
+                        .allowsHitTesting(false)
+                }
+
+                AttributedTextView(
+                    attributedString: $attributedText,
+                    printerConfig: appState.settings.printerConfig,
+                    editorFontSize: CGFloat(editorFontSize),
+                    clearCanvasBackground: backgroundImage != nil,
+                    disablesInternalVerticalScroll: true,
+                    onLaidOutContentHeight: { laidOut in
+                        if abs(laidOut - liveEditorHeight) > 0.5 {
+                            liveEditorHeight = laidOut
+                        }
+                    },
+                    onTextViewReady: { textView in
+                        editorController.textView = textView
+                    }
+                )
+                .frame(width: paperWidth, height: height)
+
+                ZStack {
+                    ForEach(Array(logos.enumerated()), id: \.element.id) { index, item in
+                        if let image = logoImages[item.id] {
+                            LogoBoxOverlay(
+                                title: "Logo \(index + 1)",
+                                image: image,
+                                frame: bindingLogoFrame(id: item.id),
+                                isSelected: Binding(
+                                    get: { selectedLogoID == item.id },
+                                    set: { selected in
+                                        if selected {
+                                            selectedLogoID = item.id
+                                            autoNumberSelected = false
+                                        } else if selectedLogoID == item.id {
+                                            selectedLogoID = nil
+                                        }
+                                    }
+                                ),
+                                paperSize: canvasSize,
+                                onFrameChanged: {
+                                    syncLogoScaleFromFrame(id: item.id)
+                                },
+                                onDelete: { removeLogo(id: item.id) }
+                            )
+                        }
+                    }
+                }
+                .frame(width: paperWidth, height: height)
+
+                if autoNumber.enabled {
+                    AutoNumberBoxOverlay(
+                        frame: Binding(
+                            get: { autoNumber.frame },
+                            set: {
+                                autoNumber.frame = $0.clamped(
+                                    to: canvasSize,
+                                    minSize: CGSize(width: 36, height: 22)
+                                )
+                            }
+                        ),
+                        isSelected: Binding(
+                            get: { autoNumberSelected },
+                            set: { selected in
+                                autoNumberSelected = selected
+                                if selected { selectedLogoID = nil }
+                            }
+                        ),
+                        previewText: autoNumber.formattedValue(offset: 0),
+                        fontSize: autoNumber.fontSize,
+                        paperSize: canvasSize,
+                        onFrameChanged: { persistDraftMedia() }
+                    )
+                    .frame(width: paperWidth, height: height)
+                }
+            }
+            .frame(width: paperWidth, height: height)
+            .background(Color.white)
+            .background(
+                RoundedRectangle(cornerRadius: 2)
+                    .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var sidePanel: some View {
@@ -84,6 +251,182 @@ struct QuickPrintView: View {
                     columnsPerLine: columns,
                     fontSize: $editorFontSize
                 )
+            }
+
+            Section("版面图片") {
+                Text("背景在文字下方（等比居中，可用百分比缩放）；彩色 Logo/背景导入时自动转为黑白。可添加多个 Logo。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button(backgroundImage == nil ? "添加背景图…" : "更换背景图…") {
+                        pickImage { img in
+                            backgroundImage = ImagePreprocessor.toBinaryBlackWhite(img)
+                            backgroundScalePercent = 100
+                            persistDraftMedia()
+                        }
+                    }
+                    if backgroundImage != nil {
+                        Button("清除背景", role: .destructive) {
+                            backgroundImage = nil
+                            backgroundScalePercent = 100
+                            persistDraftMedia()
+                        }
+                    }
+                }
+                if backgroundImage != nil {
+                    HStack(spacing: 8) {
+                        Text("背景大小")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField(
+                            "",
+                            value: Binding(
+                                get: { backgroundScalePercent },
+                                set: { setBackgroundScale($0) }
+                            ),
+                            format: .number.precision(.fractionLength(0))
+                        )
+                        .frame(width: 52)
+                        Text("%")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Stepper(
+                            "",
+                            value: Binding(
+                                get: { backgroundScalePercent },
+                                set: { setBackgroundScale($0) }
+                            ),
+                            in: SequenceLogoItem.minScalePercent...SequenceLogoItem.maxScalePercent,
+                            step: 5
+                        )
+                        .labelsHidden()
+                    }
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.secondary.opacity(0.08))
+                    )
+                }
+                Button("添加 Logo…") {
+                    pickImage { img in addLogo(img) }
+                }
+                if !logos.isEmpty {
+                    ForEach(Array(logos.enumerated()), id: \.element.id) { index, item in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Button {
+                                    selectedLogoID = item.id
+                                    autoNumberSelected = false
+                                } label: {
+                                    Text("Logo \(index + 1)")
+                                        .fontWeight(selectedLogoID == item.id ? .semibold : .regular)
+                                }
+                                .buttonStyle(.plain)
+                                Spacer()
+                                Button("删除", role: .destructive) {
+                                    removeLogo(id: item.id)
+                                }
+                                .controlSize(.small)
+                            }
+                            HStack(spacing: 8) {
+                                Text("大小")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                TextField(
+                                    "",
+                                    value: Binding(
+                                        get: { logos.first(where: { $0.id == item.id })?.scalePercent ?? 100 },
+                                        set: { setLogoScale(id: item.id, percent: $0) }
+                                    ),
+                                    format: .number.precision(.fractionLength(0))
+                                )
+                                .frame(width: 52)
+                                Text("%")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Stepper(
+                                    "",
+                                    value: Binding(
+                                        get: { logos.first(where: { $0.id == item.id })?.scalePercent ?? 100 },
+                                        set: { setLogoScale(id: item.id, percent: $0) }
+                                    ),
+                                    in: SequenceLogoItem.minScalePercent...SequenceLogoItem.maxScalePercent,
+                                    step: 5
+                                )
+                                .labelsHidden()
+                            }
+                        }
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.secondary.opacity(0.08))
+                        )
+                    }
+                }
+            }
+
+            Section("自动编号") {
+                Toggle("启用自动编号", isOn: Binding(
+                    get: { autoNumber.enabled },
+                    set: { on in
+                        autoNumber.enabled = on
+                        if on {
+                            autoNumber.frame = autoNumber.frame.clamped(
+                                to: canvasSize,
+                                minSize: CGSize(width: 36, height: 22)
+                            )
+                            autoNumberSelected = true
+                            selectedLogoID = nil
+                        } else {
+                            autoNumberSelected = false
+                        }
+                    }
+                ))
+                Text("开启后可在画布上拖动编号框；每次打印后起始值自动增加（打印 N 张则 +N）。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if autoNumber.enabled {
+                    HStack {
+                        Text("起始值")
+                        TextField("01", text: $autoNumber.startValue)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 120)
+                    }
+                    Picker("字号", selection: Binding(
+                        get: { autoNumber.fontSize },
+                        set: { autoNumber.fontSize = $0 }
+                    )) {
+                        ForEach(QuickPrintAutoNumber.fontSizeChoices, id: \.self) { size in
+                            Text("\(Int(size)) pt").tag(size)
+                        }
+                    }
+                    HStack {
+                        Text("批量张数")
+                        TextField(
+                            "",
+                            value: Binding(
+                                get: { autoNumber.batchCount },
+                                set: {
+                                    autoNumber.batchCount = max(1, $0)
+                                    autoNumber.clampBatch()
+                                }
+                            ),
+                            format: .number
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 72)
+                        Text("张/次")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    Text("本次预览: \(autoNumber.formattedValue(offset: 0))"
+                        + (autoNumber.batchCount > 1
+                            ? " … \(autoNumber.formattedValue(offset: autoNumber.batchCount - 1))"
+                            : ""))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("走纸 / 切纸") {
@@ -141,15 +484,16 @@ struct QuickPrintView: View {
                 .disabled(attributedText.length == 0)
             Button("预览") {
                 syncEditorToState()
-                let image = RichTextPrintRenderer.renderImage(
+                let image = RichTextPrintRenderer.renderSequencePageImage(
                     attributedString: attributedText,
-                    config: appState.settings.printerConfig
+                    config: appState.settings.printerConfig,
+                    media: pageMediaBase
                 )
                 previewPayload = QuickPrintPreviewPayload(image: image)
             }
-            Button(isPrinting ? "打印中..." : "打印") {
+            Button(isPrinting ? "打印中..." : printButtonTitle) {
                 syncEditorToState()
-                Task { await printDocument(attributedText) }
+                Task { await printDocument() }
             }
             .disabled(isPrinting || appState.settings.selectedPrinterName == nil)
         }
@@ -157,9 +501,17 @@ struct QuickPrintView: View {
         .background(.bar)
     }
 
+    private var printButtonTitle: String {
+        if autoNumber.enabled, autoNumber.batchCount > 1 {
+            return "打印 \(autoNumber.batchCount) 张"
+        }
+        return "打印"
+    }
+
+    // MARK: - Persistence
+
     private func loadSavedContent() {
         guard let saved = store.load(), saved.length > 0 else { return }
-        // Drop the old built-in sample that used to ship as the default draft.
         let plain = saved.string
             .replacingOccurrences(of: "\r\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -172,9 +524,54 @@ struct QuickPrintView: View {
         attributedText = saved
     }
 
+    private func loadDraftMedia() {
+        let meta = mediaStore.loadMeta()
+        logos = meta.logos
+        logoImages = mediaStore.loadLogoImages(items: logos)
+        backgroundImage = mediaStore.loadBackgroundImage()
+        backgroundScalePercent = min(
+            SequenceLogoItem.maxScalePercent,
+            max(SequenceLogoItem.minScalePercent, meta.backgroundScalePercent)
+        )
+        if backgroundImage == nil { backgroundScalePercent = 100 }
+        logos.removeAll { logoImages[$0.id] == nil }
+        autoNumber = meta.autoNumber
+        autoNumber.clampBatch()
+        autoNumber.clampFontSize()
+        if !QuickPrintAutoNumber.fontSizeChoices.contains(autoNumber.fontSize) {
+            autoNumber.fontSize = QuickPrintAutoNumber.fontSizeChoices.min(by: {
+                abs($0 - autoNumber.fontSize) < abs($1 - autoNumber.fontSize)
+            }) ?? AttributedTextView.defaultFontSize
+        }
+        if selectedLogoID.map({ logoImages[$0] == nil }) == true {
+            selectedLogoID = nil
+        }
+    }
+
+    private func persistDraftMedia() {
+        let pairs = logos.compactMap { item -> (item: SequenceLogoItem, image: NSImage)? in
+            guard let image = logoImages[item.id] else { return nil }
+            return (item, image)
+        }
+        mediaStore.save(
+            logos: pairs,
+            backgroundImage: backgroundImage,
+            backgroundScalePercent: backgroundScalePercent,
+            autoNumber: autoNumber
+        )
+    }
+
     private func clearContent() {
         attributedText = NSAttributedString(string: "", attributes: AttributedTextView.defaultTypingAttributes())
+        backgroundImage = nil
+        backgroundScalePercent = 100
+        logos = []
+        logoImages = [:]
+        selectedLogoID = nil
+        autoNumber = QuickPrintAutoNumber()
+        autoNumberSelected = false
         store.clear()
+        mediaStore.clear()
         message = ""
     }
 
@@ -183,6 +580,88 @@ struct QuickPrintView: View {
             attributedText = tv.attributedString()
         }
     }
+
+    // MARK: - Logos / background
+
+    private func setBackgroundScale(_ percent: Double) {
+        backgroundScalePercent = min(
+            SequenceLogoItem.maxScalePercent,
+            max(SequenceLogoItem.minScalePercent, percent.rounded())
+        )
+    }
+
+    private func pickImage(completion: @escaping (NSImage) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [
+            .png, .jpeg, .tiff, .gif, .bmp,
+            UTType(filenameExtension: "webp") ?? .png
+        ].compactMap { $0 }
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        guard let image = NSImage(contentsOf: url) else {
+            message = "无法读取图片"
+            return
+        }
+        completion(image)
+    }
+
+    private func bindingLogoFrame(id: UUID) -> Binding<SequencePlaceholderFrame> {
+        Binding(
+            get: {
+                logos.first(where: { $0.id == id })?.frame
+                    ?? SequencePlaceholderFrame(x: 0, y: 0, width: 80, height: 40)
+            },
+            set: { newFrame in
+                guard let idx = logos.firstIndex(where: { $0.id == id }) else { return }
+                logos[idx].frame = newFrame.clamped(to: canvasSize, minSize: CGSize(width: 36, height: 24))
+            }
+        )
+    }
+
+    private func syncLogoScaleFromFrame(id: UUID) {
+        guard let idx = logos.firstIndex(where: { $0.id == id }) else { return }
+        logos[idx].syncScaleFromFrame(paper: canvasSize)
+        persistDraftMedia()
+    }
+
+    private func setLogoScale(id: UUID, percent: Double) {
+        guard let idx = logos.firstIndex(where: { $0.id == id }) else { return }
+        logos[idx].applyScalePercent(percent, paper: canvasSize)
+        selectedLogoID = id
+        autoNumberSelected = false
+        persistDraftMedia()
+    }
+
+    private func addLogo(_ image: NSImage) {
+        let mono = ImagePreprocessor.toBinaryBlackWhite(image)
+        let id = UUID()
+        let item = SequenceLogoItem.makeDefault(
+            id: id,
+            imageFilename: SpreadsheetSequenceDocument.logoFilename(for: id),
+            imageSize: mono.size,
+            paperWidth: paperWidth,
+            paperSize: canvasSize,
+            staggerIndex: logos.count,
+            zIndex: (logos.map(\.zIndex).max() ?? 0) + 1
+        )
+        logos.append(item)
+        logoImages[id] = mono
+        selectedLogoID = id
+        autoNumberSelected = false
+        persistDraftMedia()
+    }
+
+    private func removeLogo(id: UUID) {
+        logos.removeAll { $0.id == id }
+        logoImages.removeValue(forKey: id)
+        if selectedLogoID == id { selectedLogoID = nil }
+        persistDraftMedia()
+    }
+
+    // MARK: - Print / preview helpers
 
     private func saveAsTemplate() {
         let plain = attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -196,23 +675,97 @@ struct QuickPrintView: View {
         message = "已保存为模板「\(template.name)」"
     }
 
-    private func printDocument(_ content: NSAttributedString, cut: Bool = true) async {
+    private func printDocument() async {
         guard appState.settings.selectedPrinterName != nil else { return }
         isPrinting = true
         defer { isPrinting = false }
-        var config = appState.settings.printerConfig
-        config.cutPaper = cut
 
-        let rtfd = try? content.data(
-            from: NSRange(location: 0, length: content.length),
+        var config = appState.settings.printerConfig
+        config.cutPaper = true
+
+        let count = autoNumber.enabled
+            ? max(1, min(QuickPrintAutoNumber.maxBatch, autoNumber.batchCount))
+            : 1
+        let pages = Array(repeating: attributedText, count: count)
+        let baseMedia = pageMediaBase
+        var pageOverlays: [[RichTextPrintRenderer.SequenceTextOverlay]]?
+        if autoNumber.enabled {
+            pageOverlays = (0..<count).map { offset in
+                [
+                    .init(
+                        text: autoNumber.formattedValue(offset: offset),
+                        frame: autoNumber.frame,
+                        fontSize: autoNumber.fontSize
+                    )
+                ]
+            }
+        }
+
+        let rtfd = try? attributedText.data(
+            from: NSRange(location: 0, length: attributedText.length),
             documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
         )
-        let artifacts = RichTextPrintRenderer.buildArtifacts(
-            attributedString: content,
-            config: config,
-            sourceText: content.string,
-            attributedRTFD: rtfd
-        )
+
+        let artifacts: PrintArtifacts
+        if needsCompositePrint {
+            let previewMedia: RichTextPrintRenderer.SequencePageMedia = {
+                var m = baseMedia
+                if let first = pageOverlays?.first {
+                    m.textOverlays = first
+                }
+                return m
+            }()
+            let image = RichTextPrintRenderer.renderSequencePageImage(
+                attributedString: attributedText,
+                config: config,
+                media: previewMedia
+            )
+            let payload = RichTextPrintRenderer.renderSequenceESCPOS(
+                pages: pages,
+                config: config,
+                media: baseMedia,
+                pageTextOverlays: pageOverlays,
+                editorFontSize: CGFloat(editorFontSize),
+                paperWidthPoints: paperWidth
+            )
+            let pngData = image.tiffRepresentation.flatMap {
+                NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:])
+            } ?? Data()
+            let numbers = (0..<count).map { autoNumber.enabled ? autoNumber.formattedValue(offset: $0) : "" }
+            let hasImages = baseMedia.hasImageMedia
+            artifacts = PrintArtifacts(
+                sourceText: numbers.enumerated().map { "[\($0.offset)] \($0.element)" }.joined(separator: "\n")
+                    + "\n" + attributedText.string,
+                attributedRTFD: rtfd,
+                pngData: pngData,
+                rasterData: Data(),
+                payload: payload,
+                imagePixelWidth: Int(image.size.width),
+                imagePixelHeight: Int(image.size.height),
+                rasterWidthBytes: 0,
+                rasterHeight: 0,
+                headerXL: 0,
+                headerXH: 0,
+                headerYL: 0,
+                headerYH: 0,
+                expectedRasterBytes: 0,
+                renderMode: .nativeText,
+                usedNativeText: true,
+                usedRaster: hasImages,
+                dpi: 203,
+                printableWidthDots: config.dotsPerLine,
+                printerModelHint: hasImages
+                    ? "POS-80 quick print native GBK + media strip"
+                    : "POS-80 quick print native GBK (auto-number in text)"
+            )
+        } else {
+            artifacts = RichTextPrintRenderer.buildArtifacts(
+                attributedString: attributedText,
+                config: config,
+                sourceText: attributedText.string,
+                attributedRTFD: rtfd
+            )
+        }
 
         let statusPollingWasActive = appState.gmailSync.isRunning
         if let record = await appState.runDiagnosticPrint(
@@ -220,7 +773,11 @@ struct QuickPrintView: View {
             statusPollingWasActive: statusPollingWasActive
         ) {
             if record.transportError == nil {
-                message = "已发送到打印机"
+                if autoNumber.enabled {
+                    autoNumber.advanceAfterPrint(count: count)
+                    persistDraftMedia()
+                }
+                message = count > 1 ? "已发送 \(count) 张到打印机" : "已发送到打印机"
             } else {
                 message = "打印失败: \(record.transportError ?? "")"
             }
@@ -238,7 +795,6 @@ struct QuickPrintView: View {
             .align(.left)
             .feedPaperAction(lines: feedLines)
             .build()
-        // Serialize via PrintController so feed cannot race a following print job.
         let config = PrintController.Config(
             printerName: printer,
             connectionType: "USB raw via CUPS `lp`",

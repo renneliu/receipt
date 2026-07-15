@@ -108,6 +108,99 @@ enum SequenceLayoutComposer {
         return NSAttributedString(string: joined, attributes: attrs)
     }
 
+    /// Paint free-form text overlays (e.g. Quick Print auto-number) into the character grid
+    /// so they print with native GBK on the same lines as body text — never as GS v 0 ink.
+    static func composeTextOverlays(
+        body: NSAttributedString,
+        overlays: [RichTextPrintRenderer.SequenceTextOverlay],
+        config: PrinterConfig,
+        fontSize: CGFloat,
+        paperWidthPoints: CGFloat
+    ) -> NSAttributedString {
+        guard !overlays.isEmpty else { return body }
+        let m = metrics(config: config, fontSize: fontSize, paperWidthPoints: paperWidthPoints)
+        let layout = RichTextPrintRenderer.layoutLines(from: body, config: config)
+        var rows: [String] = layout.compactMap { line in
+            switch line {
+            case .text(let string, _, _, _, _): return string
+            case .blank: return ""
+            case .divider(let kind):
+                return makeDividerLine(columns: m.columns, dashed: kind == .dashed)
+            }
+        }
+        if rows.isEmpty { rows = [""] }
+
+        for overlay in overlays where !overlay.text.isEmpty {
+            let grid = gridRect(for: overlay.frame, metrics: m)
+            let needed = grid.row + grid.maxLines
+            while rows.count < needed { rows.append("") }
+            let wrapped = ReceiptTextLayout.wrap(overlay.text, maxColumns: grid.maxCols, asciiAsDoubleWidth: false)
+            let lines = Array(wrapped.prefix(grid.maxLines))
+            for (i, fragment) in lines.enumerated() {
+                let r = grid.row + i
+                rows[r] = paint(
+                    into: rows[r],
+                    startCol: grid.col,
+                    maxCols: grid.maxCols,
+                    text: fragment,
+                    totalColumns: m.columns
+                )
+            }
+        }
+
+        var outputRows = rows.map { truncateToColumns($0, maxColumns: m.columns) }
+        while outputRows.count > 1,
+              outputRows.last?.trimmingCharacters(in: .whitespaces).isEmpty == true {
+            outputRows.removeLast()
+        }
+        let joined = outputRows.joined(separator: "\n")
+        let attrs = AttributedTextView.defaultTypingAttributes(fontSize: fontSize)
+        return NSAttributedString(string: joined, attributes: attrs)
+    }
+
+    /// Clear character cells covered by logo frames so native text does not collide with GS v 0 logos.
+    static func clearFrames(
+        body: NSAttributedString,
+        frames: [SequencePlaceholderFrame],
+        config: PrinterConfig,
+        fontSize: CGFloat,
+        paperWidthPoints: CGFloat
+    ) -> NSAttributedString {
+        guard !frames.isEmpty else { return body }
+        let m = metrics(config: config, fontSize: fontSize, paperWidthPoints: paperWidthPoints)
+        let layout = RichTextPrintRenderer.layoutLines(from: body, config: config)
+        var rows: [String] = layout.compactMap { line in
+            switch line {
+            case .text(let string, _, _, _, _): return string
+            case .blank: return ""
+            case .divider(let kind):
+                return makeDividerLine(columns: m.columns, dashed: kind == .dashed)
+            }
+        }
+        if rows.isEmpty { rows = [""] }
+        for frame in frames {
+            let grid = gridRect(for: frame, metrics: m)
+            let needed = grid.row + max(1, grid.maxLines)
+            while rows.count < needed { rows.append("") }
+            for r in grid.row..<(grid.row + max(1, grid.maxLines)) where r < rows.count {
+                rows[r] = paint(
+                    into: rows[r],
+                    startCol: grid.col,
+                    maxCols: grid.maxCols,
+                    text: "",
+                    totalColumns: m.columns
+                )
+            }
+        }
+        var outputRows = rows.map { truncateToColumns($0, maxColumns: m.columns) }
+        while outputRows.count > 1,
+              outputRows.last?.trimmingCharacters(in: .whitespaces).isEmpty == true {
+            outputRows.removeLast()
+        }
+        let attrs = AttributedTextView.defaultTypingAttributes(fontSize: fontSize)
+        return NSAttributedString(string: outputRows.joined(separator: "\n"), attributes: attrs)
+    }
+
     /// Truncate/pad a cell value for on-canvas preview inside a box.
     static func previewText(
         value: String,

@@ -34,13 +34,35 @@ enum RichTextPrintRenderer {
         var backgroundScalePercent: Double = 100
         /// Multiple logos (draw order = array order; typically sorted by zIndex).
         var logos: [SequenceLogoLayer] = []
-        /// Editor paper size used for logo frame mapping (points).
+        /// Optional stamped text (e.g. Quick Print auto-number), canvas coordinates.
+        var textOverlays: [SequenceTextOverlay] = []
+        /// Editor paper size used for logo / overlay frame mapping (points).
         var canvasSize: CGSize = .zero
+
+        /// Background / logos only — Chinese body must NOT go into GS v 0 on this POS-80.
+        var hasImageMedia: Bool {
+            background != nil || !logos.isEmpty
+        }
+
+        var hasTextOverlays: Bool {
+            !textOverlays.isEmpty
+        }
+
+        /// True when a bit-image job is needed (image media). Text overlays print as native GBK.
+        var needsRasterComposite: Bool {
+            hasImageMedia
+        }
     }
 
     struct SequenceLogoLayer {
         var image: NSImage
         var frame: SequencePlaceholderFrame
+    }
+
+    struct SequenceTextOverlay: Equatable {
+        var text: String
+        var frame: SequencePlaceholderFrame
+        var fontSize: CGFloat
     }
 
     static func renderImage(attributedString: NSAttributedString, config: PrinterConfig, padding: CGFloat = 8) -> NSImage {
@@ -70,17 +92,23 @@ enum RichTextPrintRenderer {
         let contentHeight = heights.reduce(padding * 2, +) + CGFloat(max(0, heights.count - 1)) * 2
 
         let canvas = media.canvasSize
+        // Uniform paper→dots scale from width. Do NOT use canvas.height for scaleY:
+        // print ticket is content-tall (often << editor minH), so height-based scaleY
+        // crushed overlays (log: canvasH=480, pixelH=80 → scaleY≈0.17, 48pt→~8pt).
         let scale: CGFloat
         if canvas.width > 1 {
             scale = width / canvas.width
         } else {
             scale = 1
         }
-        // Ticket length: soft-wrap content + logo bottoms. Do NOT pad to editor canvas
-        // (that caused fixed tall tickets; raster stays content-sized).
+        // Ticket length: soft-wrap content + logo/overlay bottoms (scaled). No canvas-floor pad.
         var pixelHeight = max(80, ceil(contentHeight))
         for layer in media.logos {
             let h = ceil((layer.frame.y + layer.frame.height) * scale + padding)
+            pixelHeight = max(pixelHeight, h)
+        }
+        for overlay in media.textOverlays {
+            let h = ceil((overlay.frame.y + overlay.frame.height) * scale + padding)
             pixelHeight = max(pixelHeight, h)
         }
         // Placeholders are composited into `attributedString` — their ink is in contentHeight.
@@ -144,6 +172,31 @@ enum RichTextPrintRenderer {
                         hints: [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)]
                     )
                 }
+                for overlay in media.textOverlays where !overlay.text.isEmpty {
+                    let dest = NSRect(
+                        x: overlay.frame.x * scale,
+                        y: overlay.frame.y * scale,
+                        width: overlay.frame.width * scale,
+                        height: overlay.frame.height * scale
+                    )
+                    // Editor fontSize is already in points on the paper canvas; print at the
+                    // same optical size (1 editor pt ≈ 1 printer pt after width scale of paper).
+                    let pointSize = max(8, overlay.fontSize * scale)
+                    let font = NSFont.monospacedSystemFont(ofSize: pointSize, weight: .regular)
+                    let attrs: [NSAttributedString.Key: Any] = [
+                        .font: font,
+                        .foregroundColor: NSColor.black
+                    ]
+                    let ns = overlay.text as NSString
+                    let textSize = ns.size(withAttributes: attrs)
+                    let textRect = NSRect(
+                        x: dest.midX - textSize.width / 2,
+                        y: dest.midY - textSize.height / 2,
+                        width: textSize.width,
+                        height: textSize.height
+                    )
+                    ns.draw(in: textRect, withAttributes: attrs)
+                }
             }
             return true
         }
@@ -181,45 +234,178 @@ enum RichTextPrintRenderer {
         return builder.build()
     }
 
-    /// Sequence tickets:
-    /// - Logo/background: software-composited page (text + overlays) → banded `GS v 0`
-    ///   so logo can sit on the same row as text (WYSIWYG). Tall single-band GS v 0 garbled
-    ///   on this POS-80; short bands keep Chinese ink as pixels (not GBK bytes).
-    /// - Text only: native GBK (same path as Quick Print).
+    /// Sequence / Quick Print tickets (POS-80-safe):
+    /// - Chinese + auto-number → native GBK (overlays painted into the character grid).
+    /// - Logos → tight per-logo `GS v 0` strips inserted at the matching text-line Y
+    ///   (never a full-canvas media block before all text — that forced logos above everything).
+    /// - Never bake CJK into GS v 0 (runtime: clean headers still 乱码 with CJK ink).
     static func renderSequenceESCPOS(
         pages: [NSAttributedString],
         config: PrinterConfig,
-        media: SequencePageMedia = SequencePageMedia()
+        media: SequencePageMedia = SequencePageMedia(),
+        /// When set (same length as `pages`), replaces `media.textOverlays` per page (auto-number batch).
+        pageTextOverlays: [[SequenceTextOverlay]]? = nil,
+        editorFontSize: CGFloat = AttributedTextView.defaultFontSize,
+        paperWidthPoints: CGFloat = 0
     ) -> Data {
         let builder = ESCPOSBuilder(config: config)
         let feedBeforeCut = max(config.feedLinesBeforeCut, minimumFeedsBeforeCut)
-        let hasMedia = media.background != nil || !media.logos.isEmpty
-        for page in pages {
-            if hasMedia {
-                builder.initializeForRaster()
-                let composed = renderSequencePageImage(
-                    attributedString: page,
+        let paperW = paperWidthPoints > 1
+            ? paperWidthPoints
+            : AttributedTextView.editorPaperWidth(config: config, fontSize: editorFontSize)
+        let metrics = SequenceLayoutComposer.metrics(
+            config: config,
+            fontSize: editorFontSize,
+            paperWidthPoints: paperW
+        )
+        for (index, page) in pages.enumerated() {
+            var overlays = media.textOverlays
+            if let pageOverlays = pageTextOverlays, index < pageOverlays.count {
+                overlays = pageOverlays[index]
+            }
+
+            var printBody = page
+            if !overlays.isEmpty {
+                printBody = SequenceLayoutComposer.composeTextOverlays(
+                    body: printBody,
+                    overlays: overlays,
                     config: config,
-                    media: media
+                    fontSize: editorFontSize,
+                    paperWidthPoints: paperW
                 )
-                builder.imageBanded(composed, maxWidth: config.dotsPerLine, bandHeight: 160)
-                if config.cutPaper {
-                    builder.cut(feedLines: feedBeforeCut, reassertChinese: false)
-                } else {
-                    builder.feed(lines: feedBeforeCut)
-                }
-            } else {
+            }
+            // Leave blank columns under logos so native glyphs do not collide with logo strips.
+            if !media.logos.isEmpty {
+                printBody = SequenceLayoutComposer.clearFrames(
+                    body: printBody,
+                    frames: media.logos.map(\.frame),
+                    config: config,
+                    fontSize: editorFontSize,
+                    paperWidthPoints: paperW
+                )
+            }
+
+            let lines = layoutLines(from: printBody, config: config)
+            var logoByLine: [Int: [SequenceLogoLayer]] = [:]
+            for layer in media.logos {
+                let row = SequenceLayoutComposer.gridRect(for: layer.frame, metrics: metrics).row
+                logoByLine[row, default: []].append(layer)
+            }
+
+            // Background: short lead-in strip only (cannot sit under native GBK lines).
+            if let bg = media.background {
+                builder.initializeForRaster()
+                let bgStrip = renderBackgroundStrip(
+                    image: bg,
+                    scalePercent: media.backgroundScalePercent,
+                    config: config
+                )
+                builder.imageBanded(bgStrip, maxWidth: config.dotsPerLine, bandHeight: 48)
+            }
+
+            let canvasForLogos: CGSize = media.canvasSize.width > 1
+                ? media.canvasSize
+                : CGSize(width: paperW, height: max(paperW, 1))
+
+            func emitNative(_ slice: ArraySlice<LayoutLine>) {
+                guard !slice.isEmpty else { return }
                 builder.initialize()
-                let lines = layoutLines(from: page, config: config)
-                emitBatched(lines, into: builder, config: config)
-                if config.cutPaper {
-                    builder.cut(feedLines: feedBeforeCut, reassertChinese: true)
-                } else {
-                    builder.feed(lines: feedBeforeCut)
+                emitBatched(Array(slice), into: builder, config: config)
+            }
+            func emitLogo(_ layer: SequenceLogoLayer) {
+                builder.initializeForRaster()
+                let strip = renderLogoStrip(layer: layer, canvasSize: canvasForLogos, config: config)
+                builder.imageBanded(strip, maxWidth: config.dotsPerLine, bandHeight: 48)
+            }
+
+            var lineCursor = 0
+            for row in logoByLine.keys.sorted() {
+                let end = min(row, lines.count)
+                if lineCursor < end {
+                    emitNative(lines[lineCursor..<end])
                 }
+                lineCursor = end
+                for layer in logoByLine[row] ?? [] {
+                    emitLogo(layer)
+                }
+            }
+            if lineCursor < lines.count {
+                emitNative(lines[lineCursor...])
+            } else if lines.isEmpty, media.logos.isEmpty {
+                // Empty ticket / overlay-only already collapsed into printBody lines.
+                builder.initialize()
+                emitBatched(lines, into: builder, config: config)
+            }
+
+            if config.cutPaper {
+                builder.cut(feedLines: feedBeforeCut, reassertChinese: true)
+            } else {
+                builder.feed(lines: feedBeforeCut)
             }
         }
         return builder.build()
+    }
+
+    /// Full-width strip cropped to logo height; logo placed at its canvas X (Y = 0 in strip).
+    static func renderLogoStrip(
+        layer: SequenceLogoLayer,
+        canvasSize: CGSize,
+        config: PrinterConfig
+    ) -> NSImage {
+        let width = CGFloat(config.dotsPerLine)
+        let scale: CGFloat = canvasSize.width > 1 ? width / canvasSize.width : 1
+        let h = max(8, ceil(layer.frame.height * scale))
+        let size = NSSize(width: width, height: h)
+        return NSImage(size: size, flipped: true) { _ in
+            NSColor.white.setFill()
+            NSRect(origin: .zero, size: size).fill()
+            let dest = NSRect(
+                x: layer.frame.x * scale,
+                y: 0,
+                width: max(1, layer.frame.width * scale),
+                height: h
+            )
+            layer.image.draw(
+                in: dest,
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1.0,
+                respectFlipped: true,
+                hints: [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)]
+            )
+            return true
+        }
+    }
+
+    /// Short background strip (aspect-fit on paper width) — no empty canvas pad.
+    static func renderBackgroundStrip(
+        image: NSImage,
+        scalePercent: Double,
+        config: PrinterConfig
+    ) -> NSImage {
+        let width = CGFloat(config.dotsPerLine)
+        let fitted = fitCenterRect(
+            imageSize: image.size,
+            in: NSRect(x: 0, y: 0, width: width, height: width)
+        )
+        let p = max(SequenceLogoItem.minScalePercent, min(SequenceLogoItem.maxScalePercent, scalePercent)) / 100
+        let w = fitted.width * p
+        let h = max(8, fitted.height * p)
+        let size = NSSize(width: width, height: h)
+        return NSImage(size: size, flipped: true) { _ in
+            NSColor.white.setFill()
+            NSRect(origin: .zero, size: size).fill()
+            let rect = NSRect(x: (width - w) / 2, y: 0, width: w, height: h)
+            image.draw(
+                in: rect,
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1.0,
+                respectFlipped: true,
+                hints: [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)]
+            )
+            return true
+        }
     }
 
     /// Preview bitmap + the exact sequence print payload.
@@ -236,39 +422,40 @@ enum RichTextPrintRenderer {
             media: media
         )
         let pngData = Self.pngData(from: image) ?? Data()
-        let payload = renderSequenceESCPOS(pages: [attributedString], config: config, media: media)
-        let hasMedia = media.background != nil || !media.logos.isEmpty
-        let firstRaster = hasMedia
-            ? BarcodeGenerator.rasterizeWithPNG(image, maxWidth: config.dotsPerLine)
-            : nil
-        let raster = firstRaster?.raster
-        let widthBytes = raster?.widthBytes ?? 0
-        let height = raster?.height ?? 0
-        let rasterData = raster?.data ?? Data()
-        let expected = widthBytes * height
+        let paperW = media.canvasSize.width > 1
+            ? media.canvasSize.width
+            : AttributedTextView.editorPaperWidth(config: config, fontSize: AttributedTextView.defaultFontSize)
+        let payload = renderSequenceESCPOS(
+            pages: [attributedString],
+            config: config,
+            media: media,
+            editorFontSize: AttributedTextView.defaultFontSize,
+            paperWidthPoints: paperW
+        )
+        let hasImages = media.hasImageMedia
 
         return PrintArtifacts(
             sourceText: sourceText,
             attributedRTFD: attributedRTFD,
-            pngData: firstRaster?.grayPNG ?? pngData,
-            rasterData: rasterData,
+            pngData: pngData,
+            rasterData: Data(),
             payload: payload,
             imagePixelWidth: Int(image.size.width),
             imagePixelHeight: Int(image.size.height),
-            rasterWidthBytes: widthBytes,
-            rasterHeight: height,
-            headerXL: widthBytes & 0xFF,
-            headerXH: (widthBytes >> 8) & 0xFF,
-            headerYL: height & 0xFF,
-            headerYH: (height >> 8) & 0xFF,
-            expectedRasterBytes: expected,
-            renderMode: hasMedia ? .raster : .nativeText,
-            usedNativeText: !hasMedia,
-            usedRaster: hasMedia,
+            rasterWidthBytes: 0,
+            rasterHeight: 0,
+            headerXL: 0,
+            headerXH: 0,
+            headerYL: 0,
+            headerYH: 0,
+            expectedRasterBytes: 0,
+            renderMode: .nativeText,
+            usedNativeText: true,
+            usedRaster: hasImages,
             dpi: 203,
             printableWidthDots: config.dotsPerLine,
-            printerModelHint: hasMedia
-                ? "POS-80 sequence banded GS v 0 (logo+text composite)"
+            printerModelHint: hasImages
+                ? "POS-80 sequence native GBK + media strip"
                 : "POS-80 sequence native GBK"
         )
     }

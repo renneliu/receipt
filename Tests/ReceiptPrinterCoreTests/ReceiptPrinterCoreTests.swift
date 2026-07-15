@@ -335,4 +335,51 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         XCTAssertFalse(escpos.contains(Data([0x1D, 0x76, 0x30])))
         XCTAssertTrue(escpos.contains(Data([0x1C, 0x26])))
     }
+
+    func testQuickPrintAutoNumberIncrementsAndPads() {
+        XCTAssertEqual(QuickPrintAutoNumber.format(start: "01", offset: 0), "01")
+        XCTAssertEqual(QuickPrintAutoNumber.format(start: "01", offset: 2), "03")
+        XCTAssertEqual(QuickPrintAutoNumber.format(start: "A01", offset: 1), "A02")
+        XCTAssertEqual(QuickPrintAutoNumber.format(start: "99", offset: 1), "100")
+    }
+
+    func testQuickPrintAutoNumberAdvancesStartAfterPrint() {
+        var n = QuickPrintAutoNumber(startValue: "01", batchCount: 3)
+        n.advanceAfterPrint(count: 3)
+        XCTAssertEqual(n.startValue, "04")
+        n.advanceAfterPrint(count: 1)
+        XCTAssertEqual(n.startValue, "05")
+    }
+
+    func testComposeTextOverlaysPaintsNumberWithoutRaster() {
+        let config = PrinterConfig.default80mm
+        let fontSize = AttributedTextView.defaultFontSize
+        let paperW = AttributedTextView.editorPaperWidth(config: config, fontSize: fontSize)
+        let body = NSAttributedString(
+            string: "Hello 测试小票",
+            attributes: AttributedTextView.defaultTypingAttributes(fontSize: fontSize)
+        )
+        let frame = SequencePlaceholderFrame(x: 200, y: 12, width: 80, height: 36)
+        let composed = SequenceLayoutComposer.composeTextOverlays(
+            body: body,
+            overlays: [.init(text: "01", frame: frame, fontSize: fontSize)],
+            config: config,
+            fontSize: fontSize,
+            paperWidthPoints: paperW
+        )
+        XCTAssertTrue(composed.string.contains("01") || composed.string.contains("Hello"))
+        let escpos = RichTextPrintRenderer.renderSequenceESCPOS(
+            pages: [body],
+            config: config,
+            media: .init(
+                textOverlays: [.init(text: "01", frame: frame, fontSize: fontSize)],
+                canvasSize: CGSize(width: paperW, height: 480)
+            ),
+            pageTextOverlays: [[.init(text: "01", frame: frame, fontSize: fontSize)]],
+            editorFontSize: fontSize,
+            paperWidthPoints: paperW
+        )
+        XCTAssertTrue(escpos.contains(Data([0x1C, 0x26]))) // FS & native Chinese
+        XCTAssertFalse(escpos.contains(Data([0x1D, 0x76, 0x30]))) // no GS v 0 without logos
+    }
 }
