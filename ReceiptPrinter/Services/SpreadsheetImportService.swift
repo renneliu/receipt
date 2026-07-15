@@ -47,9 +47,12 @@ enum SpreadsheetImportService {
     }
 
     private static func loadDelimited(from url: URL, delimiter: Character) throws -> SpreadsheetTable {
-        let text = try String(contentsOf: url, encoding: .utf8)
+        let data = try Data(contentsOf: url)
+        // Excel on Chinese Windows often saves CSV as GBK/GB18030, not UTF-8.
+        let text = try decodeSpreadsheetText(data)
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\u{FEFF}", with: "") // BOM
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         guard let headerLine = lines.first else { throw SpreadsheetImportError.emptyFile }
@@ -62,6 +65,15 @@ enum SpreadsheetImportService {
         }
         guard !headers.isEmpty else { throw SpreadsheetImportError.emptyFile }
         return SpreadsheetTable(headers: headers, rows: rows)
+    }
+
+    private static func decodeSpreadsheetText(_ data: Data) throws -> String {
+        if let utf8 = String(data: data, encoding: .utf8) { return utf8 }
+        let gb = CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)
+        let enc = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(gb))
+        if let gbk = String(data: data, encoding: enc) { return gbk }
+        if let utf16 = String(data: data, encoding: .utf16) { return utf16 }
+        throw SpreadsheetImportError.unsupportedType
     }
 
     /// Minimal CSV parser with quotes.

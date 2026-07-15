@@ -365,12 +365,18 @@ final class ESCPOSBuilder {
     }
 
     @discardableResult
-    func cut(feedLines override: Int? = nil) -> Self {
+    func cut(feedLines override: Int? = nil, reassertChinese: Bool = true) -> Self {
         if config.cutPaper {
             let lines = max(1, min(override ?? config.feedLinesBeforeCut, 255))
             feed(lines: lines)
             // Full cut (GS V 0) — works on this POS-80 after text jobs.
             data.append(contentsOf: [0x1D, 0x56, 0x00])
+            if reassertChinese {
+                data.append(contentsOf: [0x1C, 0x26])
+                chineseModeActive = true
+            } else {
+                chineseModeActive = false
+            }
         }
         return self
     }

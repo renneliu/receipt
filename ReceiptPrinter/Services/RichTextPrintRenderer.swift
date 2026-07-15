@@ -76,6 +76,26 @@ enum RichTextPrintRenderer {
         return builder.build()
     }
 
+    /// Sequence tickets as per-page bit-images (`GS v 0` via `initializeForRaster`).
+    /// Cuts after each page so every Excel row becomes its own ticket.
+    static func renderSequenceESCPOS(pages: [NSAttributedString], config: PrinterConfig) -> Data {
+        let builder = ESCPOSBuilder(config: config).initializeForRaster()
+        let feedBeforeCut = max(config.feedLinesBeforeCut, minimumFeedsBeforeCut)
+        for (index, page) in pages.enumerated() {
+            let image = renderImage(attributedString: page, config: config)
+            builder.image(image, maxWidth: config.dotsPerLine)
+            if config.cutPaper {
+                builder.cut(feedLines: feedBeforeCut, reassertChinese: false)
+                if index < pages.count - 1 {
+                    builder.initializeForRaster()
+                }
+            } else {
+                builder.feed(lines: feedBeforeCut)
+            }
+        }
+        return builder.build()
+    }
+
     /// Diagnostic capture: preview PNG for reference + the EXACT native-text payload that will be sent.
     static func buildArtifacts(
         attributedString: NSAttributedString,

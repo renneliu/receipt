@@ -254,4 +254,85 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         let lines = RichTextPrintRenderer.layoutLines(from: body, config: config)
         XCTAssertTrue(lines.contains { if case .divider = $0 { return true }; return false })
     }
+
+    func testSequenceComposerTruncatesToPlaceholderColumns() {
+        let config = PrinterConfig.default80mm
+        let fontSize = AttributedTextView.defaultFontSize
+        let paperW = AttributedTextView.editorPaperWidth(config: config, fontSize: fontSize)
+        let body = NSAttributedString(string: "标题\n", attributes: AttributedTextView.defaultTypingAttributes())
+        let m = SequenceLayoutComposer.metrics(config: config, fontSize: fontSize, paperWidthPoints: paperW)
+        // Box ~4 columns wide on second grid row (overlay paint, not append).
+        let frame = SequencePlaceholderFrame(
+            x: m.contentOriginX,
+            y: m.contentOriginY + m.lineHeight,
+            width: m.unitWidth * 4,
+            height: m.lineHeight
+        )
+        let box = SequencePlaceholder(bindingKey: "姓名", frame: frame)
+        let composed = SequenceLayoutComposer.compose(
+            body: body,
+            placeholders: [box],
+            values: ["姓名": "张三李四王五赵六"],
+            config: config,
+            fontSize: fontSize,
+            paperWidthPoints: paperW
+        )
+        let lines = composed.string.components(separatedBy: "\n")
+        XCTAssertEqual(lines.first, "标题")
+        XCTAssertGreaterThanOrEqual(lines.count, 2)
+        let painted = lines[1]
+        let valueWidth = ReceiptTextLayout.displayWidth(
+            painted.filter { !$0.isWhitespace }.map(String.init).joined()
+        )
+        XCTAssertLessThanOrEqual(valueWidth, 4 + 2, "placeholder value must not exceed box column width")
+        XCTAssertTrue(painted.contains("张") || painted.contains("三"))
+    }
+
+    func testSequenceComposerOverlaysPlaceholderBesideBodyOnSameRow() {
+        let config = PrinterConfig.default80mm
+        let fontSize = AttributedTextView.defaultFontSize
+        let paperW = AttributedTextView.editorPaperWidth(config: config, fontSize: fontSize)
+        let m = SequenceLayoutComposer.metrics(config: config, fontSize: fontSize, paperWidthPoints: paperW)
+        let body = NSAttributedString(string: "左侧文字", attributes: AttributedTextView.defaultTypingAttributes())
+        let frame = SequencePlaceholderFrame(
+            x: m.contentOriginX + m.unitWidth * 10,
+            y: m.contentOriginY,
+            width: m.unitWidth * 6,
+            height: m.lineHeight
+        )
+        let composed = SequenceLayoutComposer.compose(
+            body: body,
+            placeholders: [SequencePlaceholder(bindingKey: "序列", frame: frame)],
+            values: ["序列": "1"],
+            config: config,
+            fontSize: fontSize,
+            paperWidthPoints: paperW
+        )
+        let first = composed.string.components(separatedBy: "\n").first ?? ""
+        XCTAssertTrue(first.contains("左侧"), "body prefix must remain on row 0")
+        XCTAssertTrue(first.contains("1"), "placeholder value must overlay same row")
+    }
+
+    func testSequenceComposerPrintsNativeNotRaster() {
+        let config = PrinterConfig.default80mm
+        let fontSize = AttributedTextView.defaultFontSize
+        let paperW = AttributedTextView.editorPaperWidth(config: config, fontSize: fontSize)
+        let body = NSAttributedString(
+            string: "Hello {{名}}",
+            attributes: AttributedTextView.defaultTypingAttributes()
+        )
+        let frame = SequencePlaceholderFrame(x: 20, y: 40, width: 120, height: 36)
+        let composed = SequenceLayoutComposer.compose(
+            body: body,
+            placeholders: [SequencePlaceholder(bindingKey: "名", frame: frame)],
+            values: ["名": "测试"],
+            config: config,
+            fontSize: fontSize,
+            paperWidthPoints: paperW
+        )
+        XCTAssertTrue(composed.string.contains("Hello") || composed.string.contains("测试"))
+        let escpos = RichTextPrintRenderer.renderESCPOS(attributedString: composed, config: config)
+        XCTAssertFalse(escpos.contains(Data([0x1D, 0x76, 0x30])))
+        XCTAssertTrue(escpos.contains(Data([0x1C, 0x26])))
+    }
 }

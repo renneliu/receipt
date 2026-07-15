@@ -34,9 +34,14 @@ actor PrintController {
 
         let headerValid: Bool
         if artifacts.usedRaster {
-            headerValid = artifacts.rasterData.count == artifacts.expectedRasterBytes
+            let singleRasterOK = artifacts.rasterData.count == artifacts.expectedRasterBytes
                 && artifacts.rasterWidthBytes * artifacts.rasterHeight == artifacts.expectedRasterBytes
                 && artifacts.expectedRasterBytes > 0
+            // Multi-page sequence jobs embed several GS v 0 blocks in `payload` and may only
+            // attach the first page's raster for diagnostics.
+            let embeddedRasterOK = artifacts.payload.count > 64
+                && artifacts.payload.range(of: Data([0x1D, 0x76, 0x30])) != nil
+            headerValid = singleRasterOK || embeddedRasterOK
         } else {
             // Native text jobs have no GS v 0 payload to validate.
             headerValid = true
