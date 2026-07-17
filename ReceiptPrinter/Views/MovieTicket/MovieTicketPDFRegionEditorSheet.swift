@@ -29,7 +29,9 @@ struct MovieTicketPDFRegionEditorSheet: View {
     @State private var mapValueMappings: [MovieTicketPDFValueMapping] = []
     @State private var mapElementId: UUID?
     @State private var mapHint: String = ""
-    @State private var status: String = "拖拽空白处新建框选；拖动已有蓝框可移动位置"
+    /// When set, the next rubber-band maps directly to this template element (manual fallback).
+    @State private var boxTargetElementId: UUID?
+    @State private var status: String = "每个字段先点「自动识别」；失败后再「框选定位」"
 
     private static let zoomMin: CGFloat = 0.5
     private static let zoomMax: CGFloat = 3.0
@@ -41,15 +43,41 @@ struct MovieTicketPDFRegionEditorSheet: View {
         return displayWidth * ratio
     }
 
+    private static let recognizerOrder: [MovieTicketFieldKind] = [
+        .movieTitle, .showDate, .startTime, .timeRange, .hall,
+        .seatArea, .ticketType, .ticketPrice, .serialNumber, .barcode, .qrCode
+    ]
+
     private var mappableElements: [MovieTicketElement] {
-        templateElements.filter {
+        // One recognizer row per field kind. Dual-stub templates (e.g. Ritz) place
+        // the same kinds twice on the canvas; PDF extraction keys by fieldKind.
+        let filtered = templateElements.filter {
             $0.kind == .fieldPlaceholder && ($0.fieldKind?.isPDFExtractable ?? false)
         }
+        let sorted = filtered.sorted { a, b in
+            let ia = Self.recognizerOrder.firstIndex(of: a.fieldKind ?? .movieTitle) ?? 99
+            let ib = Self.recognizerOrder.firstIndex(of: b.fieldKind ?? .movieTitle) ?? 99
+            if ia != ib { return ia < ib }
+            return elementIDString(a.id) < elementIDString(b.id)
+        }
+        var seen = Set<MovieTicketFieldKind>()
+        var unique: [MovieTicketElement] = []
+        for el in sorted {
+            guard let kind = el.fieldKind else { continue }
+            if seen.insert(kind).inserted {
+                unique.append(el)
+            }
+        }
+        return unique
     }
 
+    private func elementIDString(_ id: UUID) -> String { id.uuidString }
+
     private var overlayRegions: [(id: UUID, rect: CGRect, label: String)] {
-        rule.regions.map { region in
-            (
+        // Auto-detect regions are page-wide — hide them so they don't block box-select.
+        rule.regions.compactMap { region in
+            guard region.showsCanvasBox else { return nil }
+            return (
                 region.id,
                 CGRect(x: region.rect.x, y: region.rect.y, width: region.rect.width, height: region.rect.height),
                 label(for: region)
@@ -62,33 +90,12 @@ struct MovieTicketPDFRegionEditorSheet: View {
             VStack(spacing: 0) {
                 header
                 Divider()
-                ScrollView([.horizontal, .vertical]) {
-                    PDFRegionSelectNSViewRepresentable(
-                        image: pageImage,
-                        displaySize: CGSize(width: displayWidth, height: displayHeight),
-                        regions: overlayRegions,
-                        selectedRegionId: selectedRegionId,
-                        onCreateRegion: handleDragEnded,
-                        onMoveRegion: handleRegionMoved,
-                        onSelectRegion: { id in
-                            selectedRegionId = id
-                            if let region = rule.regions.first(where: { $0.id == id }) {
-                                status = "已选中「\(label(for: region))」— 可拖动框位置，或点「改」编辑设置"
-                            }
-                        }
-                    )
-                    .frame(width: displayWidth, height: displayHeight)
-                    .padding(16)
+                HSplitView {
+                    pdfCanvasPane
+                        .frame(minWidth: 420)
+                    recognizerSidebar
+                        .frame(minWidth: 320, idealWidth: 360, maxWidth: 440)
                 }
-                .background(Color(nsColor: .windowBackgroundColor))
-                // Disable canvas while mapping overlay is open (avoids stuck mouse sessions).
-                .allowsHitTesting(!showMappingSheet)
-                Divider()
-                regionList
-                    // Fixed panel height so the PDF ScrollView above cannot steal this space,
-                    // and the inner row ScrollView always gets a real viewport (not ~0).
-                    .frame(height: 220)
-                    .layoutPriority(1)
                 Divider()
                 Text(status)
                     .font(.caption)
@@ -97,8 +104,6 @@ struct MovieTicketPDFRegionEditorSheet: View {
                     .padding(8)
             }
 
-            // Inline overlay instead of nested .sheet — nested sheets on macOS often leave
-            // an invisible modal that freezes the parent editor after dismiss.
             if showMappingSheet, let pending {
                 Color.black.opacity(0.28)
                     .ignoresSafeArea()
@@ -111,7 +116,7 @@ struct MovieTicketPDFRegionEditorSheet: View {
                     .frame(maxWidth: 540)
             }
         }
-        .frame(minWidth: 820, minHeight: 640)
+        .frame(minWidth: 980, minHeight: 640)
         .onAppear {
             if mapElementId == nil {
                 mapElementId = mappableElements.first?.id
@@ -122,6 +127,34 @@ struct MovieTicketPDFRegionEditorSheet: View {
             editingRegionId = nil
             pending = nil
         }
+    }
+
+    private var pdfCanvasPane: some View {
+        ScrollView([.horizontal, .vertical]) {
+            PDFRegionSelectNSViewRepresentable(
+                image: pageImage,
+                displaySize: CGSize(width: displayWidth, height: displayHeight),
+                regions: overlayRegions,
+                selectedRegionId: selectedRegionId,
+                onCreateRegion: handleDragEnded,
+                onMoveRegion: handleRegionMoved,
+                onSelectRegion: { id in
+                    selectedRegionId = id
+                    if let region = rule.regions.first(where: { $0.id == id }) {
+                        status = "已选中「\(label(for: region))」— 可拖动框位置"
+                    }
+                }
+            )
+            .frame(width: displayWidth, height: displayHeight)
+            .padding(16)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .allowsHitTesting(!showMappingSheet)
+    }
+
+    private var recognizerSidebar: some View {
+        regionList
+            .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var header: some View {
@@ -162,21 +195,24 @@ struct MovieTicketPDFRegionEditorSheet: View {
     }
 
     private var regionList: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("已映射区域").font(.subheadline.weight(.semibold))
-            Text("点击一行可修改设置；在 PDF 上拖动蓝框可移动位置。")
+        VStack(alignment: .leading, spacing: 6) {
+            Text("字段识别器").font(.headline)
+            Text("与左侧 PDF 并列。先自动识别，失败再框选；每项可设关键词→打印映射。")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            if rule.regions.isEmpty {
-                Text("尚无区域。在上方 PDF 上拖拽框选。")
+                .fixedSize(horizontal: false, vertical: true)
+
+            ruleOptionsBar
+
+            if mappableElements.isEmpty {
+                Text("当前模板没有可识别的字段。请先在模板编辑页添加「影片名称 / 日期 / 流水号…」。")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.red)
             } else {
-                // Scroll so many regions never compress/clip inside the fixed panel height.
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(rule.regions) { region in
-                            regionRow(region)
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(mappableElements) { el in
+                            recognizerRow(el)
                         }
                     }
                 }
@@ -187,84 +223,359 @@ struct MovieTicketPDFRegionEditorSheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func regionRow(_ region: MovieTicketPDFRegion) -> some View {
-        HStack(spacing: 8) {
-            Button {
-                beginEditRegion(region)
-            } label: {
+    private var ruleOptionsBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("无指定座位（导入 PDF 时不检索座位）", isOn: $rule.skipSeatRecognition)
+                .font(.caption)
+            HStack(spacing: 8) {
+                Text("默认票型")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("本规则下未识别到票型时填写", text: $rule.defaultTicketType)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+            }
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func recognizerRow(_ el: MovieTicketElement) -> some View {
+        let kind = el.fieldKind
+        let region = regionForElement(el)
+        let isBoxing = boxTargetElementId == el.id
+        let seatSkipped = kind == .seatArea && rule.skipSeatRecognition
+        let hint = recognizerHint(region: region, seatSkipped: seatSkipped)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(elementLabel(el))
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(hint.text)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(hint.color)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
+                    .textSelection(.enabled)
+            }
+            if let kind {
+                Text(kind.recognizerSummary)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            recognizerButtons(el: el, region: region, seatSkipped: seatSkipped, isBoxing: isBoxing)
+            if isBoxing {
+                Text("下一步：在左侧 PDF 上拖拽出选区")
+                    .font(.caption2)
+                    .foregroundStyle(Color.accentColor)
+            }
+            if !seatSkipped {
+                printAffixEditor(for: el)
+                valueMappingEditor(for: el)
+            }
+        }
+        .padding(10)
+        .background(isBoxing ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(isBoxing ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1)
+        )
+    }
+
+    private func printAffixEditor(for el: MovieTicketElement) -> some View {
+        let kind = el.fieldKind
+        let isDateTime = kind == .showDate || kind == .startTime || kind == .timeRange || kind == .endTime
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("字段前后文字")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            if isDateTime {
+                Text("日期/时间用于排期解析，前后缀不会写入草稿；请用模板文字框拼接。")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("识别并映射后，在最终填入值前/后追加文字。")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
                 HStack(spacing: 6) {
-                    Text(label(for: region))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                    Text(region.captureMode.displayName)
+                    TextField("前缀", text: printPrefixBinding(for: el))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption2)
+                    Text("· 识别值 ·")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    if !region.regionKeywords.isEmpty {
-                        Text(region.regionKeywords.joined(separator: ", "))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    if !region.extractSample.isEmpty {
-                        Text("提取「\(region.extractSample)」")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                            .lineLimit(1)
-                    } else if region.extractKind != .entire {
-                        Text(region.extractKind.displayName)
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                            .lineLimit(1)
-                    }
-                    if !region.valueMappings.isEmpty {
-                        Text("映射×\(region.valueMappings.count)")
-                            .font(.caption2)
-                            .foregroundStyle(.purple)
-                            .lineLimit(1)
-                    }
-                    if !region.extractedHint.isEmpty {
-                        Text(region.extractedHint)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
+                    TextField("后缀", text: printSuffixBinding(for: el))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption2)
                 }
-                .contentShape(Rectangle())
+                if let preview = printAffixPreview(for: el) {
+                    Text("预览：\(preview)")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                }
             }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Button("改") { beginEditRegion(region) }
-                .controlSize(.small)
-            Button("删", role: .destructive) {
-                if selectedRegionId == region.id { selectedRegionId = nil }
-                if editingRegionId == region.id {
-                    closeMappingOverlay()
+        }
+        .padding(.top, 2)
+    }
+
+    private func printPrefixBinding(for el: MovieTicketElement) -> Binding<String> {
+        Binding(
+            get: { regionForElement(el)?.printPrefix ?? "" },
+            set: { newValue in
+                let idx = ensureRegionStub(for: el)
+                guard idx >= 0 else { return }
+                rule.regions[idx].printPrefix = newValue
+            }
+        )
+    }
+
+    private func printSuffixBinding(for el: MovieTicketElement) -> Binding<String> {
+        Binding(
+            get: { regionForElement(el)?.printSuffix ?? "" },
+            set: { newValue in
+                let idx = ensureRegionStub(for: el)
+                guard idx >= 0 else { return }
+                rule.regions[idx].printSuffix = newValue
+            }
+        )
+    }
+
+    private func printAffixPreview(for el: MovieTicketElement) -> String? {
+        guard let region = regionForElement(el) else { return nil }
+        let core = region.extractedHint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !core.isEmpty || !region.printPrefix.isEmpty || !region.printSuffix.isEmpty else {
+            return nil
+        }
+        let mapped = MovieTicketPDFRecognitionService.applyValueMappings(
+            core.isEmpty ? "…" : core,
+            mappings: region.valueMappings
+        )
+        return MovieTicketPDFRecognitionService.applyPrintAffixes(mapped, region: region)
+    }
+
+    private func valueMappingEditor(for el: MovieTicketElement) -> some View {
+        let mappings = regionForElement(el)?.valueMappings ?? []
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("关键词映射（打印简写）")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text("检索到左侧内容时，小票上打印右侧文字。")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            ForEach(Array(mappings.enumerated()), id: \.element.id) { index, row in
+                HStack(spacing: 4) {
+                    TextField("原文", text: mappingMatchBinding(el: el, index: index))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption2)
+                    Text("→")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    TextField("打印", text: mappingReplacementBinding(el: el, index: index))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption2)
+                    Button("删", role: .destructive) {
+                        removeMapping(el: el, index: index)
+                    }
+                    .controlSize(.mini)
                 }
-                rule.regions.removeAll { $0.id == region.id }
-                status = "已删除「\(label(for: region))」"
+            }
+            Button("+ 添加映射") {
+                appendMapping(for: el)
             }
             .controlSize(.small)
         }
-        .font(.caption)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .fixedSize(horizontal: false, vertical: true)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(selectedRegionId == region.id
-                      ? Color.accentColor.opacity(0.15)
-                      : Color.clear)
+        .padding(.top, 2)
+    }
+
+    private func mappingMatchBinding(el: MovieTicketElement, index: Int) -> Binding<String> {
+        Binding(
+            get: {
+                guard let maps = regionForElement(el)?.valueMappings, maps.indices.contains(index) else {
+                    return ""
+                }
+                return maps[index].match
+            },
+            set: { newValue in
+                updateMapping(el: el, index: index) { $0.match = newValue }
+            }
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(
-                    selectedRegionId == region.id ? Color.accentColor.opacity(0.5) : Color.clear,
-                    lineWidth: 1
-                )
+    }
+
+    private func mappingReplacementBinding(el: MovieTicketElement, index: Int) -> Binding<String> {
+        Binding(
+            get: {
+                guard let maps = regionForElement(el)?.valueMappings, maps.indices.contains(index) else {
+                    return ""
+                }
+                return maps[index].replacement
+            },
+            set: { newValue in
+                updateMapping(el: el, index: index) { $0.replacement = newValue }
+            }
         )
+    }
+
+    private func ensureRegionStub(for el: MovieTicketElement) -> Int {
+        if let idx = rule.regions.firstIndex(where: {
+            $0.elementId == el.id || $0.fieldKind == el.fieldKind
+        }) {
+            return idx
+        }
+        guard let field = el.fieldKind else { return -1 }
+        let region = MovieTicketPDFRegion(
+            fieldKind: field,
+            elementId: el.id,
+            rect: MovieTicketRelativeRect(x: 0.02, y: 0.02, width: 0.96, height: 0.96),
+            pageIndex: 0,
+            captureMode: .withKeywords,
+            extractedHint: "",
+            isPageWideAuto: true
+        )
+        rule.regions.append(region)
+        return rule.regions.count - 1
+    }
+
+    private func appendMapping(for el: MovieTicketElement) {
+        let idx = ensureRegionStub(for: el)
+        guard idx >= 0 else { return }
+        // Prefill 原文 with the latest recognized value so user only types the print short form.
+        let recognized = recognizedText(for: el)
+        rule.regions[idx].valueMappings.append(
+            MovieTicketPDFValueMapping(match: recognized, replacement: "")
+        )
+    }
+
+    /// Best available recognized text for mapping 原文 (hint → live auto-detect).
+    private func recognizedText(for el: MovieTicketElement) -> String {
+        if let hint = regionForElement(el)?.extractedHint
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !hint.isEmpty {
+            return hint
+        }
+        guard let kind = el.fieldKind, let url = samplePDFURL,
+              let hit = MovieTicketPDFFieldRecognizer.autoDetect(fieldKind: kind, from: url)
+        else { return "" }
+        return hit.value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func removeMapping(el: MovieTicketElement, index: Int) {
+        guard let idx = rule.regions.firstIndex(where: {
+            $0.elementId == el.id || $0.fieldKind == el.fieldKind
+        }),
+        rule.regions[idx].valueMappings.indices.contains(index)
+        else { return }
+        rule.regions[idx].valueMappings.remove(at: index)
+    }
+
+    private func updateMapping(
+        el: MovieTicketElement,
+        index: Int,
+        mutate: (inout MovieTicketPDFValueMapping) -> Void
+    ) {
+        let idx = ensureRegionStub(for: el)
+        guard idx >= 0, rule.regions[idx].valueMappings.indices.contains(index) else { return }
+        mutate(&rule.regions[idx].valueMappings[index])
+    }
+
+    private func regionForElement(_ el: MovieTicketElement) -> MovieTicketPDFRegion? {
+        rule.regions.first { $0.elementId == el.id || $0.fieldKind == el.fieldKind }
+    }
+
+    private func recognizerHint(
+        region: MovieTicketPDFRegion?,
+        seatSkipped: Bool
+    ) -> (text: String, color: Color) {
+        if seatSkipped { return ("已跳过", .orange) }
+        if let region {
+            let t = region.extractedHint.isEmpty ? "已配置" : region.extractedHint
+            return (t, .secondary)
+        }
+        return ("未配置", .red)
+    }
+
+    @ViewBuilder
+    private func recognizerButtons(
+        el: MovieTicketElement,
+        region: MovieTicketPDFRegion?,
+        seatSkipped: Bool,
+        isBoxing: Bool
+    ) -> some View {
+        if !seatSkipped {
+            HStack(spacing: 6) {
+                Button("自动识别") { runAutoDetect(for: el) }
+                    .controlSize(.small)
+                    .disabled(showMappingSheet || samplePDFURL == nil)
+                Button(isBoxing ? "框选中…" : "框选定位") {
+                    toggleBoxTarget(el, currentlyBoxing: isBoxing)
+                }
+                .controlSize(.small)
+                .disabled(showMappingSheet)
+                if let region {
+                    Button("高级") { beginEditRegion(region) }
+                        .controlSize(.small)
+                        .disabled(showMappingSheet)
+                    Button("清除", role: .destructive) {
+                        removeRecognizer(for: el, regionId: region.id)
+                    }
+                    .controlSize(.small)
+                    .disabled(showMappingSheet)
+                }
+            }
+        }
+    }
+
+    private func toggleBoxTarget(_ el: MovieTicketElement, currentlyBoxing: Bool) {
+        if currentlyBoxing {
+            boxTargetElementId = nil
+            status = "已取消框选"
+        } else {
+            boxTargetElementId = el.id
+            status = "请在 PDF 上拖拽框选「\(elementLabel(el))」的识别位置"
+        }
+    }
+
+    private func removeRecognizer(for el: MovieTicketElement, regionId: UUID) {
+        rule.regions.removeAll { $0.elementId == el.id || $0.fieldKind == el.fieldKind }
+        if selectedRegionId == regionId { selectedRegionId = nil }
+        status = "已删除「\(elementLabel(el))」识别配置"
+    }
+
+    private func runAutoDetect(for el: MovieTicketElement) {
+        guard let kind = el.fieldKind, let url = samplePDFURL else {
+            status = "无样本 PDF，无法自动识别"
+            return
+        }
+        if kind == .seatArea, rule.skipSeatRecognition {
+            status = "已设为无指定座位，跳过座位识别"
+            return
+        }
+        let hit = MovieTicketPDFFieldRecognizer.autoDetect(fieldKind: kind, from: url)
+        guard let hit else {
+            boxTargetElementId = el.id
+            status = "未找到「\(elementLabel(el))」特征 — 请在左侧 PDF 上框选定位"
+            return
+        }
+        let previous = rule.regions.first {
+            $0.elementId == el.id || $0.fieldKind == kind
+        }
+        guard let region = MovieTicketPDFFieldRecognizer.makeAutoRegion(
+            for: el,
+            hit: hit,
+            existingId: previous?.id,
+            preserving: previous
+        ) else { return }
+        rule.regions.removeAll { $0.elementId == el.id || $0.fieldKind == kind }
+        rule.regions.append(region)
+        selectedRegionId = region.id
+        boxTargetElementId = nil
+        status = "已自动识别「\(elementLabel(el))」→ \(hit.value)"
     }
 
     private func handleDragEnded(_ viewRect: CGRect) {
@@ -281,18 +592,74 @@ struct MovieTicketPDFRegionEditorSheet: View {
         ).clamped()
         editingRegionId = nil
         selectedRegionId = nil
-        let preview = previewText(for: rel)
+        let preview = previewText(for: rel, fieldKind: targetFieldKind(for: boxTargetElementId))
         mapHint = preview
         mapMode = .positionOnly
         mapKeywords = ""
         mapExtractSample = ""
         mapValueMappings = []
+
+        // Targeted box-select from a recognizer row → save directly.
+        if let targetId = boxTargetElementId,
+           let el = mappableElements.first(where: { $0.id == targetId }),
+           let field = el.fieldKind {
+            let keepId = rule.regions.first { $0.elementId == el.id || $0.fieldKind == field }?.id ?? UUID()
+            let previous = rule.regions.first { $0.id == keepId }
+            let region = MovieTicketPDFRegion(
+                id: keepId,
+                fieldKind: field,
+                elementId: el.id,
+                rect: rel,
+                pageIndex: 0,
+                captureMode: .positionOnly,
+                regionKeywords: [],
+                extractKind: defaultExtractKind(for: field),
+                extractKeyword: defaultExtractKeyword(for: field),
+                extractSample: preview,
+                extractedHint: preview,
+                valueMappings: previous?.valueMappings ?? [],
+                printPrefix: previous?.printPrefix ?? "",
+                printSuffix: previous?.printSuffix ?? "",
+                isPageWideAuto: false
+            )
+            rule.regions.removeAll { $0.id == keepId || $0.fieldKind == field || $0.elementId == el.id }
+            rule.regions.append(region)
+            selectedRegionId = keepId
+            boxTargetElementId = nil
+            status = preview.isEmpty
+                ? "已框选「\(elementLabel(el))」，但选区内无文字 — 可点「改」调整"
+                : "已框选「\(elementLabel(el))」→ \(preview)"
+            return
+        }
+
         if mapElementId == nil || !mappableElements.contains(where: { $0.id == mapElementId }) {
             mapElementId = mappableElements.first?.id
         }
         pending = MovieTicketPendingPDFRegion(rect: rel, previewText: preview)
         showMappingSheet = true
         status = "请指定映射方式与目标元素块"
+    }
+
+    private func targetFieldKind(for elementId: UUID?) -> MovieTicketFieldKind? {
+        guard let elementId else { return nil }
+        return mappableElements.first(where: { $0.id == elementId })?.fieldKind
+    }
+
+    private func defaultExtractKind(for field: MovieTicketFieldKind) -> MovieTicketPDFExtractKind {
+        switch field {
+        case .ticketPrice: return .currency
+        case .serialNumber: return .digits
+        default: return .entire
+        }
+    }
+
+    private func defaultExtractKeyword(for field: MovieTicketFieldKind) -> String {
+        switch field {
+        case .ticketPrice: return "Total"
+        case .seatArea: return "Seats"
+        case .startTime, .timeRange: return "Time"
+        default: return ""
+        }
     }
 
     private func handleRegionMoved(id: UUID, rel: CGRect) {
@@ -305,7 +672,7 @@ struct MovieTicketPDFRegionEditorSheet: View {
         ).clamped()
         rule.regions[idx].rect = moved
         // Refresh hint from new position so extract preview stays accurate.
-        let preview = previewText(for: moved)
+        let preview = previewText(for: moved, fieldKind: rule.regions[idx].fieldKind)
         if !preview.isEmpty {
             rule.regions[idx].extractedHint = preview
         }
@@ -317,7 +684,7 @@ struct MovieTicketPDFRegionEditorSheet: View {
         selectedRegionId = region.id
         editingRegionId = region.id
         mapHint = region.extractedHint.isEmpty
-            ? previewText(for: region.rect)
+            ? previewText(for: region.rect, fieldKind: region.fieldKind)
             : region.extractedHint
         mapMode = region.captureMode
         mapKeywords = region.regionKeywords.joined(separator: ", ")
@@ -493,6 +860,7 @@ struct MovieTicketPDFRegionEditorSheet: View {
         let cleanedMappings = mapValueMappings.filter {
             !$0.match.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+        let previous = rule.regions.first { $0.id == keepId }
         let region = MovieTicketPDFRegion(
             id: keepId,
             fieldKind: field,
@@ -505,7 +873,10 @@ struct MovieTicketPDFRegionEditorSheet: View {
             extractKeyword: analysis.keyword,
             extractSample: analysis.sample,
             extractedHint: mapHint.trimmingCharacters(in: .whitespacesAndNewlines),
-            valueMappings: cleanedMappings
+            valueMappings: cleanedMappings,
+            printPrefix: previous?.printPrefix ?? "",
+            printSuffix: previous?.printSuffix ?? "",
+            isPageWideAuto: false
         )
         rule.regions.removeAll {
             $0.id == keepId || $0.fieldKind == field || $0.elementId == elementId
@@ -517,9 +888,13 @@ struct MovieTicketPDFRegionEditorSheet: View {
         status = "已保存「\(elementLabel(el))」\(extractNote) — 点「完成」写入规则"
     }
 
-    private func previewText(for rel: MovieTicketRelativeRect) -> String {
+    private func previewText(
+        for rel: MovieTicketRelativeRect,
+        fieldKind: MovieTicketFieldKind? = nil
+    ) -> String {
         guard let url = samplePDFURL else { return "" }
-        let temp = MovieTicketPDFRegion(fieldKind: .serialNumber, rect: rel, pageIndex: 0)
+        let kind = fieldKind ?? .serialNumber
+        let temp = MovieTicketPDFRegion(fieldKind: kind, rect: rel, pageIndex: 0)
         return (try? MovieTicketPDFRecognitionService.extractText(from: url, region: temp)) ?? ""
     }
 

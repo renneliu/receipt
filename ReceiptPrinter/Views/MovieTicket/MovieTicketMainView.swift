@@ -143,15 +143,58 @@ struct MovieTicketMainView: View {
                 }
 
                 Group {
+                    Text("票张数").font(.headline)
+                    HStack(spacing: 8) {
+                        ForEach(1...4, id: \.self) { n in
+                            Button("\(n)张") {
+                                session.draft.setTicketCount(n)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(session.draft.ticketCount == n ? Color.accentColor : nil)
+                            .controlSize(.small)
+                        }
+                        TextField(
+                            "张数",
+                            value: Binding(
+                                get: { session.draft.ticketCount },
+                                set: { session.draft.setTicketCount($0) }
+                            ),
+                            format: .number
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 56)
+                        Text("张")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(ticketCountHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Group {
                     Text("座位区域").font(.headline)
-                    Picker("", selection: $session.draft.seatModeUnallocated) {
+                    Picker("", selection: Binding(
+                        get: { session.draft.seatModeUnallocated },
+                        set: { unallocated in
+                            session.draft.seatModeUnallocated = unallocated
+                            session.draft.syncSeatArrays()
+                        }
+                    )) {
                         Text("无特定座位").tag(true)
                         Text("指定座位").tag(false)
                     }
                     .pickerStyle(.segmented)
                     if !session.draft.seatModeUnallocated {
-                        TextField("座位（如 G12）", text: $session.draft.seatArea)
+                        ForEach(0..<session.draft.ticketCount, id: \.self) { index in
+                            TextField(
+                                session.draft.ticketCount > 1
+                                    ? "第 \(index + 1) 张座位（如 G12）"
+                                    : "座位（如 G12）",
+                                text: seatBinding(at: index)
+                            )
                             .textFieldStyle(.roundedBorder)
+                        }
                     } else if let label = template?.unallocatedSeatLabel {
                         Text("票面显示：\(label)")
                             .font(.caption)
@@ -160,8 +203,16 @@ struct MovieTicketMainView: View {
                 }
 
                 labeled("流水号") {
-                    TextField("订单/流水号", text: $session.draft.serialNumber)
-                        .textFieldStyle(.roundedBorder)
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextField("订单/流水号（不含 /001）", text: serialBaseBinding)
+                            .textFieldStyle(.roundedBorder)
+                        if !session.draft.serialBase.isEmpty {
+                            Text("条码/流水将打印为：\(serialPreviewList)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
                 }
                 labeled("日期") {
                     DatePicker("", selection: $session.draft.showDate, displayedComponents: .date)
@@ -414,11 +465,49 @@ struct MovieTicketMainView: View {
         templatePage = min(max(0, templatePage), templatePageCount - 1)
     }
 
+    private var ticketCountHint: String {
+        let n = session.draft.ticketCount
+        if n <= 1 {
+            return "将打印 1 张票，流水号/条码后缀为 /001"
+        }
+        return "将依次打印 \(n) 张票（/001 … /\(String(format: "%03d", n))）；指定座位时每张票使用对应座位"
+    }
+
+    private var serialPreviewList: String {
+        (0..<session.draft.ticketCount)
+            .map { session.draft.serialForTicket(at: $0) }
+            .joined(separator: "、")
+    }
+
+    private var serialBaseBinding: Binding<String> {
+        Binding(
+            get: { session.draft.serialBase },
+            set: { session.draft.serialNumber = MovieTicketDraft.serialBase(from: $0) }
+        )
+    }
+
+    private func seatBinding(at index: Int) -> Binding<String> {
+        Binding(
+            get: {
+                // Do not mutate draft in Binding.get — that retriggers @Published and freezes UI.
+                guard session.draft.seatAreas.indices.contains(index) else { return "" }
+                return session.draft.seatAreas[index]
+            },
+            set: { newValue in
+                session.draft.syncSeatArrays()
+                guard session.draft.seatAreas.indices.contains(index) else { return }
+                session.draft.seatAreas[index] = newValue
+                if index == 0 { session.draft.seatArea = newValue }
+            }
+        )
+    }
+
     private func livePreviewImage() -> NSImage? {
         guard let t = template else { return nil }
+        // Preview the first ticket ( /001 + first seat ).
         let result = MovieTicketPrintComposer.compose(
             template: t,
-            draft: session.draft,
+            draft: session.draft.draftForTicket(at: 0),
             backgroundImage: session.backgroundImage,
             logoImages: session.logoImages,
             config: appState.settings.printerConfig
@@ -447,27 +536,54 @@ struct MovieTicketMainView: View {
         }
         isPrinting = true
         defer { isPrinting = false }
-        let draftSnapshot = session.draft
-        let result = MovieTicketPrintComposer.compose(
-            template: t,
-            draft: draftSnapshot,
-            backgroundImage: session.backgroundImage,
-            logoImages: session.logoImages,
-            config: appState.settings.printerConfig
-        )
+
+        var working = session.draft
+        working.syncSeatArrays()
+        working.serialNumber = working.serialBase
+        let count = working.ticketCount
         let statusPollingWasActive = appState.gmailSync.isRunning
-        if let record = await appState.runDiagnosticPrint(
-            artifacts: result.artifacts,
-            statusPollingWasActive: statusPollingWasActive
-        ) {
-            if record.transportError == nil {
-                let png = result.artifacts.pngData
-                session.recordSuccessfulPrint(template: t, draft: draftSnapshot, previewPNG: png)
-                session.resetDraft()
-                session.message = "已发送到打印机"
+        var printed = 0
+        var lastError: String?
+
+        for index in 0..<count {
+            let ticketDraft = working.draftForTicket(at: index)
+            let result = MovieTicketPrintComposer.compose(
+                template: t,
+                draft: ticketDraft,
+                backgroundImage: session.backgroundImage,
+                logoImages: session.logoImages,
+                config: appState.settings.printerConfig
+            )
+            if let record = await appState.runDiagnosticPrint(
+                artifacts: result.artifacts,
+                statusPollingWasActive: statusPollingWasActive && index == 0
+            ) {
+                if record.transportError == nil {
+                    session.recordSuccessfulPrint(
+                        template: t,
+                        draft: ticketDraft,
+                        previewPNG: result.artifacts.pngData
+                    )
+                    printed += 1
+                } else {
+                    lastError = record.transportError
+                    break
+                }
             } else {
-                session.message = "打印失败: \(record.transportError ?? "")"
+                lastError = "打印中断"
+                break
             }
+        }
+
+        if printed == count {
+            session.resetDraft()
+            session.message = count == 1
+                ? "已发送到打印机"
+                : "已依次打印 \(printed) 张票"
+        } else if printed > 0 {
+            session.message = "已打印 \(printed)/\(count) 张后失败：\(lastError ?? "")"
+        } else {
+            session.message = "打印失败: \(lastError ?? "")"
         }
     }
 
@@ -497,18 +613,19 @@ struct MovieTicketMainView: View {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            // Prefer the rule linked to the current template when present.
-            if let ruleId = session.activeTemplate?.pdfRuleId,
-               let linked = session.pdfRules.first(where: { $0.id == ruleId }),
-               !linked.regions.isEmpty {
-                applyPDF(url: url, rule: linked)
-                return
-            }
+            let linkedRule: MovieTicketPDFRule? = {
+                guard let ruleId = session.activeTemplate?.pdfRuleId else { return nil }
+                return session.pdfRules.first(where: { $0.id == ruleId && !$0.regions.isEmpty })
+            }()
 
+            // Keywords decide cinema/rule first so importing an IMAX PDF while on Ritz
+            // switches templates. Linked rule is only a no-keyword fallback.
             let text = try MovieTicketPDFRecognitionService.extractPlainText(from: url)
             let hits = MovieTicketPDFRecognitionService.matchRules(text: text, rules: session.pdfRules)
             if hits.count == 1 {
                 applyPDF(url: url, rule: hits[0])
+            } else if hits.isEmpty, let linked = linkedRule {
+                applyPDF(url: url, rule: linked)
             } else if hits.isEmpty {
                 pendingPDFURL = url
                 matchedRules = session.pdfRules
@@ -530,7 +647,13 @@ struct MovieTicketMainView: View {
             session.selectTemplate(tid)
         }
         let fields = MovieTicketPDFRecognitionService.extractAllFields(from: url, rule: rule)
-        MovieTicketPDFRecognitionService.apply(fields: fields, to: &session.draft)
+        MovieTicketPDFRecognitionService.apply(fields: fields, to: &session.draft, rule: rule)
+        // Keep serial as base; ticket index suffixes (/001…) come from 票张数.
+        session.draft.serialNumber = MovieTicketDraft.serialBase(from: session.draft.serialNumber)
+        if !session.draft.seatArea.isEmpty {
+            session.draft.seatAreas = [session.draft.seatArea]
+        }
+        session.draft.syncSeatArrays()
         let missing: [String] = [
             session.draft.movieTitle.isEmpty ? "影片名称" : nil,
             session.draft.serialNumber.isEmpty ? "流水号" : nil,

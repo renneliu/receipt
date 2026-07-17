@@ -347,5 +347,6 @@ final class MovieTicketSession: ObservableObject {
 
     func resetDraft() {
         draft = .blank(defaultAd: 15)
+        draft.setTicketCount(1)
     }
 }

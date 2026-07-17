@@ -78,9 +78,12 @@ enum MovieTicketRitzESCPOS {
             return c
         }()
         let serial = draft.serialNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hallEl = firstField(template, .hall)
+        let hallText = hallEl?.resolvedHallText(from: draft)
+            ?? draft.hall.trimmingCharacters(in: .whitespacesAndNewlines)
         return ResolvedTicket(
             cinema: cinemaName(from: template),
-            hall: draft.hall.trimmingCharacters(in: .whitespacesAndNewlines),
+            hall: hallText,
             title: draft.movieTitle.trimmingCharacters(in: .whitespacesAndNewlines),
             startLine: startDateTime(draft: draft, template: template),
             endLine: endDateTime(draft: draft, template: template),

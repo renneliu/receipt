@@ -172,6 +172,16 @@ enum MovieTicketPDFRecognitionService {
             if region.fieldKind == .ticketPrice {
                 keywords.append(contentsOf: ["Total", "TOTAL"])
             }
+            if region.fieldKind == .startTime || region.fieldKind == .timeRange {
+                keywords.append(contentsOf: [
+                    "SESSION TIME", "SHOWING", "Show Time", "Time"
+                ])
+            }
+            if region.fieldKind == .showDate {
+                keywords.append(contentsOf: [
+                    "SESSION DATE", "SHOWING", "Date"
+                ])
+            }
             // Prefer strong locate anchors over weak ones like GST.
             if !region.extractKeyword.isEmpty {
                 keywords.insert(region.extractKeyword, at: 0)
@@ -227,6 +237,35 @@ enum MovieTicketPDFRecognitionService {
             }
         }
 
+        // Dedicated date field: prefer calendar date only.
+        if region.fieldKind == .showDate {
+            if let date = firstDateOnlyMatch(in: page.string ?? "") ?? firstDateOnlyMatch(in: text) {
+                text = date
+                pathUsed = "pageDate"
+            }
+        }
+
+        // Shared time logic (IMAX timeRange + Ritz startTime): prefer clock; keep composed
+        // session when the selection is incomplete so single-region rules still work.
+        let isTimeField = region.fieldKind == .startTime || region.fieldKind == .timeRange
+        let labelOnly = isBareScheduleLabel(text)
+        let partialSchedule = isPartialScheduleFragment(text)
+        if isTimeField || labelOnly || partialSchedule || (containsClockTime(text) && !hasCalendarDate(text)) {
+            if let session = extractSessionDateTimeFromPage(page) {
+                let currentComplete = isCompleteSessionValue(text) || (containsClockTime(text) && isTimeField)
+                if !currentComplete || (isTimeField && !containsClockTime(text)) {
+                    // Prefer clock-only for time fields when a dedicated date region may exist.
+                    if isTimeField, let clock = firstClockOnlyMatch(in: session) ?? firstClockOnlyMatch(in: page.string ?? "") {
+                        text = normalizeClockToken(clock)
+                        pathUsed = "pageClock"
+                    } else if isCompleteSessionValue(session) {
+                        text = session
+                        pathUsed = pathUsed == "none" ? "pageSession" : "pageSessionRecover"
+                    }
+                }
+            }
+        }
+
         if text.isEmpty {
             throw MovieTicketPDFRecognitionError.noTextInRegion
         }
@@ -243,7 +282,25 @@ enum MovieTicketPDFRecognitionService {
             )
         }
         let rawValue = filtered.isEmpty ? text : filtered
-        return applyValueMappings(rawValue, mappings: region.valueMappings)
+        let mapped = applyValueMappings(rawValue, mappings: region.valueMappings)
+        // Date/time stay bare so parseFlexibleDateTime can succeed.
+        if isDateTimeFieldKind(region.fieldKind) { return mapped }
+        return applyPrintAffixes(mapped, region: region)
+    }
+
+    /// Prefix / suffix around the recognized (and mapped) value for print.
+    static func applyPrintAffixes(_ text: String, region: MovieTicketPDFRegion) -> String {
+        let prefix = region.printPrefix
+        let suffix = region.printSuffix
+        if prefix.isEmpty, suffix.isEmpty { return text }
+        return prefix + text + suffix
+    }
+
+    private static func isDateTimeFieldKind(_ kind: MovieTicketFieldKind) -> Bool {
+        switch kind {
+        case .showDate, .startTime, .timeRange, .endTime: return true
+        default: return false
+        }
     }
 
     /// Rewrite extracted text using user-defined print aliases (longest match wins).
@@ -605,6 +662,8 @@ enum MovieTicketPDFRecognitionService {
         switch fieldKind {
         case .startTime, .endTime, .timeRange:
             return refineDateTimeValue(joined)
+        case .showDate:
+            return firstDateOnlyMatch(in: joined) ?? cutAtSectionLabel(joined)
         default:
             return cutAtSectionLabel(joined)
         }
@@ -613,24 +672,26 @@ enum MovieTicketPDFRecognitionService {
     /// Extract session date+time value; never strip the clock portion.
     private static func refineDateTimeValue(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let composedDate = firstDateOnlyMatch(in: trimmed),
+           let composedTime = firstClockOnlyMatch(in: trimmed) {
+            return "\(composedDate) \(normalizeClockToken(composedTime))"
+        }
         let patterns = [
-            #"(?i)(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
+            #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+\#(monthPattern),?\s+\d{1,2}:\d{2}\s*[AP]M"#,
+            #"(?i)\#(weekdayPattern)\s+[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
+            #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
+            #"(?i)\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
             #"(?i)\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#
         ]
-        for pattern in patterns {
-            guard let re = try? NSRegularExpression(pattern: pattern) else { continue }
-            let ns = trimmed as NSString
-            if let match = re.firstMatch(in: trimmed, range: NSRange(location: 0, length: ns.length)),
-               let range = Range(match.range, in: trimmed) {
-                return String(trimmed[range])
-            }
+        if let match = firstRegexMatch(in: trimmed, patterns: patterns) {
+            return match
         }
         return trimmed
     }
 
     private static func containsClockTime(_ s: String) -> Bool {
         s.range(
-            of: #"\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
+            of: #"\d{1,2}:\d{2}\s*[AP]M"#,
             options: [.regularExpression, .caseInsensitive]
         ) != nil
     }
@@ -927,6 +988,10 @@ enum MovieTicketPDFRecognitionService {
             return t.count >= 2
         case .ticketType, .seatArea:
             return t.count >= 2
+        case .startTime, .endTime, .timeRange:
+            return containsClockTime(t)
+        case .showDate:
+            return hasCalendarDate(t)
         default:
             return t.count >= 2
         }
@@ -996,27 +1061,90 @@ enum MovieTicketPDFRecognitionService {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // MARK: - Public helpers for per-field auto-detect
+
+    static func pageHallScreen(from page: PDFPage) -> String? {
+        extractHallScreenFromPage(page)
+    }
+
+    static func pageTotalCurrency(from page: PDFPage) -> String? {
+        extractTotalCurrencyFromPage(page)
+    }
+
+    static func pageSessionDateTime(from page: PDFPage) -> String? {
+        extractSessionDateTimeFromPage(page)
+    }
+
+    static func dateOnly(from page: PDFPage) -> String? {
+        guard let full = page.string else { return nil }
+        return firstDateOnlyMatch(in: full)
+    }
+
+    static func dateOnly(from text: String) -> String? {
+        firstDateOnlyMatch(in: text)
+    }
+
+    static func clockOnly(from text: String) -> String? {
+        guard let clock = firstClockOnlyMatch(in: text) else { return nil }
+        return normalizeClockToken(clock)
+    }
+
     static func extractAllFields(from url: URL, rule: MovieTicketPDFRule) -> [MovieTicketFieldKind: String] {
         var out: [MovieTicketFieldKind: String] = [:]
-        for region in rule.regions where region.fieldKind.isPDFExtractable {
-            if let text = try? extractText(from: url, region: region), !text.isEmpty {
-                out[region.fieldKind] = text
+        for region in rule.regions {
+            let kind = region.fieldKind
+            guard kind.isPDFExtractable else { continue }
+            if kind == .seatArea, rule.skipSeatRecognition { continue }
+
+            // Manual box-select wins over page-wide auto-detect (user may target
+            // Transaction Number 477560 instead of booking code WJKMTX9).
+            // Auto-detect is used for sidebar "自动识别" regions (isPageWideAuto).
+            let auto = MovieTicketPDFFieldRecognizer.autoDetect(fieldKind: kind, from: url)
+            let rectText = (try? extractText(from: url, region: region)) ?? ""
+            let preferRect = !region.isPageWideAuto && region.showsCanvasBox
+            let chosen: String
+            if preferRect, !rectText.isEmpty {
+                // extractText already applied mappings (+ affixes for non-datetime).
+                chosen = rectText
+            } else if let auto, !auto.value.isEmpty {
+                let mapped = applyValueMappings(auto.value, mappings: region.valueMappings)
+                chosen = isDateTimeFieldKind(kind)
+                    ? mapped
+                    : applyPrintAffixes(mapped, region: region)
+            } else if !rectText.isEmpty {
+                chosen = rectText
+            } else {
+                continue
+            }
+            out[kind] = chosen
+
+            // Barcode / QR share serial content for printing.
+            if kind == .barcode || kind == .qrCode {
+                out[.serialNumber] = chosen
             }
         }
         return out
     }
 
-    static func apply(fields: [MovieTicketFieldKind: String], to draft: inout MovieTicketDraft) {
+    static func apply(
+        fields: [MovieTicketFieldKind: String],
+        to draft: inout MovieTicketDraft,
+        rule: MovieTicketPDFRule? = nil
+    ) {
         if let v = fields[.movieTitle], !v.isEmpty { draft.movieTitle = v }
-        if let v = fields[.ticketType], !v.isEmpty { draft.ticketType = v }
         if let v = fields[.hall], !v.isEmpty { draft.hall = v }
         if let v = fields[.ticketPrice], !v.isEmpty {
             draft.ticketPrice = v.replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespaces)
         }
-        if let v = fields[.serialNumber], !v.isEmpty {
+        let serialRaw = fields[.serialNumber] ?? fields[.barcode] ?? fields[.qrCode]
+        if let v = serialRaw, !v.isEmpty {
             draft.serialNumber = v.replacingOccurrences(of: " ", with: "")
         }
-        if let v = fields[.seatArea] {
+
+        if rule?.skipSeatRecognition == true {
+            draft.seatModeUnallocated = true
+            draft.seatArea = ""
+        } else if let v = fields[.seatArea] {
             let trimmed = v.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty || trimmed.lowercased().contains("unallocated") {
                 draft.seatModeUnallocated = true
@@ -1026,13 +1154,178 @@ enum MovieTicketPDFRecognitionService {
                 draft.seatArea = trimmed
             }
         }
-        if let v = fields[.startTime], let date = parseFlexibleDateTime(v) {
-            draft.showDate = Calendar.current.startOfDay(for: date)
+
+        if let v = fields[.ticketType], !v.isEmpty {
+            draft.ticketType = v
+        } else {
+            let fallback = rule?.defaultTicketType.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !fallback.isEmpty { draft.ticketType = fallback }
+        }
+
+        // Date recognizer (dedicated).
+        if let v = fields[.showDate], let day = parseFlexibleDateOnly(v) {
+            draft.showDate = day
+        }
+
+        // Shared time logic for IMAX timeRange + Ritz startTime → showStartTime.
+        let timeRaw = fields[.startTime] ?? fields[.timeRange]
+        if let v = timeRaw, let date = parseFlexibleDateTime(v) {
             draft.showStartTime = date
+            // Only overwrite showDate from the time string when no dedicated date field hit.
+            if fields[.showDate] == nil, hasCalendarDate(v) {
+                draft.showDate = Calendar.current.startOfDay(for: date)
+            }
         }
     }
 
+    private static func parseFlexibleDateOnly(_ raw: String) -> Date? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let formats = [
+            "EEEE d MMMM yyyy",
+            "EEEE d MMMM",
+            "EEEE d MMM yyyy",
+            "EEEE d MMM",
+            "EEE d MMM yyyy",
+            "EEE d MMM",
+            "d MMMM yyyy",
+            "d MMM yyyy",
+            "yyyy-MM-dd",
+            "dd/MM/yyyy",
+            "MM/dd/yyyy"
+        ]
+        for format in formats {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = format
+            if let d = f.date(from: trimmed) {
+                var c = Calendar.current.dateComponents([.year, .month, .day], from: d)
+                if format.contains("yyyy") == false {
+                    c.year = Calendar.current.component(.year, from: Date())
+                }
+                return Calendar.current.date(from: c).map { Calendar.current.startOfDay(for: $0) }
+            }
+        }
+        return parseFlexibleDateTime(trimmed).map { Calendar.current.startOfDay(for: $0) }
+    }
+
+    /// Labels that are never useful field values by themselves (common PDF selection miss).
+    private static func isBareScheduleLabel(_ text: String) -> Bool {
+        let compact = String(
+            text.trimmingCharacters(in: .whitespacesAndNewlines)
+                .uppercased()
+                .filter { $0.isLetter }
+        )
+        let labels: Set<String> = [
+            "TIME", "DATE", "SESSIONDATE", "SESSIONTIME", "SHOWTIME", "SHOWING", "STARTS", "ENDS"
+        ]
+        return labels.contains(compact)
+    }
+
+    private static let weekdayPattern =
+        #"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"#
+    private static let monthPattern =
+        #"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"#
+
+    /// "Saturday 7" / weekday-only fragments that need page-wide upgrade.
+    private static func isPartialScheduleFragment(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return false }
+        if isBareScheduleLabel(t) { return true }
+        if isCompleteSessionValue(t) { return false }
+        let weekday = #"(?i)^\#(weekdayPattern)\b"#
+        return t.range(of: weekday, options: .regularExpression) != nil
+            || t.range(of: #"(?i)^\d{1,2}\s+\#(monthPattern)\b"#, options: .regularExpression) != nil
+    }
+
+    private static func hasCalendarDate(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let patterns = [
+            #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+\#(monthPattern)"#,
+            #"(?i)\d{1,2}\s+\#(monthPattern)(?:\s+\d{4})?"#,
+            #"\d{1,2}/\d{1,2}/\d{2,4}"#
+        ]
+        return patterns.contains { t.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    private static func isCompleteSessionValue(_ text: String) -> Bool {
+        containsClockTime(text) && hasCalendarDate(text)
+    }
+
+    /// Event Cinemas / IMAX: date and time are often on separate lines.
+    private static func extractSessionDateTimeFromPage(_ page: PDFPage) -> String? {
+        guard let full = page.string, !full.isEmpty else { return nil }
+
+        // Prefer composing split IMAX lines: "Saturday 7 March" + "3:15PM".
+        if let date = firstDateOnlyMatch(in: full),
+           let time = firstClockOnlyMatch(in: full) {
+            return "\(date) \(normalizeClockToken(time))"
+        }
+
+        if let combined = firstSessionDateTimeMatch(in: full, allowClockOnly: false) {
+            return combined
+        }
+        return firstSessionDateTimeMatch(in: full, allowClockOnly: true)
+    }
+
+    private static func firstDateOnlyMatch(in text: String) -> String? {
+        let patterns = [
+            #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+\#(monthPattern)(?:\s+\d{4})?"#,
+            #"(?i)\d{1,2}\s+\#(monthPattern)\s+\d{4}"#
+        ]
+        return firstRegexMatch(in: text, patterns: patterns)
+    }
+
+    private static func firstClockOnlyMatch(in text: String) -> String? {
+        // Prefer the clock right after a "Time" label (IMAX ticket body).
+        if let range = firstMatchRange(of: "Time", in: text) {
+            let after = String(text[range.upperBound...])
+            if let clock = firstRegexMatch(
+                in: after,
+                patterns: [#"(?i)\d{1,2}:\d{2}\s*[AP]M"#]
+            ) {
+                return clock
+            }
+        }
+        return firstRegexMatch(in: text, patterns: [#"(?i)\d{1,2}:\d{2}\s*[AP]M"#])
+    }
+
+    private static func normalizeClockToken(_ time: String) -> String {
+        time.replacingOccurrences(
+            of: #"(?i)(\d{1,2}:\d{2})\s*([AP]M)"#,
+            with: "$1 $2",
+            options: .regularExpression
+        )
+    }
+
+    private static func firstSessionDateTimeMatch(in text: String, allowClockOnly: Bool) -> String? {
+        var patterns = [
+            #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+\#(monthPattern),?\s+\d{1,2}:\d{2}\s*[AP]M"#,
+            #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
+            #"(?i)\#(weekdayPattern)\s+[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
+            #"(?i)\d{1,2}\s+\#(monthPattern)\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
+            #"(?i)\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#
+        ]
+        if allowClockOnly {
+            patterns.append(#"(?i)\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#)
+        }
+        return firstRegexMatch(in: text, patterns: patterns)
+    }
+
+    private static func firstRegexMatch(in text: String, patterns: [String]) -> String? {
+        let ns = text as NSString
+        let fullRange = NSRange(location: 0, length: ns.length)
+        for pattern in patterns {
+            guard let re = try? NSRegularExpression(pattern: pattern),
+                  let match = re.firstMatch(in: text, range: fullRange),
+                  let range = Range(match.range, in: text) else { continue }
+            return String(text[range])
+        }
+        return nil
+    }
+
     private static func parseFlexibleDateTime(_ raw: String) -> Date? {
+        // Prefer the first clock-bearing segment (handles ranges / labels).
+        let candidate = firstDateTimeCandidate(from: raw)
         let formats = [
             "yyyy-MM-dd HH:mm",
             "yyyy-MM-dd h:mm a",
@@ -1040,15 +1333,22 @@ enum MovieTicketPDFRecognitionService {
             "dd/MM/yyyy h:mm a",
             "MM/dd/yyyy HH:mm",
             "MM/dd/yyyy h:mm a",
+            "EEEE d MMMM h:mm a",
+            "EEEE d MMMM h:mma",
+            "EEEE d MMM h:mm a",
+            "EEEE d MMM h:mma",
             "EEE d MMM, h:mma",
             "EEE d MMM, h:mm a",
+            "EEE d MMMM, h:mm a",
             "EEE MMM d, yyyy h:mm a",
             "EEE MMM d yyyy h:mm a",
+            "d MMM yyyy h:mm a",
+            "d MMMM yyyy h:mm a",
             "h:mma",
             "h:mm a",
             "HH:mm"
         ]
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         for format in formats {
             let f = DateFormatter()
             f.locale = Locale(identifier: "en_US_POSIX")
@@ -1062,9 +1362,29 @@ enum MovieTicketPDFRecognitionService {
                     c.minute = t.minute
                     return cal.date(from: c)
                 }
+                // Formats without year: pin to current year.
+                if format.contains("yyyy") == false,
+                   format != "h:mm a", format != "h:mma", format != "HH:mm" {
+                    let cal = Calendar.current
+                    var c = cal.dateComponents([.month, .day, .hour, .minute], from: d)
+                    c.year = cal.component(.year, from: Date())
+                    return cal.date(from: c) ?? d
+                }
                 return d
             }
         }
         return nil
+    }
+
+    private static func firstDateTimeCandidate(from raw: String) -> String {
+        let refined = refineDateTimeValue(raw)
+        if containsClockTime(refined) { return refined }
+        // "… 12:00 PM - 2:15 PM" → keep left side
+        if let dash = raw.range(of: #"\s[-–—]\s"#, options: .regularExpression) {
+            let left = String(raw[..<dash.lowerBound])
+            let leftRefined = refineDateTimeValue(left)
+            if containsClockTime(leftRefined) { return leftRefined }
+        }
+        return refined
     }
 }

@@ -31,13 +31,83 @@ struct MovieTicketDraft: Codable, Equatable {
     var movieDurationMinutes: Int = 0
     var adDurationMinutes: Int = 15
     var seatModeUnallocated: Bool = true
+    /// Primary / first-ticket seat (kept for compatibility + single-seat UI).
     var seatArea: String = ""
+    /// Per-ticket seats when `ticketCount` > 1 and seats are allocated.
+    var seatAreas: [String] = [""]
+    /// Base order / booking id **without** `/001` style ticket index suffix.
     var serialNumber: String = ""
+    /// How many physical tickets to print (each gets `/001` … `/00N`).
+    var ticketCount: Int = 1
     var showDate: Date = Calendar.current.startOfDay(for: Date())
     var showStartTime: Date = Date()
     var ticketType: String = ""
     var hall: String = ""
     var ticketPrice: String = ""
+
+    /// Strip a trailing `/digits` ticket index from a serial string.
+    static func serialBase(from raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let re = try? NSRegularExpression(pattern: #"^(.*?)/0*\d+$"#),
+              let match = re.firstMatch(
+                in: trimmed,
+                range: NSRange(location: 0, length: (trimmed as NSString).length)
+              ),
+              match.numberOfRanges > 1,
+              let r = Range(match.range(at: 1), in: trimmed)
+        else { return trimmed }
+        return String(trimmed[r]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var serialBase: String { Self.serialBase(from: serialNumber) }
+
+    /// Serial printed on ticket at `index` (0-based), e.g. `477560/001`.
+    func serialForTicket(at index: Int) -> String {
+        let base = serialBase
+        guard !base.isEmpty else { return "" }
+        let n = max(1, index + 1)
+        return "\(base)/\(String(format: "%03d", n))"
+    }
+
+    /// Clamp count to 1…4 and keep `seatAreas` / `seatArea` in sync.
+    mutating func setTicketCount(_ count: Int) {
+        ticketCount = max(1, min(4, count))
+        syncSeatArrays()
+    }
+
+    mutating func syncSeatArrays() {
+        var areas = seatAreas
+        if areas.isEmpty { areas = [seatArea] }
+        while areas.count < ticketCount {
+            areas.append("")
+        }
+        if areas.count > ticketCount {
+            areas = Array(areas.prefix(ticketCount))
+        }
+        if areas.indices.contains(0),
+           seatArea != areas[0],
+           !seatArea.isEmpty,
+           areas[0].isEmpty {
+            areas[0] = seatArea
+        }
+        let syncedSeat = areas.indices.contains(0) ? areas[0] : seatArea
+        // Avoid no-op writes: assigning through `@Published draft` always invalidates the UI.
+        if areas != seatAreas { seatAreas = areas }
+        if seatArea != syncedSeat { seatArea = syncedSeat }
+    }
+
+    /// Draft used for preview/print of one physical ticket.
+    func draftForTicket(at index: Int) -> MovieTicketDraft {
+        var copy = self
+        copy.serialNumber = serialForTicket(at: index)
+        if !seatModeUnallocated {
+            let seats = seatAreas.isEmpty ? [seatArea] : seatAreas
+            copy.seatArea = seats.indices.contains(index) ? seats[index] : ""
+            copy.seatAreas = [copy.seatArea]
+        }
+        copy.ticketCount = 1
+        return copy
+    }
 
     var combinedStart: Date {
         let cal = Calendar.current
@@ -73,9 +143,69 @@ struct MovieTicketDraft: Codable, Equatable {
         return trimmed
     }
 
+    enum CodingKeys: String, CodingKey {
+        case movieTitle, movieDurationMinutes, adDurationMinutes
+        case seatModeUnallocated, seatArea, seatAreas, serialNumber, ticketCount
+        case showDate, showStartTime, ticketType, hall, ticketPrice
+    }
+
+    init(
+        movieTitle: String = "",
+        movieDurationMinutes: Int = 0,
+        adDurationMinutes: Int = 15,
+        seatModeUnallocated: Bool = true,
+        seatArea: String = "",
+        seatAreas: [String] = [""],
+        serialNumber: String = "",
+        ticketCount: Int = 1,
+        showDate: Date = Calendar.current.startOfDay(for: Date()),
+        showStartTime: Date = Date(),
+        ticketType: String = "",
+        hall: String = "",
+        ticketPrice: String = ""
+    ) {
+        self.movieTitle = movieTitle
+        self.movieDurationMinutes = movieDurationMinutes
+        self.adDurationMinutes = adDurationMinutes
+        self.seatModeUnallocated = seatModeUnallocated
+        self.seatArea = seatArea
+        self.seatAreas = seatAreas.isEmpty ? [seatArea] : seatAreas
+        self.serialNumber = Self.serialBase(from: serialNumber)
+        self.ticketCount = max(1, min(4, ticketCount))
+        self.showDate = showDate
+        self.showStartTime = showStartTime
+        self.ticketType = ticketType
+        self.hall = hall
+        self.ticketPrice = ticketPrice
+        syncSeatArrays()
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        movieTitle = try c.decodeIfPresent(String.self, forKey: .movieTitle) ?? ""
+        movieDurationMinutes = try c.decodeIfPresent(Int.self, forKey: .movieDurationMinutes) ?? 0
+        adDurationMinutes = try c.decodeIfPresent(Int.self, forKey: .adDurationMinutes) ?? 15
+        seatModeUnallocated = try c.decodeIfPresent(Bool.self, forKey: .seatModeUnallocated) ?? true
+        seatArea = try c.decodeIfPresent(String.self, forKey: .seatArea) ?? ""
+        seatAreas = try c.decodeIfPresent([String].self, forKey: .seatAreas) ?? [seatArea]
+        serialNumber = Self.serialBase(
+            from: try c.decodeIfPresent(String.self, forKey: .serialNumber) ?? ""
+        )
+        ticketCount = max(1, min(4, try c.decodeIfPresent(Int.self, forKey: .ticketCount) ?? 1))
+        showDate = try c.decodeIfPresent(Date.self, forKey: .showDate)
+            ?? Calendar.current.startOfDay(for: Date())
+        showStartTime = try c.decodeIfPresent(Date.self, forKey: .showStartTime) ?? Date()
+        ticketType = try c.decodeIfPresent(String.self, forKey: .ticketType) ?? ""
+        hall = try c.decodeIfPresent(String.self, forKey: .hall) ?? ""
+        ticketPrice = try c.decodeIfPresent(String.self, forKey: .ticketPrice) ?? ""
+        syncSeatArrays()
+    }
+
     static func blank(defaultAd: Int = 15) -> MovieTicketDraft {
         var d = MovieTicketDraft()
         d.adDurationMinutes = defaultAd
+        d.ticketCount = 1
+        d.seatAreas = [""]
         return d
     }
 
@@ -86,7 +216,8 @@ struct MovieTicketDraft: Codable, Equatable {
             movieDurationMinutes: 136,
             adDurationMinutes: 20,
             seatModeUnallocated: true,
-            serialNumber: "CSH 02081864/001",
+            serialNumber: "CSH 02081864",
+            ticketCount: 1,
             ticketType: "RETRO3",
             hall: "Cinema 1",
             ticketPrice: "0.00"
@@ -110,7 +241,9 @@ struct MovieTicketDraft: Codable, Equatable {
             adDurationMinutes: 0,
             seatModeUnallocated: false,
             seatArea: "L-9",
-            serialNumber: "536011/001",
+            seatAreas: ["L-9"],
+            serialNumber: "536011",
+            ticketCount: 1,
             ticketType: "CBIMAX",
             hall: "IMAX 1",
             ticketPrice: "43.00"
@@ -127,6 +260,31 @@ struct MovieTicketDraft: Codable, Equatable {
     }
 }
 
+// MARK: - Hall display
+
+/// How the 影厅 element prints the recognized hall value.
+enum MovieTicketHallDisplayMode: String, Codable, CaseIterable, Identifiable {
+    /// `Cinema 1` from recognized `Screen 1` / `Cinema 1` / `1`.
+    case cinemaNumber
+    /// Digits only.
+    case numberOnly
+    /// `hallNumberPrefix` + digits (e.g. `Screen ` → `Screen 1`).
+    case customPrefix
+    /// Use PDF/manual draft text as-is (mappings / affixes already applied).
+    case asRecognized
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .cinemaNumber: return "Cinema + 数字"
+        case .numberOnly: return "仅数字"
+        case .customPrefix: return "自定义前缀 + 数字"
+        case .asRecognized: return "识别原文"
+        }
+    }
+}
+
 // MARK: - Field / element kinds
 
 enum MovieTicketFieldKind: String, Codable, CaseIterable, Identifiable {
@@ -134,6 +292,8 @@ enum MovieTicketFieldKind: String, Codable, CaseIterable, Identifiable {
     case startTime
     case endTime
     case timeRange
+    /// Session calendar date (separate from start/end clock time).
+    case showDate
     case seatArea
     case ticketPrice
     case ticketType
@@ -150,6 +310,7 @@ enum MovieTicketFieldKind: String, Codable, CaseIterable, Identifiable {
         case .startTime: return "开始时间"
         case .endTime: return "结束时间"
         case .timeRange: return "时间段"
+        case .showDate: return "日期"
         case .seatArea: return "座位区"
         case .ticketPrice: return "票价"
         case .ticketType: return "票型"
@@ -163,8 +324,27 @@ enum MovieTicketFieldKind: String, Codable, CaseIterable, Identifiable {
     /// Fields that can be extracted from a PDF recognition rule.
     var isPDFExtractable: Bool {
         switch self {
-        case .qrCode, .barcode, .endTime, .timeRange: return false
+        case .endTime: return false
+        // barcode / qrCode extract the booking serial that feeds those graphics.
         default: return true
+        }
+    }
+
+    /// Short description shown in the PDF recognizer panel.
+    var recognizerSummary: String {
+        switch self {
+        case .movieTitle: return "搜索 PDF 中的影片名称；找不到再框选定位"
+        case .hall: return "搜索 PDF 中的影厅/Screen；找不到再框选定位"
+        case .seatArea: return "搜索座位；可设「无指定座位」跳过检索"
+        case .ticketType: return "搜索票型；支持关键词映射或默认票型"
+        case .ticketPrice: return "优先取 Total 后的金额；找不到再框选"
+        case .serialNumber: return "识别订票码/流水号；找不到再框选"
+        case .barcode: return "识别订票码，填入条码内容（与流水号同源）"
+        case .qrCode: return "识别订票码，填入二维码内容（与流水号同源）"
+        case .timeRange: return "识别开场时间（与开始时间共用逻辑）"
+        case .startTime: return "识别开场时间；找不到再框选定位"
+        case .showDate: return "识别场次日期；找不到再框选定位"
+        case .endTime: return "结束时间由片长/用户填写，不从 PDF 识别"
         }
     }
 }
@@ -261,6 +441,135 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
     /// clip whatever overflows the element box instead of wrapping to a new line.
     /// Optional so older saved templates decode unchanged (nil = wrap, legacy).
     var singleLineClip: Bool? = nil
+    /// Hall print shape. `nil` defaults to `.cinemaNumber` for `.hall` elements.
+    var hallDisplayMode: MovieTicketHallDisplayMode? = nil
+    /// Prefix before the hall number when `hallDisplayMode == .customPrefix`.
+    /// Optional so older saved templates (without this key) still decode.
+    var hallNumberPrefix: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, kind, frame, zIndex, displayName, content, fontSize, isBold, alignment
+        case isInverted, isLocked, fieldKind, dateFormat, timeFormat
+        case rangeStartFormat, rangeEndFormat, rangeConnector, imageFilename
+        case logoScalePercent, logoBaseWidth, logoBaseHeight
+        case singleLineClip, hallDisplayMode, hallNumberPrefix
+    }
+
+    init(
+        id: UUID = UUID(),
+        kind: MovieTicketElementKind,
+        frame: SequencePlaceholderFrame,
+        zIndex: Int = 0,
+        displayName: String = "",
+        content: String = "",
+        fontSize: CGFloat = AttributedTextView.defaultFontSize,
+        isBold: Bool = false,
+        alignment: Int = 0,
+        isInverted: Bool = false,
+        isLocked: Bool = false,
+        fieldKind: MovieTicketFieldKind? = nil,
+        dateFormat: MovieTicketDateFormat = .eeeMMMd,
+        timeFormat: MovieTicketTimeFormat = .hmma,
+        rangeStartFormat: MovieTicketTimeFormat = .hmma,
+        rangeEndFormat: MovieTicketTimeFormat = .hmma,
+        rangeConnector: String = " - ",
+        imageFilename: String? = nil,
+        logoScalePercent: Double = 100,
+        logoBaseWidth: CGFloat = 120,
+        logoBaseHeight: CGFloat = 60,
+        singleLineClip: Bool? = nil,
+        hallDisplayMode: MovieTicketHallDisplayMode? = nil,
+        hallNumberPrefix: String? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.frame = frame
+        self.zIndex = zIndex
+        self.displayName = displayName
+        self.content = content
+        self.fontSize = fontSize
+        self.isBold = isBold
+        self.alignment = alignment
+        self.isInverted = isInverted
+        self.isLocked = isLocked
+        self.fieldKind = fieldKind
+        self.dateFormat = dateFormat
+        self.timeFormat = timeFormat
+        self.rangeStartFormat = rangeStartFormat
+        self.rangeEndFormat = rangeEndFormat
+        self.rangeConnector = rangeConnector
+        self.imageFilename = imageFilename
+        self.logoScalePercent = logoScalePercent
+        self.logoBaseWidth = logoBaseWidth
+        self.logoBaseHeight = logoBaseHeight
+        self.singleLineClip = singleLineClip
+        self.hallDisplayMode = hallDisplayMode
+        self.hallNumberPrefix = hallNumberPrefix
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        kind = try c.decode(MovieTicketElementKind.self, forKey: .kind)
+        frame = try c.decode(SequencePlaceholderFrame.self, forKey: .frame)
+        zIndex = try c.decodeIfPresent(Int.self, forKey: .zIndex) ?? 0
+        displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? ""
+        content = try c.decodeIfPresent(String.self, forKey: .content) ?? ""
+        fontSize = try c.decodeIfPresent(CGFloat.self, forKey: .fontSize) ?? AttributedTextView.defaultFontSize
+        isBold = try c.decodeIfPresent(Bool.self, forKey: .isBold) ?? false
+        alignment = try c.decodeIfPresent(Int.self, forKey: .alignment) ?? 0
+        isInverted = try c.decodeIfPresent(Bool.self, forKey: .isInverted) ?? false
+        isLocked = try c.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
+        fieldKind = try c.decodeIfPresent(MovieTicketFieldKind.self, forKey: .fieldKind)
+        dateFormat = try c.decodeIfPresent(MovieTicketDateFormat.self, forKey: .dateFormat) ?? .eeeMMMd
+        timeFormat = try c.decodeIfPresent(MovieTicketTimeFormat.self, forKey: .timeFormat) ?? .hmma
+        rangeStartFormat = try c.decodeIfPresent(MovieTicketTimeFormat.self, forKey: .rangeStartFormat) ?? .hmma
+        rangeEndFormat = try c.decodeIfPresent(MovieTicketTimeFormat.self, forKey: .rangeEndFormat) ?? .hmma
+        rangeConnector = try c.decodeIfPresent(String.self, forKey: .rangeConnector) ?? " - "
+        imageFilename = try c.decodeIfPresent(String.self, forKey: .imageFilename)
+        logoScalePercent = try c.decodeIfPresent(Double.self, forKey: .logoScalePercent) ?? 100
+        logoBaseWidth = try c.decodeIfPresent(CGFloat.self, forKey: .logoBaseWidth) ?? 120
+        logoBaseHeight = try c.decodeIfPresent(CGFloat.self, forKey: .logoBaseHeight) ?? 60
+        singleLineClip = try c.decodeIfPresent(Bool.self, forKey: .singleLineClip)
+        hallDisplayMode = try c.decodeIfPresent(MovieTicketHallDisplayMode.self, forKey: .hallDisplayMode)
+        hallNumberPrefix = try c.decodeIfPresent(String.self, forKey: .hallNumberPrefix)
+    }
+
+    /// Digits from a hall string (`Screen 2` / `Cinema 1` / `IMAX 1` → `2` / `1` / `1`).
+    static func extractHallNumber(from raw: String) -> String {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return "" }
+        if let re = try? NSRegularExpression(pattern: #"(\d+)\s*$"#),
+           let match = re.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+           let r = Range(match.range(at: 1), in: t) {
+            return String(t[r])
+        }
+        return String(t.filter(\.isNumber))
+    }
+
+    /// Printed hall text for this element (or raw draft hall when not a hall field).
+    func resolvedHallText(from draft: MovieTicketDraft) -> String {
+        let raw = draft.hall.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard fieldKind == .hall else { return raw }
+        let mode = hallDisplayMode ?? .cinemaNumber
+        switch mode {
+        case .asRecognized:
+            return raw
+        case .numberOnly:
+            let n = Self.extractHallNumber(from: raw)
+            return n.isEmpty ? raw : n
+        case .cinemaNumber:
+            let n = Self.extractHallNumber(from: raw)
+            return n.isEmpty ? raw : "Cinema \(n)"
+        case .customPrefix:
+            let n = Self.extractHallNumber(from: raw)
+            guard !n.isEmpty else { return raw }
+            let prefix = hallNumberPrefix ?? ""
+            if prefix.isEmpty { return n }
+            if prefix.last?.isWhitespace == true { return prefix + n }
+            return prefix + " " + n
+        }
+    }
 }
 
 struct MovieTicketTemplate: Codable, Identifiable, Equatable {
@@ -277,7 +586,7 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
     /// Shown on ticket when main page selects 无特定座位.
     var unallocatedSeatLabel: String = "ADMIT"
     var pdfRuleId: UUID?
-    /// Native print layout: `ritz` (default dual-stub) or `imaxSydney` (Event Cinemas IMAX).
+    /// Native print layout: `ritz` (locked dual-stub), `imaxSydney`, or nil/`canvas` (WYSIWYG elements).
     /// Optional so older saved templates decode unchanged.
     var layoutStyle: String? = nil
     /// Lines to advance after ticket content before the cutter fires.
@@ -290,6 +599,16 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
         if layoutStyle == "imaxSydney" { return true }
         return name.trimmingCharacters(in: .whitespacesAndNewlines)
             .caseInsensitiveCompare("IMAX SYDNEY") == .orderedSame
+    }
+
+    /// Locked Ritz dual-stub ESC/POS path (not canvas WYSIWYG).
+    var usesRitzLayout: Bool {
+        if usesIMAXSydneyLayout { return false }
+        if layoutStyle == "ritz" { return true }
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if n.caseInsensitiveCompare("Ritz") == .orderedSame { return true }
+        if n == "示例影票" { return true }
+        return false
     }
 
     /// Effective cut feed for this template (0…40).
@@ -315,7 +634,7 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
             t.feedLinesBeforeCut = meta.feedLinesBeforeCut
             return (t, made.logoElementId)
         }
-        var t = makeBlank(name: meta.name)
+        var t = makeRitz(name: meta.name)
         t.id = meta.id
         t.createdAt = meta.createdAt
         t.pdfRuleId = meta.pdfRuleId
@@ -326,9 +645,22 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
         return (t, nil)
     }
 
-    /// Ritz Cinemas dual-stub layout (tear-off stub + barcode stub), matching thermal ticket style.
+    /// Empty canvas for 「新建模板」— user adds fields from the toolbar.
     static func makeBlank(name: String = "新影票模板") -> MovieTicketTemplate {
         var t = MovieTicketTemplate(name: name)
+        t.layoutStyle = "canvas"
+        t.unallocatedSeatLabel = "ADMIT"
+        t.canvasHeight = 450
+        t.gridSize = 20
+        t.feedLinesBeforeCut = 4
+        t.elements = []
+        return t
+    }
+
+    /// Ritz Cinemas dual-stub layout (tear-off stub + barcode stub), matching thermal ticket style.
+    static func makeRitz(name: String = "示例影票") -> MovieTicketTemplate {
+        var t = MovieTicketTemplate(name: name)
+        t.layoutStyle = "ritz"
         t.unallocatedSeatLabel = "ADMIT"
         t.canvasHeight = 430
         t.gridSize = 20
@@ -773,10 +1105,17 @@ struct MovieTicketPDFRegion: Codable, Identifiable, Equatable {
     var extractedHint: String = ""
     /// Optional rewrite rules applied after extract (e.g. "Member Adult" → "Mem Adu").
     var valueMappings: [MovieTicketPDFValueMapping] = []
+    /// Text inserted before the recognized value when filling the draft / print string.
+    var printPrefix: String = ""
+    /// Text appended after the recognized value when filling the draft / print string.
+    var printSuffix: String = ""
+    /// Auto-detect / page-wide rules: do not draw a rubber-band box on the PDF canvas.
+    var isPageWideAuto: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case id, fieldKind, elementId, rect, pageIndex, captureMode, regionKeywords
         case extractKind, extractKeyword, extractSample, extractedHint, valueMappings
+        case printPrefix, printSuffix, isPageWideAuto
     }
 
     init(
@@ -791,7 +1130,10 @@ struct MovieTicketPDFRegion: Codable, Identifiable, Equatable {
         extractKeyword: String = "",
         extractSample: String = "",
         extractedHint: String = "",
-        valueMappings: [MovieTicketPDFValueMapping] = []
+        valueMappings: [MovieTicketPDFValueMapping] = [],
+        printPrefix: String = "",
+        printSuffix: String = "",
+        isPageWideAuto: Bool = false
     ) {
         self.id = id
         self.fieldKind = fieldKind
@@ -805,6 +1147,9 @@ struct MovieTicketPDFRegion: Codable, Identifiable, Equatable {
         self.extractSample = extractSample
         self.extractedHint = extractedHint
         self.valueMappings = valueMappings
+        self.printPrefix = printPrefix
+        self.printSuffix = printSuffix
+        self.isPageWideAuto = isPageWideAuto
     }
 
     init(from decoder: Decoder) throws {
@@ -821,6 +1166,20 @@ struct MovieTicketPDFRegion: Codable, Identifiable, Equatable {
         extractSample = try c.decodeIfPresent(String.self, forKey: .extractSample) ?? ""
         extractedHint = try c.decodeIfPresent(String.self, forKey: .extractedHint) ?? ""
         valueMappings = try c.decodeIfPresent([MovieTicketPDFValueMapping].self, forKey: .valueMappings) ?? []
+        printPrefix = try c.decodeIfPresent(String.self, forKey: .printPrefix) ?? ""
+        printSuffix = try c.decodeIfPresent(String.self, forKey: .printSuffix) ?? ""
+        if let flagged = try c.decodeIfPresent(Bool.self, forKey: .isPageWideAuto) {
+            isPageWideAuto = flagged
+        } else {
+            // Legacy auto regions used a near-full-page rect.
+            isPageWideAuto = rect.width >= 0.9 && rect.height >= 0.9
+        }
+    }
+
+    /// Whether this region should draw/hit-test as a blue box on the sample PDF.
+    var showsCanvasBox: Bool {
+        if isPageWideAuto { return false }
+        return !(rect.width >= 0.9 && rect.height >= 0.9)
     }
 }
 
@@ -835,12 +1194,18 @@ struct MovieTicketPDFRule: Codable, Identifiable, Equatable {
     /// Display size of the sample page when regions were defined (points).
     var samplePageWidth: Double?
     var samplePageHeight: Double?
+    /// When true, PDF import never searches/fills seat — treat as 无指定座位.
+    var skipSeatRecognition: Bool = false
+    /// Used when ticket-type region misses or is absent.
+    var defaultTicketType: String = ""
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
 
     enum CodingKeys: String, CodingKey {
         case id, name, detectorKeywords, regions, linkedTemplateId
-        case samplePDFFilename, samplePageWidth, samplePageHeight, createdAt, updatedAt
+        case samplePDFFilename, samplePageWidth, samplePageHeight
+        case skipSeatRecognition, defaultTicketType
+        case createdAt, updatedAt
     }
 
     init(
@@ -852,6 +1217,8 @@ struct MovieTicketPDFRule: Codable, Identifiable, Equatable {
         samplePDFFilename: String? = nil,
         samplePageWidth: Double? = nil,
         samplePageHeight: Double? = nil,
+        skipSeatRecognition: Bool = false,
+        defaultTicketType: String = "",
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -863,6 +1230,8 @@ struct MovieTicketPDFRule: Codable, Identifiable, Equatable {
         self.samplePDFFilename = samplePDFFilename
         self.samplePageWidth = samplePageWidth
         self.samplePageHeight = samplePageHeight
+        self.skipSeatRecognition = skipSeatRecognition
+        self.defaultTicketType = defaultTicketType
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -877,6 +1246,8 @@ struct MovieTicketPDFRule: Codable, Identifiable, Equatable {
         samplePDFFilename = try c.decodeIfPresent(String.self, forKey: .samplePDFFilename)
         samplePageWidth = try c.decodeIfPresent(Double.self, forKey: .samplePageWidth)
         samplePageHeight = try c.decodeIfPresent(Double.self, forKey: .samplePageHeight)
+        skipSeatRecognition = try c.decodeIfPresent(Bool.self, forKey: .skipSeatRecognition) ?? false
+        defaultTicketType = try c.decodeIfPresent(String.self, forKey: .defaultTicketType) ?? ""
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }

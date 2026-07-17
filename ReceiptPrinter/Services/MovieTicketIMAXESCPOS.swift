@@ -11,6 +11,14 @@ enum MovieTicketIMAXESCPOS {
         var heightScale: Int = 1
         var bold: Bool = false
         var align: ESCPOSAlign = .left
+        var inverted: Bool = false
+    }
+
+    private struct RowItem {
+        var text: String
+        var x: CGFloat
+        var style: FieldStyle
+        var label: String
     }
 
     private enum BlockKind {
@@ -19,6 +27,8 @@ enum MovieTicketIMAXESCPOS {
         case text(String)
         /// Same-line type + price; `leftX` / `rightX` are canvas points → column placement.
         case typePrice(left: String, right: String, leftX: CGFloat, rightX: CGFloat)
+        /// Canvas elements that share approximately the same Y (e.g. cinema name + hall).
+        case inlineRow(items: [RowItem])
     }
 
     private struct Block {
@@ -27,12 +37,18 @@ enum MovieTicketIMAXESCPOS {
         var style: FieldStyle
         var kind: BlockKind
         var label: String
+        /// Canvas X — used to place same-row items left→right.
+        var x: CGFloat = 0
+        /// When true, emit via `appendRawTextLine` (no ESC/POS wrap).
+        var forceSingleLine: Bool = false
     }
 
     private static let barcodeModuleWidth: UInt8 = 3
     private static let defaultLogoWidthFraction: CGFloat = 0.80
     /// Serial field within this distance below a barcode is treated as HRI (skip duplicate).
     private static let serialUnderBarcodeSlop: CGFloat = 40
+    /// Text blocks within this canvas Y distance are printed on one ESC/POS line.
+    private static let sameRowYTolerance: CGFloat = 12
 
     static func render(
         template: MovieTicketTemplate,
@@ -96,7 +112,15 @@ enum MovieTicketIMAXESCPOS {
                     builder.selectFontA()
                 }
                 apply(builder, block.style)
-                builder.text(text).newline()
+                let emitText = paddedIfInverted(text, inverted: block.style.inverted)
+                if block.style.inverted { builder.reversePrint(true) }
+                if block.forceSingleLine {
+                    // Already clipped to the element box; do not re-wrap.
+                    builder.appendRawTextLine(emitText).newline()
+                } else {
+                    builder.text(emitText).newline()
+                }
+                if block.style.inverted { builder.reversePrint(false) }
                 builder.selectFontA()
                 advance = linePts * CGFloat(max(1, block.style.heightScale))
             case .typePrice(let left, let right, let leftX, let rightX):
@@ -117,6 +141,16 @@ enum MovieTicketIMAXESCPOS {
                 )
                 builder.text(line).newline()
                 advance = linePts * CGFloat(max(1, block.style.heightScale))
+            case .inlineRow(let items):
+                builder.selectFontA()
+                emitInlineRow(
+                    builder: builder,
+                    items: items,
+                    paperWidth: paperW,
+                    config: config
+                )
+                let hScale = items.map(\.style.heightScale).max() ?? block.style.heightScale
+                advance = linePts * CGFloat(max(1, hScale))
             }
 
             // Prefer canvas overlap: advance from block.y by printed height (not full box
@@ -199,7 +233,12 @@ enum MovieTicketIMAXESCPOS {
                     )
                 case .text(let text):
                     var ty = y
-                    drawText(text, style: block.style, widthDots: widthDots, y: &ty)
+                    drawText(
+                        paddedIfInverted(text, inverted: block.style.inverted),
+                        style: block.style,
+                        widthDots: widthDots,
+                        y: &ty
+                    )
                 case .typePrice(let left, let right, let leftX, let rightX):
                     var ty = y
                     let cols = max(8, config.columnsPerLine / max(1, block.style.widthScale))
@@ -212,6 +251,15 @@ enum MovieTicketIMAXESCPOS {
                         columns: cols
                     )
                     drawText(line, style: FieldStyle(align: .left), widthDots: widthDots, y: &ty)
+                case .inlineRow(let items):
+                    var ty = y
+                    drawInlineRow(
+                        items: items,
+                        paperWidth: paperW,
+                        widthDots: widthDots,
+                        config: config,
+                        y: &ty
+                    )
                 }
             }
             return true
@@ -252,7 +300,8 @@ enum MovieTicketIMAXESCPOS {
                     height: el.frame.height,
                     style: FieldStyle(align: .center),
                     kind: .logo,
-                    label: "logo"
+                    label: "logo",
+                    x: el.frame.x
                 ))
             case .textBox, .currentDate, .currentTime:
                 let text = expandStaticText(el, draft: draft, now: Date())
@@ -262,7 +311,8 @@ enum MovieTicketIMAXESCPOS {
                     height: el.frame.height,
                     style: fieldStyle(el, defaultW: 1, defaultH: 1, defaultBold: el.isBold, defaultAlign: escAlign(el.alignment)),
                     kind: .text(text),
-                    label: "text:\(String(text.prefix(12)))"
+                    label: "text:\(String(text.prefix(12)))",
+                    x: el.frame.x
                 ))
             case .fieldPlaceholder:
                 guard let kind = el.fieldKind else { continue }
@@ -278,7 +328,8 @@ enum MovieTicketIMAXESCPOS {
                             heightDots: dots,
                             moduleWidth: barcodeModuleWidth
                         ),
-                        label: "barcode"
+                        label: "barcode",
+                        x: el.frame.x
                     ))
                 case .qrCode:
                     continue
@@ -296,7 +347,8 @@ enum MovieTicketIMAXESCPOS {
                                 leftX: el.frame.x,
                                 rightX: priceEl.frame.x
                             ),
-                            label: "typePrice"
+                            label: "typePrice",
+                            x: el.frame.x
                         ))
                     } else {
                         blocks.append(Block(
@@ -304,7 +356,8 @@ enum MovieTicketIMAXESCPOS {
                             height: el.frame.height,
                             style: fieldStyle(el, defaultW: 1, defaultH: 1, defaultBold: el.isBold, defaultAlign: escAlign(el.alignment)),
                             kind: .text(left.isEmpty ? " " : left),
-                            label: "ticketType"
+                            label: "ticketType",
+                            x: el.frame.x
                         ))
                     }
                 case .ticketPrice:
@@ -315,7 +368,8 @@ enum MovieTicketIMAXESCPOS {
                         height: el.frame.height,
                         style: fieldStyle(el, defaultW: 1, defaultH: 1, defaultBold: el.isBold, defaultAlign: escAlign(el.alignment)),
                         kind: .text(value.isEmpty ? " " : value),
-                        label: "ticketPrice"
+                        label: "ticketPrice",
+                        x: el.frame.x
                     ))
                 default:
                     var value = MovieTicketLayoutEngine_resolved(
@@ -334,27 +388,85 @@ enum MovieTicketIMAXESCPOS {
                         }
                     }
                     let defaults = defaultStyle(for: kind)
+                    let style = fieldStyle(
+                        el,
+                        defaultW: defaults.w,
+                        defaultH: defaults.h,
+                        defaultBold: defaults.bold,
+                        defaultAlign: defaults.align
+                    )
+                    var forceSingleLine = false
+                    if kind == .movieTitle, el.singleLineClip != false,
+                       let clipCols = titleClipColumns(
+                        element: el, config: config, widthScale: style.widthScale, paperWidth: template.paperSize.width
+                       ) {
+                        value = ReceiptTextLayout.clip(value, maxColumns: clipCols)
+                        forceSingleLine = true
+                    }
                     blocks.append(Block(
                         y: el.frame.y,
                         height: el.frame.height,
-                        style: fieldStyle(
-                            el,
-                            defaultW: defaults.w,
-                            defaultH: defaults.h,
-                            defaultBold: defaults.bold,
-                            defaultAlign: defaults.align
-                        ),
+                        style: style,
                         kind: .text(value.isEmpty ? " " : value),
-                        label: kind.rawValue
+                        label: kind.rawValue,
+                        x: el.frame.x,
+                        forceSingleLine: forceSingleLine
                     ))
                 }
             }
         }
 
-        return blocks.sorted {
-            if abs($0.y - $1.y) < 0.5 { return $0.label < $1.label }
+        let sorted = blocks.sorted {
+            if abs($0.y - $1.y) <= sameRowYTolerance { return $0.x < $1.x }
             return $0.y < $1.y
         }
+        return mergeSameRowTextBlocks(sorted)
+    }
+
+    /// Collapse consecutive `.text` blocks that share approximately the same canvas Y.
+    private static func mergeSameRowTextBlocks(_ blocks: [Block]) -> [Block] {
+        var result: [Block] = []
+        var i = 0
+        while i < blocks.count {
+            let block = blocks[i]
+            guard case .text(let text0) = block.kind else {
+                result.append(block)
+                i += 1
+                continue
+            }
+            var group: [(Block, String)] = [(block, text0)]
+            var j = i + 1
+            while j < blocks.count {
+                let next = blocks[j]
+                guard case .text(let tj) = next.kind,
+                      abs(next.y - block.y) <= sameRowYTolerance
+                else { break }
+                group.append((next, tj))
+                j += 1
+            }
+            if group.count == 1 {
+                result.append(block)
+            } else {
+                let items = group
+                    .sorted { $0.0.x < $1.0.x }
+                    .map { RowItem(text: $0.1, x: $0.0.x, style: $0.0.style, label: $0.0.label) }
+                let tallest = items.map(\.style.heightScale).max() ?? block.style.heightScale
+                var rowStyle = block.style
+                rowStyle.heightScale = tallest
+                rowStyle.widthScale = items.map(\.style.widthScale).max() ?? block.style.widthScale
+                rowStyle.align = .left
+                result.append(Block(
+                    y: group.map(\.0.y).min() ?? block.y,
+                    height: group.map(\.0.height).max() ?? block.height,
+                    style: rowStyle,
+                    kind: .inlineRow(items: items),
+                    label: items.map(\.label).joined(separator: "+"),
+                    x: items.first?.x ?? block.x
+                ))
+            }
+            i = j
+        }
+        return result
     }
 
     private static func defaultStyle(for kind: MovieTicketFieldKind) -> (w: Int, h: Int, bold: Bool, align: ESCPOSAlign) {
@@ -428,13 +540,15 @@ enum MovieTicketIMAXESCPOS {
             return element.content.isEmpty ? body : element.content + body
         case .timeRange:
             return formatTimeRange(element, draft: draft)
+        case .showDate:
+            return element.dateFormat.format(draft.showDate)
         case .seatArea:
             if draft.seatModeUnallocated { return template.unallocatedSeatLabel }
             return draft.seatArea
         case .ticketPrice: return draft.formattedPrice
         case .ticketType: return draft.ticketType
         case .serialNumber: return draft.serialNumber
-        case .hall: return draft.hall
+        case .hall: return element.resolvedHallText(from: draft)
         case .qrCode, .barcode: return draft.serialNumber
         }
     }
@@ -473,6 +587,22 @@ enum MovieTicketIMAXESCPOS {
         template.elements.first { $0.kind == .fieldPlaceholder && $0.fieldKind == kind }
     }
 
+    /// Columns the movie title may occupy on one line when single-line clip is on.
+    /// Derived from the title box width at its printed character size (Font A × width scale).
+    private static func titleClipColumns(
+        element: MovieTicketElement,
+        config: PrinterConfig,
+        widthScale: Int,
+        paperWidth: CGFloat
+    ) -> Int? {
+        let scale = CGFloat(max(1, widthScale))
+        let paperW = max(1, paperWidth)
+        let charDots = CGFloat(config.dotsPerLine) / CGFloat(max(1, config.columnsPerLine)) * scale
+        let boxDots = element.frame.width * CGFloat(config.dotsPerLine) / paperW
+        let cols = Int((boxDots / max(1, charDots)).rounded(.down))
+        return max(1, min(cols, config.columnsPerLine / Int(scale)))
+    }
+
     private static func fieldStyle(
         _ el: MovieTicketElement?,
         defaultW: Int,
@@ -485,7 +615,8 @@ enum MovieTicketIMAXESCPOS {
                 widthScale: defaultW,
                 heightScale: defaultH,
                 bold: defaultBold,
-                align: defaultAlign
+                align: defaultAlign,
+                inverted: false
             )
         }
         let scale = MovieTicketRitzESCPOS.printScale(fontSize: el.fontSize, boxHeight: el.frame.height)
@@ -493,7 +624,8 @@ enum MovieTicketIMAXESCPOS {
             widthScale: scale.width,
             heightScale: scale.height,
             bold: el.isBold,
-            align: escAlign(el.alignment)
+            align: escAlign(el.alignment),
+            inverted: el.isInverted
         )
     }
 
@@ -522,6 +654,45 @@ enum MovieTicketIMAXESCPOS {
             .applyMagnification(width: style.widthScale, height: style.heightScale)
     }
 
+    private static func paddedIfInverted(_ text: String, inverted: Bool) -> String {
+        guard inverted else { return text }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = trimmed.isEmpty ? " " : trimmed
+        return " \(body) "
+    }
+
+    private static func emitInlineRow(
+        builder: ESCPOSBuilder,
+        items: [RowItem],
+        paperWidth: CGFloat,
+        config: PrinterConfig
+    ) {
+        let sorted = items.sorted { $0.x < $1.x }
+        let wScale = max(1, sorted.map(\.style.widthScale).max() ?? 1)
+        let hScale = max(1, sorted.map(\.style.heightScale).max() ?? 1)
+        let cols = max(8, config.columnsPerLine / wScale)
+        builder.align(.left)
+            .applyMagnification(width: wScale, height: hScale)
+        var col = 0
+        for item in sorted {
+            let text = paddedIfInverted(item.text, inverted: item.style.inverted)
+            let target = columnIndex(x: item.x, paperWidth: paperWidth, columns: cols)
+            let pad = max(0, target - col)
+            if pad > 0 {
+                builder.appendRawTextLine(String(repeating: " ", count: pad))
+                col += pad
+            }
+            builder.bold(item.style.bold)
+            if item.style.inverted { builder.reversePrint(true) }
+            builder.appendRawTextLine(text)
+            if item.style.inverted { builder.reversePrint(false) }
+            col += ReceiptTextLayout.displayWidth(text)
+        }
+        builder.newline()
+        builder.resetStyle()
+        builder.selectFontA()
+    }
+
     // MARK: - Preview drawing
 
     private static func drawText(
@@ -529,7 +700,8 @@ enum MovieTicketIMAXESCPOS {
         style: FieldStyle,
         widthDots: Int,
         y: inout CGFloat,
-        baseSize: CGFloat = 17
+        baseSize: CGFloat = 17,
+        absoluteX: CGFloat? = nil
     ) {
         let wScale = max(1, style.widthScale)
         let hScale = max(1, style.heightScale)
@@ -538,24 +710,65 @@ enum MovieTicketIMAXESCPOS {
             ?? .monospacedSystemFont(ofSize: baseSize, weight: style.bold ? .bold : .regular)
         let colWidth = max(1, ReceiptTextLayout.displayWidth(text))
         let inkW = CGFloat(colWidth) * MovieTicketPrintMetrics.fontACellDots.width * CGFloat(wScale)
-        var x: CGFloat = 0
-        switch style.align {
-        case .center: x = max(0, (CGFloat(widthDots) - inkW) / 2)
-        case .right: x = max(0, CGFloat(widthDots) - inkW)
-        case .left: x = 8
+        var x: CGFloat
+        if let absoluteX {
+            x = absoluteX
+        } else {
+            switch style.align {
+            case .center: x = max(0, (CGFloat(widthDots) - inkW) / 2)
+            case .right: x = max(0, CGFloat(widthDots) - inkW)
+            case .left: x = 8
+            }
         }
+        let fg = style.inverted ? NSColor.white : NSColor.black
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: NSColor.black
+            .foregroundColor: fg
         ]
         if let ctx = NSGraphicsContext.current?.cgContext {
             ctx.saveGState()
             ctx.translateBy(x: x, y: y)
             ctx.scaleBy(x: CGFloat(wScale), y: CGFloat(hScale))
+            if style.inverted {
+                let pad: CGFloat = 2
+                let bg = NSRect(
+                    x: -pad,
+                    y: -pad,
+                    width: CGFloat(colWidth) * MovieTicketPrintMetrics.fontACellDots.width + pad * 2,
+                    height: MovieTicketPrintMetrics.fontACellDots.height + pad * 2
+                )
+                NSColor.black.setFill()
+                bg.fill()
+            }
             (text as NSString).draw(at: .zero, withAttributes: attrs)
             ctx.restoreGState()
         }
         y += cellH
+    }
+
+    private static func drawInlineRow(
+        items: [RowItem],
+        paperWidth: CGFloat,
+        widthDots: Int,
+        config: PrinterConfig,
+        y: inout CGFloat
+    ) {
+        let sorted = items.sorted { $0.x < $1.x }
+        let wScale = max(1, sorted.map(\.style.widthScale).max() ?? 1)
+        let cols = max(8, config.columnsPerLine / wScale)
+        let charDots = CGFloat(widthDots) / CGFloat(cols)
+        var maxBottom = y
+        for item in sorted {
+            let text = paddedIfInverted(item.text, inverted: item.style.inverted)
+            let col = columnIndex(x: item.x, paperWidth: paperWidth, columns: cols)
+            var ty = y
+            var style = item.style
+            style.widthScale = wScale
+            style.heightScale = max(1, sorted.map(\.style.heightScale).max() ?? 1)
+            drawText(text, style: style, widthDots: widthDots, y: &ty, absoluteX: CGFloat(col) * charDots)
+            maxBottom = max(maxBottom, ty)
+        }
+        y = maxBottom
     }
 
     /// Map canvas X (paper points) to a 0-based character column.

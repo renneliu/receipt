@@ -134,6 +134,8 @@ enum MovieTicketLayoutEngine {
             let a = element.rangeStartFormat.format(draft.combinedStart)
             let b = element.rangeEndFormat.format(draft.showEndTime)
             return "\(a)\(element.rangeConnector)\(b)"
+        case .showDate:
+            return element.dateFormat.format(draft.showDate)
         case .seatArea:
             if draft.seatModeUnallocated {
                 return template.unallocatedSeatLabel
@@ -146,7 +148,7 @@ enum MovieTicketLayoutEngine {
         case .serialNumber:
             return draft.serialNumber
         case .hall:
-            return draft.hall
+            return element.resolvedHallText(from: draft)
         case .qrCode, .barcode:
             return draft.serialNumber
         }

@@ -32,6 +32,7 @@ struct MovieTicketTemplateView: View {
     @State private var undoStack: [MovieTicketTemplate] = []
     @State private var undoPushedForGesture = false
     @State private var confirmFactoryReset = false
+    @State private var confirmDeleteTemplate = false
     @State private var showUnsavedDialog = false
     @State private var pendingLeaveAction: (() -> Void)?
 
@@ -95,6 +96,14 @@ struct MovieTicketTemplateView: View {
             titleVisibility: .visible
         ) {
             Button("恢复默认布局", role: .destructive) { resetToFactoryLayout() }
+            Button("取消", role: .cancel) {}
+        }
+        .confirmationDialog(
+            deleteTemplateMessage,
+            isPresented: $confirmDeleteTemplate,
+            titleVisibility: .visible
+        ) {
+            Button("删除模板", role: .destructive) { performDeleteTemplate() }
             Button("取消", role: .cancel) {}
         }
         .confirmationDialog(
@@ -174,7 +183,7 @@ struct MovieTicketTemplateView: View {
                     session.createTemplate()
                     undoStack = []
                     clearSelection()
-                    status = "已新建模板"
+                    status = "已新建空白模板（请从工具栏添加字段）"
                 }
             }
             Button("复制模板") {
@@ -197,35 +206,36 @@ struct MovieTicketTemplateView: View {
                 .disabled(session.editingTemplate == nil)
                 .help("恢复为应用生成的原始布局")
             Button("删除模板", role: .destructive) {
-                if let id = session.editingTemplate?.id {
-                    session.deleteTemplate(id)
-                    undoStack = []
-                    clearSelection()
-                    status = "已删除模板"
-                }
+                confirmDeleteTemplate = true
             }
             .disabled(session.editingTemplate == nil)
+            .help("删除当前模板（需确认）")
             Spacer()
-            Picker("选用", selection: Binding(
-                get: { session.settings.activeTemplateId },
-                set: { newId in
-                    guard let id = newId else { return }
-                    guard id != session.editingTemplate?.id else { return }
-                    requestLeaveEditing {
-                        session.selectTemplate(id)
-                        if let t = session.templates.first(where: { $0.id == id }) {
-                            session.beginEditing(t)
-                            undoStack = []
-                            clearSelection()
+            Picker(
+                "选用 (\(session.templates.count))",
+                selection: Binding(
+                    get: { session.settings.activeTemplateId },
+                    set: { newId in
+                        guard let id = newId else { return }
+                        guard id != session.editingTemplate?.id else { return }
+                        requestLeaveEditing {
+                            session.selectTemplate(id)
+                            if let t = session.templates.first(where: { $0.id == id }) {
+                                session.beginEditing(t)
+                                undoStack = []
+                                clearSelection()
+                            }
                         }
                     }
-                }
-            )) {
+                )
+            ) {
                 ForEach(session.templates) { t in
                     Text(t.name).tag(Optional(t.id))
                 }
             }
-            .frame(maxWidth: 180)
+            .pickerStyle(.menu)
+            .frame(minWidth: 160, maxWidth: 240)
+            .help(session.templates.map(\.name).joined(separator: "、"))
         }
     }
 
@@ -235,7 +245,7 @@ struct MovieTicketTemplateView: View {
                 Button("文字框") { addTextBox() }
                 Button("当前日期") { addCurrentDate() }
                 Button("当前时间") { addCurrentTime() }
-                ForEach([MovieTicketFieldKind.movieTitle, .startTime, .endTime, .timeRange], id: \.self) { k in
+                ForEach([MovieTicketFieldKind.movieTitle, .showDate, .startTime, .endTime, .timeRange], id: \.self) { k in
                     Button(k.displayName) { addField(k) }
                 }
             }
@@ -864,6 +874,44 @@ struct MovieTicketTemplateView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
+                    if el.fieldKind == .hall {
+                        Picker("影厅显示", selection: Binding(
+                            get: {
+                                session.editingTemplate?.elements
+                                    .first(where: { $0.id == elementId })?.hallDisplayMode
+                                    ?? .cinemaNumber
+                            },
+                            set: { v in updateElement(id: elementId) { $0.hallDisplayMode = v } }
+                        )) {
+                            ForEach(MovieTicketHallDisplayMode.allCases) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        if (session.editingTemplate?.elements
+                            .first(where: { $0.id == elementId })?.hallDisplayMode
+                            ?? .cinemaNumber) == .customPrefix {
+                            TextField("数字前缀（如 Screen 或 C）", text: Binding(
+                                get: {
+                                    session.editingTemplate?.elements
+                                        .first(where: { $0.id == elementId })?.hallNumberPrefix ?? ""
+                                },
+                                set: { v in
+                                    updateElement(id: elementId) {
+                                        $0.hallNumberPrefix = v.isEmpty ? nil : v
+                                    }
+                                }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                        }
+                        Text(hallDisplayHelp(
+                            session.editingTemplate?.elements
+                                .first(where: { $0.id == elementId })?.hallDisplayMode
+                                ?? .cinemaNumber
+                        ))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
                     if el.kind == .textBox {
                         TextField("文字内容", text: Binding(
                             get: { elementValue(id: elementId, \.content, default: "") },
@@ -871,7 +919,7 @@ struct MovieTicketTemplateView: View {
                         ))
                         .textFieldStyle(.roundedBorder)
                     }
-                    if el.kind == .currentDate {
+                    if el.kind == .currentDate || el.fieldKind == .showDate {
                         Picker("日期格式", selection: Binding(
                             get: { elementValue(id: elementId, \.dateFormat, default: .eeeMMMd) },
                             set: { v in updateElement(id: elementId) { $0.dateFormat = v } }
@@ -1116,6 +1164,36 @@ struct MovieTicketTemplateView: View {
     }
 
     // MARK: - Helpers
+
+    private var deleteTemplateMessage: String {
+        let name = session.editingTemplate?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if name.isEmpty {
+            return "确定删除当前模板？此操作不可撤销。"
+        }
+        return "确定删除模板「\(name)」？此操作不可撤销。"
+    }
+
+    private func performDeleteTemplate() {
+        guard let id = session.editingTemplate?.id else { return }
+        let name = session.editingTemplate?.name ?? ""
+        session.deleteTemplate(id)
+        undoStack = []
+        clearSelection()
+        status = name.isEmpty ? "已删除模板" : "已删除模板「\(name)」"
+    }
+
+    private func hallDisplayHelp(_ mode: MovieTicketHallDisplayMode) -> String {
+        switch mode {
+        case .cinemaNumber:
+            return "默认：从识别值提取数字，打印为 Cinema 1（如 Screen 2 → Cinema 2）"
+        case .numberOnly:
+            return "只打印数字部分（如 Screen 2 → 2）"
+        case .customPrefix:
+            return "数字前加自定义文字（如填 Screen 则打印 Screen 2）"
+        case .asRecognized:
+            return "直接使用主页/PDF 识别填入的原文（含规则映射与前后缀）"
+        }
+    }
 
     private func labeled<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -1659,9 +1737,16 @@ struct MovieTicketTemplateView: View {
             printPreviewImage = nil
             return
         }
-        let sample = t.usesIMAXSydneyLayout
-            ? MovieTicketDraft.imaxSydneySample()
-            : MovieTicketDraft.ritzMatrixSample()
+        let sample: MovieTicketDraft
+        if t.usesIMAXSydneyLayout {
+            sample = .imaxSydneySample()
+        } else if t.usesRitzLayout {
+            sample = .ritzMatrixSample()
+        } else if t.elements.isEmpty {
+            sample = .blank()
+        } else {
+            sample = .ritzMatrixSample()
+        }
         let result = MovieTicketPrintComposer.compose(
             template: t,
             draft: sample,

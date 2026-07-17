@@ -215,7 +215,7 @@ final class MovieTicketTemplateStore {
     private func seedIfNeeded() {
         let existing = loadAll()
         if existing.isEmpty {
-            saveMeta(MovieTicketTemplate.makeBlank(name: "示例影票"))
+            saveMeta(MovieTicketTemplate.makeRitz(name: "示例影票"))
             UserDefaults.standard.set(Self.ritzSampleLayoutVersion, forKey: Self.ritzSampleLayoutVersionKey)
             seedIMAXSydneyIfNeeded(existing: [])
             migrateCutFeedDefaultsIfNeeded()
@@ -225,7 +225,7 @@ final class MovieTicketTemplateStore {
         let applied = UserDefaults.standard.integer(forKey: Self.ritzSampleLayoutVersionKey)
         if applied < Self.ritzSampleLayoutVersion,
            let old = existing.first(where: { $0.name == "示例影票" }) {
-            var ritz = MovieTicketTemplate.makeBlank(name: "示例影票")
+            var ritz = MovieTicketTemplate.makeRitz(name: "示例影票")
             ritz.id = old.id
             ritz.createdAt = old.createdAt
             ritz.pdfRuleId = old.pdfRuleId

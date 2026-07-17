@@ -42,7 +42,7 @@ enum MovieTicketPrintComposer {
                 now: now
             )
             hint = "Movie ticket native ESC/POS (IMAX Sydney Font A + logo)"
-        } else {
+        } else if template.usesRitzLayout {
             escposPayload = MovieTicketRitzESCPOS.render(
                 template: template,
                 draft: draft,
@@ -56,6 +56,23 @@ enum MovieTicketPrintComposer {
                 now: now
             )
             hint = "Movie ticket native ESC/POS (Ritz Font A + GS !)"
+        } else {
+            // Blank / custom templates: print what is on the canvas (element order).
+            escposPayload = MovieTicketIMAXESCPOS.render(
+                template: template,
+                draft: draft,
+                config: config,
+                logoImage: logoImage,
+                now: now
+            )
+            preview = MovieTicketIMAXESCPOS.previewImage(
+                template: template,
+                draft: draft,
+                config: config,
+                logoImage: logoImage,
+                now: now
+            )
+            hint = "Movie ticket native ESC/POS (canvas WYSIWYG)"
         }
         let pngData = preview.tiffRepresentation.flatMap {
             NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:])

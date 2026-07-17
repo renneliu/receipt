@@ -697,6 +697,24 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         XCTAssertNil(plain.texts.first { $0.text == "10.00" }?.annotation)
     }
 
+    func testMovieTicketCountSerialAndSeats() {
+        var draft = MovieTicketDraft.blank()
+        draft.serialNumber = "477560/001"
+        XCTAssertEqual(draft.serialBase, "477560")
+        draft.setTicketCount(2)
+        draft.seatModeUnallocated = false
+        draft.seatAreas = ["K15", "K16"]
+        draft.syncSeatArrays()
+
+        let t0 = draft.draftForTicket(at: 0)
+        let t1 = draft.draftForTicket(at: 1)
+        XCTAssertEqual(t0.serialNumber, "477560/001")
+        XCTAssertEqual(t1.serialNumber, "477560/002")
+        XCTAssertEqual(t0.seatArea, "K15")
+        XCTAssertEqual(t1.seatArea, "K16")
+        XCTAssertEqual(draft.serialForTicket(at: 3), "477560/004")
+    }
+
     func testMovieTicketEndTimeAndUnallocatedSeat() {
         var draft = MovieTicketDraft.blank(defaultAd: 15)
         var cal = Calendar.current
@@ -713,7 +731,7 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         XCTAssertEqual(cal.component(.hour, from: end), 20)
         XCTAssertEqual(cal.component(.minute, from: end), 12)
 
-        var template = MovieTicketTemplate.makeBlank(name: "t")
+        var template = MovieTicketTemplate.makeRitz(name: "t")
         template.unallocatedSeatLabel = "ADMIT"
         let layout = MovieTicketLayoutEngine.expand(template: template, draft: draft)
         let seat = layout.texts.first { text in
@@ -721,6 +739,55 @@ final class ReceiptPrinterCoreTests: XCTestCase {
                 && text.frame == template.elements.first { $0.fieldKind == .seatArea }?.frame
         }
         XCTAssertEqual(seat?.text, "ADMIT")
+    }
+
+    func testMovieTicketHallDisplayModes() throws {
+        var draft = MovieTicketDraft.blank()
+        draft.hall = "Screen 2"
+        var el = MovieTicketElement(
+            kind: .fieldPlaceholder,
+            frame: SequencePlaceholderFrame(x: 0, y: 0, width: 100, height: 20),
+            fieldKind: .hall
+        )
+        XCTAssertEqual(el.resolvedHallText(from: draft), "Cinema 2")
+
+        el.hallDisplayMode = .numberOnly
+        XCTAssertEqual(el.resolvedHallText(from: draft), "2")
+
+        el.hallDisplayMode = .customPrefix
+        el.hallNumberPrefix = "Screen"
+        XCTAssertEqual(el.resolvedHallText(from: draft), "Screen 2")
+
+        // Round-trip without hallNumberPrefix key (legacy templates).
+        var legacy = el
+        legacy.hallNumberPrefix = nil
+        let encoded = try JSONEncoder().encode(legacy)
+        let obj = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        var stripped = obj ?? [:]
+        stripped.removeValue(forKey: "hallNumberPrefix")
+        stripped.removeValue(forKey: "hallDisplayMode")
+        let legacyData = try JSONSerialization.data(withJSONObject: stripped)
+        let decoded = try JSONDecoder().decode(MovieTicketElement.self, from: legacyData)
+        XCTAssertEqual(decoded.fieldKind, .hall)
+        XCTAssertNil(decoded.hallNumberPrefix)
+
+        el.hallDisplayMode = .asRecognized
+        XCTAssertEqual(el.resolvedHallText(from: draft), "Screen 2")
+
+        draft.hall = "IMAX 1"
+        el.hallDisplayMode = .cinemaNumber
+        XCTAssertEqual(el.resolvedHallText(from: draft), "Cinema 1")
+    }
+
+    func testMovieTicketMakeBlankIsEmpty() {
+        let blank = MovieTicketTemplate.makeBlank(name: "新影票模板")
+        XCTAssertTrue(blank.elements.isEmpty)
+        XCTAssertFalse(blank.usesRitzLayout)
+        XCTAssertFalse(blank.usesIMAXSydneyLayout)
+        let ritz = MovieTicketTemplate.makeRitz(name: "示例影票")
+        XCTAssertFalse(ritz.elements.isEmpty)
+        XCTAssertTrue(ritz.usesRitzLayout)
+        XCTAssertTrue(ritz.elements.contains { $0.fieldKind == .movieTitle })
     }
 
     func testMovieTicketRelativeRectClamped() {
@@ -752,7 +819,7 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         XCTAssertTrue(template.elements.contains { $0.fieldKind == .barcode })
         XCTAssertTrue(template.elements.contains { $0.fieldKind == .seatArea })
 
-        let draft = MovieTicketDraft.imaxSydneySample()
+        let draft = MovieTicketDraft.imaxSydneySample().draftForTicket(at: 0)
         let config = PrinterConfig()
         let result = MovieTicketPrintComposer.compose(
             template: template,

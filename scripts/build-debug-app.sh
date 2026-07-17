@@ -21,5 +21,10 @@ if [ -d "ReceiptPrinter/Resources" ]; then
     cp -R ReceiptPrinter/Resources/* "${RESOURCES}/" 2>/dev/null || true
 fi
 
+# macOS rejects unsigned / stale ad-hoc Mach-O copied into a bundle (SIGKILL codesign).
+codesign --force --deep --sign - \
+    --entitlements "ReceiptPrinter/ReceiptPrinter.entitlements" \
+    "${APP_DIR}"
+
 echo "Built ${APP_DIR}"
 echo "Run with: open dist/ReceiptPrinter.app"
