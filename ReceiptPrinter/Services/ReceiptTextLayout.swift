@@ -37,6 +37,24 @@ enum ReceiptTextLayout {
         return lines.isEmpty ? [""] : lines
     }
 
+    /// Keep a single line no wider than `maxColumns` (CJK counts as 2), clipping the
+    /// overflow. Any text after a hard line break is dropped (single-line only).
+    static func clip(_ text: String, maxColumns: Int, asciiAsDoubleWidth: Bool = false) -> String {
+        guard maxColumns > 0 else { return "" }
+        let firstLine = text.components(separatedBy: "\n").first ?? text
+        var out = ""
+        var width = 0
+        for ch in firstLine {
+            let w = ch.unicodeScalars.first.map {
+                columnWidth($0.value, asciiAsDoubleWidth: asciiAsDoubleWidth)
+            } ?? 1
+            if width + w > maxColumns { break }
+            out.append(ch)
+            width += w
+        }
+        return out
+    }
+
     /// Wrap to an optical width (points). Latin words stay intact when possible; CJK breaks per glyph.
     static func wrapFittingWidth(
         _ text: String,

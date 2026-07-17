@@ -5,7 +5,7 @@ struct MainView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(SidebarItem.allCases, selection: $appState.selectedSidebarItem) { item in
+            List(SidebarItem.sidebarItems, selection: $appState.selectedSidebarItem) { item in
                 Label(item.rawValue, systemImage: item.icon)
                     .tag(item)
             }
@@ -21,6 +21,11 @@ struct MainView: View {
         } message: {
             Text(appState.lastError ?? "")
         }
+        .onAppear {
+            if appState.selectedSidebarItem == .templates || appState.selectedSidebarItem == .designer {
+                appState.selectedSidebarItem = .templatePrint
+            }
+        }
     }
 
     @ViewBuilder
@@ -33,11 +38,9 @@ struct MainView: View {
         case .posReceipt:
             POSReceiptRootView()
         case .templatePrint:
-            TemplatePrintView()
-        case .templates:
-            TemplateListView()
-        case .designer:
-            TemplateDesignerView(template: appState.designerTemplate ?? appState.templates.first ?? ReceiptTemplate(name: "新模板"))
+            MovieTicketRootView()
+        case .templates, .designer:
+            MovieTicketRootView()
         case .emailExtraction:
             EmailExtractionRulesView()
         case .orders:

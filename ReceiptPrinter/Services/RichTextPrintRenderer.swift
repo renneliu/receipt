@@ -71,6 +71,12 @@ enum RichTextPrintRenderer {
         var isBold: Bool = false
         /// Smaller trailing note drawn after `text` (e.g. surcharge percent).
         var annotation: String? = nil
+        /// White-on-black block (movie ticket text invert). Default false keeps POS unchanged.
+        var isInverted: Bool = false
+        /// Optional PostScript name (e.g. `"Courier"`). Nil → system monospaced (POS default).
+        var fontName: String? = nil
+        /// Thermal “double-height” simulation (stretch glyphs vertically; width stays the same).
+        var verticalScale: CGFloat = 1
     }
 
     static func renderImage(attributedString: NSAttributedString, config: PrinterConfig, padding: CGFloat = 8) -> NSImage {
@@ -206,7 +212,16 @@ enum RichTextPrintRenderer {
                     }
                     let pointSize = max(8, overlay.fontSize * scale)
                     let weight: NSFont.Weight = overlay.isBold ? .bold : .regular
-                    let font = NSFont.monospacedSystemFont(ofSize: pointSize, weight: weight)
+                    let font: NSFont = {
+                        if let name = overlay.fontName {
+                            let resolved = overlay.isBold
+                                ? (NSFont(name: "\(name)-Bold", size: pointSize)
+                                   ?? NSFont(name: name, size: pointSize))
+                                : NSFont(name: name, size: pointSize)
+                            if let resolved { return resolved }
+                        }
+                        return NSFont.monospacedSystemFont(ofSize: pointSize, weight: weight)
+                    }()
                     let paragraph = NSMutableParagraphStyle()
                     paragraph.lineBreakMode = .byClipping
                     switch overlay.alignment {
@@ -214,21 +229,37 @@ enum RichTextPrintRenderer {
                     case 2: paragraph.alignment = .right
                     default: paragraph.alignment = .left
                     }
+                    let fg = overlay.isInverted ? NSColor.white : NSColor.black
+                    if overlay.isInverted {
+                        NSColor.black.setFill()
+                        dest.fill()
+                    }
                     let attrs: [NSAttributedString.Key: Any] = [
                         .font: font,
-                        .foregroundColor: NSColor.black,
+                        .foregroundColor: fg,
                         .paragraphStyle: paragraph
                     ]
+                    let vScale = max(1, overlay.verticalScale)
                     if let annotation = overlay.annotation, !annotation.isEmpty {
                         let styled = NSMutableAttributedString(string: overlay.text, attributes: attrs)
                         let small = NSFont.monospacedSystemFont(ofSize: max(7, pointSize * 0.65), weight: .regular)
                         styled.append(NSAttributedString(string: annotation, attributes: [
                             .font: small,
-                            .foregroundColor: NSColor.black,
+                            .foregroundColor: fg,
                             .paragraphStyle: paragraph,
                             .baselineOffset: pointSize * 0.08
                         ]))
                         styled.draw(in: dest)
+                    } else if vScale > 1.01 {
+                        // ESC/POS-like double-height: same glyph width, stretched vertically.
+                        NSGraphicsContext.saveGraphicsState()
+                        let t = NSAffineTransform()
+                        t.translateX(by: dest.minX, yBy: dest.minY)
+                        t.scaleX(by: 1, yBy: vScale)
+                        t.concat()
+                        let drawRect = NSRect(x: 0, y: 0, width: dest.width, height: dest.height / vScale)
+                        (overlay.text as NSString).draw(in: drawRect, withAttributes: attrs)
+                        NSGraphicsContext.restoreGraphicsState()
                     } else {
                         // Pre-wrapped names use \n; draw top-aligned within the field frame.
                         (overlay.text as NSString).draw(in: dest, withAttributes: attrs)
@@ -675,8 +706,8 @@ enum RichTextPrintRenderer {
     static func effectiveColumns(for size: TextSize, config: PrinterConfig) -> Int {
         let base = max(8, config.columnsPerLine)
         switch size {
-        case .double: return max(8, base / 2) // width×2 → 24 cols
-        case .tall, .normal: return base
+        case .double, .doubleTall: return max(8, base / 2) // width×2
+        case .tall, .taller, .normal: return base
         }
     }
 
@@ -774,12 +805,14 @@ enum RichTextPrintRenderer {
         columns: Int,
         asciiAsDoubleWidth: Bool
     ) {
-        let maxCols = size == .double ? max(8, columns / 2) : max(8, columns)
+        let maxCols = (size == .double || size == .doubleTall) ? max(8, columns / 2) : max(8, columns)
         let unitW = contentWidth / CGFloat(maxCols)
         let resolvedSize: CGFloat
         switch size {
         case .double: resolvedSize = max(14, unitW * 1.7)
+        case .doubleTall: resolvedSize = max(16, unitW * 2.4)
         case .tall: resolvedSize = max(12, unitW * 1.9)
+        case .taller: resolvedSize = max(14, unitW * 2.6)
         case .normal: resolvedSize = max(11, unitW * 1.7)
         }
         let weight: NSFont.Weight = bold ? .semibold : .regular

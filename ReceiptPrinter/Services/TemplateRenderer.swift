@@ -84,7 +84,9 @@ enum TemplateRenderer {
         switch size {
         case .normal: 20
         case .tall: 28
+        case .taller: 40
         case .double: 36
+        case .doubleTall: 48
         }
     }
 
@@ -92,7 +94,9 @@ enum TemplateRenderer {
         let base: CGFloat = switch size {
         case .normal: 12
         case .tall: 16
+        case .taller: 22
         case .double: 22
+        case .doubleTall: 26
         }
         return base
     }

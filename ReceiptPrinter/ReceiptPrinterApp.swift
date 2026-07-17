@@ -248,7 +248,8 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     case quickPrint = "快速打印"
     case spreadsheetSequence = "Excel表格序列打印"
     case posReceipt = "POS小票打印"
-    case templatePrint = "模板打印"
+    case templatePrint = "影票打印"
+    /// Kept for deep-links / migration; hidden from sidebar.
     case templates = "模板管理"
     case designer = "模板设计"
     case emailExtraction = "邮件抓取规则"
@@ -260,12 +261,17 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Sidebar entries (模板管理 / 模板设计 folded into 影票打印).
+    static var sidebarItems: [SidebarItem] {
+        allCases.filter { $0 != .templates && $0 != .designer }
+    }
+
     var icon: String {
         switch self {
         case .quickPrint: return "printer"
         case .spreadsheetSequence: return "tablecells"
         case .posReceipt: return "cart"
-        case .templatePrint: return "doc.richtext"
+        case .templatePrint: return "ticket"
         case .templates: return "doc.text"
         case .designer: return "pencil.and.outline"
         case .emailExtraction: return "envelope.badge"

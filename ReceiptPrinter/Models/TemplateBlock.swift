@@ -33,14 +33,16 @@ enum TextAlign: String, Codable, CaseIterable, Identifiable {
 }
 
 enum TextSize: String, Codable, CaseIterable, Identifiable {
-    case normal, tall, double
+    case normal, tall, taller, double, doubleTall
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
         case .normal: return "标准"
         case .tall: return "加高"
+        case .taller: return "加高×3"
         case .double: return "双倍大小"
+        case .doubleTall: return "双宽×加高×3"
         }
     }
 }

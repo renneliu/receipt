@@ -696,4 +696,49 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         )
         XCTAssertNil(plain.texts.first { $0.text == "10.00" }?.annotation)
     }
+
+    func testMovieTicketEndTimeAndUnallocatedSeat() {
+        var draft = MovieTicketDraft.blank(defaultAd: 15)
+        var cal = Calendar.current
+        var c = DateComponents()
+        c.year = 2026; c.month = 7; c.day = 16; c.hour = 18; c.minute = 0
+        let start = cal.date(from: c)!
+        draft.showDate = cal.startOfDay(for: start)
+        draft.showStartTime = start
+        draft.movieDurationMinutes = 117
+        draft.adDurationMinutes = 15
+        draft.seatModeUnallocated = true
+        draft.movieTitle = "Test"
+        let end = draft.showEndTime
+        XCTAssertEqual(cal.component(.hour, from: end), 20)
+        XCTAssertEqual(cal.component(.minute, from: end), 12)
+
+        var template = MovieTicketTemplate.makeBlank(name: "t")
+        template.unallocatedSeatLabel = "ADMIT"
+        let layout = MovieTicketLayoutEngine.expand(template: template, draft: draft)
+        let seat = layout.texts.first { text in
+            template.elements.contains { $0.fieldKind == .seatArea }
+                && text.frame == template.elements.first { $0.fieldKind == .seatArea }?.frame
+        }
+        XCTAssertEqual(seat?.text, "ADMIT")
+    }
+
+    func testMovieTicketRelativeRectClamped() {
+        let r = MovieTicketRelativeRect(x: -0.1, y: 0.9, width: 0.5, height: 0.5).clamped()
+        XCTAssertGreaterThanOrEqual(r.x, 0)
+        XCTAssertLessThanOrEqual(r.x + r.width, 1.0001)
+        XCTAssertLessThanOrEqual(r.y + r.height, 1.0001)
+    }
+
+    func testMovieTicketPDFKeywordMatch() {
+        let rule = MovieTicketPDFRule(name: "Ritz", detectorKeywords: ["ritz", "The Ritz"])
+        let hits = MovieTicketPDFRecognitionService.matchRules(
+            text: "Welcome to The Ritz Cinemas",
+            rules: [rule]
+        )
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertTrue(
+            MovieTicketPDFRecognitionService.matchRules(text: "Orpheum only", rules: [rule]).isEmpty
+        )
+    }
 }

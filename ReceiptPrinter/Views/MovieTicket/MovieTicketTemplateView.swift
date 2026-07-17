@@ -1,0 +1,1207 @@
+import AppKit
+import PDFKit
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct MovieTicketTemplateView: View {
+    @EnvironmentObject private var session: MovieTicketSession
+    @EnvironmentObject private var appState: AppState
+
+    @State private var selectedElementId: UUID?
+    @State private var canvasGestureActive = false
+    @State private var status: String = ""
+    @State private var editingRule: MovieTicketPDFRule?
+    @State private var pdfPageSize: CGSize = CGSize(width: 612, height: 792)
+    @State private var pdfPageImage: NSImage?
+    @State private var showPDFRegionEditor = false
+    @State private var showPrintPreview = false
+    @State private var printPreviewImage: NSImage?
+    @State private var testResults: [String] = []
+    /// Bumped after PDF editor closes so the designer canvas remounts (sheet teardown breaks gestures).
+    @State private var canvasEpoch: Int = 0
+    /// Designer view zoom (1.0 = actual paper points). Default 2× for easier editing on 80mm tickets.
+    @State private var displayScale: CGFloat = 2
+
+    private static let zoomMin: CGFloat = 0.5
+    private static let zoomMax: CGFloat = 4
+    private static let zoomStep: CGFloat = 0.25
+
+    private var templateBinding: Binding<MovieTicketTemplate?> {
+        Binding(
+            get: { session.editingTemplate },
+            set: { session.editingTemplate = $0 }
+        )
+    }
+
+    var body: some View {
+        Group {
+            if showPDFRegionEditor {
+                // Full-pane swap — NOT .sheet. SwiftUI sheets on macOS leave the designer
+                // canvas unable to receive drag gestures until the view hierarchy remounts
+                // (e.g. switching main/template tabs).
+                pdfRegionEditorSheetContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                HSplitView {
+                    designerColumn
+                        .frame(minWidth: 420)
+                        .id("designer-\(canvasEpoch)")
+                    inspectorColumn
+                        .frame(minWidth: 280, idealWidth: 320, maxWidth: 400)
+                }
+                .padding(8)
+            }
+        }
+        .onAppear {
+            if session.editingTemplate == nil, let t = session.activeTemplate {
+                session.beginEditing(t)
+            }
+            syncPlaceholderSizesToPrint()
+        }
+        .onChange(of: showPDFRegionEditor) { _, isOpen in
+            canvasGestureActive = false
+            if !isOpen {
+                canvasEpoch += 1
+                restoreKeyWindow()
+            }
+        }
+        .sheet(isPresented: $showPrintPreview) {
+            printPreviewSheet
+        }
+    }
+
+    // MARK: - Designer
+
+    private var designerColumn: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            templateChrome
+            toolBar
+            Text("画布为占位符布局（块高=实际打印字高）；点「打印预览」查看真实打印效果")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            ScrollView([.vertical, .horizontal]) {
+                canvas
+                    .scaleEffect(displayScale, anchor: .topLeading)
+                    .frame(
+                        width: (session.editingTemplate?.paperSize.width ?? 302) * displayScale,
+                        height: (session.editingTemplate?.canvasHeight ?? 560) * displayScale,
+                        alignment: .topLeading
+                    )
+                    .padding(16)
+            }
+            if !status.isEmpty {
+                Text(status).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(8)
+    }
+
+    private var templateChrome: some View {
+        HStack {
+            if let t = session.editingTemplate {
+                TextField("模板名称", text: Binding(
+                    get: { t.name },
+                    set: { newValue in
+                        var copy = t
+                        copy.name = newValue
+                        session.editingTemplate = copy
+                    }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 220)
+            }
+            Button("新建模板") { session.createTemplate() }
+            Button("保存") { session.saveEditingTemplate() }
+            Button("删除模板", role: .destructive) {
+                if let id = session.editingTemplate?.id {
+                    session.deleteTemplate(id)
+                    status = "已删除模板"
+                }
+            }
+            .disabled(session.editingTemplate == nil)
+            Spacer()
+            Picker("选用", selection: Binding(
+                get: { session.settings.activeTemplateId },
+                set: { if let id = $0 { session.selectTemplate(id); session.beginEditing(session.activeTemplate!) } }
+            )) {
+                ForEach(session.templates) { t in
+                    Text(t.name).tag(Optional(t.id))
+                }
+            }
+            .frame(maxWidth: 180)
+        }
+    }
+
+    private var toolBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Button("文字框") { addTextBox() }
+                Button("当前日期") { addCurrentDate() }
+                Button("当前时间") { addCurrentTime() }
+                ForEach([MovieTicketFieldKind.movieTitle, .startTime, .endTime, .timeRange], id: \.self) { k in
+                    Button(k.displayName) { addField(k) }
+                }
+            }
+            HStack(spacing: 6) {
+                ForEach([MovieTicketFieldKind.seatArea, .ticketPrice, .ticketType, .serialNumber, .hall, .qrCode, .barcode], id: \.self) { k in
+                    Button(k.displayName) { addField(k) }
+                }
+            }
+            HStack {
+                Toggle("参考网格", isOn: Binding(
+                    get: { session.editingTemplate?.gridEnabled ?? true },
+                    set: { v in session.editingTemplate?.gridEnabled = v }
+                ))
+                Button("背景图") { pickBackground() }
+                Button("清除背景") { session.setBackground(nil) }
+                Button("Logo") { pickLogo() }
+                Button("对齐打印尺寸") { syncPlaceholderSizesToPrint(); status = "已按打印字高对齐占位框" }
+                Button("打印预览") { openPrintPreview() }
+                Spacer(minLength: 8)
+                zoomControls
+            }
+        }
+        .controlSize(.small)
+    }
+
+    private var zoomControls: some View {
+        HStack(spacing: 4) {
+            Text("视图").font(.caption).foregroundStyle(.secondary)
+            Button {
+                setZoom(displayScale - Self.zoomStep)
+            } label: {
+                Image(systemName: "minus.magnifyingglass")
+            }
+            .disabled(displayScale <= Self.zoomMin + 0.001)
+            .help("缩小")
+
+            Text("\(Int((displayScale * 100).rounded()))%")
+                .font(.caption.monospacedDigit())
+                .frame(minWidth: 40)
+
+            Button {
+                setZoom(displayScale + Self.zoomStep)
+            } label: {
+                Image(systemName: "plus.magnifyingglass")
+            }
+            .disabled(displayScale >= Self.zoomMax - 0.001)
+            .help("放大")
+
+            Button("50%") { setZoom(0.5) }
+            Button("100%") { setZoom(1) }
+            Button("200%") { setZoom(2) }
+            Button("适应") { fitZoomToVisible() }
+                .help("按当前可视区域大致适配纸宽")
+        }
+    }
+
+    private func setZoom(_ value: CGFloat) {
+        displayScale = min(Self.zoomMax, max(Self.zoomMin, (value * 100).rounded() / 100))
+    }
+
+    /// Fit paper width into a typical designer column (~400pt usable).
+    private func fitZoomToVisible() {
+        let paperW = session.editingTemplate?.paperSize.width ?? 302
+        let targetVisible: CGFloat = 400
+        setZoom(targetVisible / max(paperW, 1))
+    }
+
+    private var canvas: some View {
+        let paperW = session.editingTemplate?.paperSize.width ?? 302
+        let paperH = session.editingTemplate?.canvasHeight ?? 560
+        let paper = CGSize(width: paperW, height: paperH)
+        let gridOn = session.editingTemplate?.gridEnabled ?? true
+        let gridSize = session.editingTemplate?.gridSize ?? 20
+        return ZStack(alignment: .topLeading) {
+            Rectangle()
+                .fill(Color(nsColor: .controlBackgroundColor))
+                .frame(width: paper.width, height: paper.height)
+            Rectangle()
+                .fill(Color.white)
+                .frame(width: paper.width, height: paper.height)
+            if gridOn {
+                MovieTicketGridBackground(size: paper, step: gridSize)
+            }
+            ForEach(session.editingTemplate?.elements.sorted(by: { $0.zIndex < $1.zIndex }) ?? []) { el in
+                elementOverlay(el, paper: paper)
+                    .id(el.id)
+            }
+        }
+        .frame(width: paper.width, height: paper.height)
+        .clipped()
+        .border(Color.secondary.opacity(0.4))
+    }
+
+    private var printPreviewSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("打印预览").font(.headline)
+                Spacer()
+                Button("刷新") { regeneratePrintPreview() }
+                Button("关闭") { showPrintPreview = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+            Text("按 ESC/POS 内置 Font A + 放大倍率模拟的真实打印序列（与发往打印机的指令一致）。左侧画布仅为占位符。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ScrollView([.vertical, .horizontal]) {
+                if let img = printPreviewImage {
+                    Image(nsImage: img)
+                        .resizable()
+                        .interpolation(.none)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: 420)
+                        .border(Color.secondary.opacity(0.35))
+                        .padding(8)
+                } else {
+                    ProgressView("生成预览…")
+                        .frame(maxWidth: .infinity, minHeight: 200)
+                }
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 480, minHeight: 560)
+    }
+
+    private func elementOverlay(_ el: MovieTicketElement, paper: CGSize) -> some View {
+        let binding = Binding<SequencePlaceholderFrame>(
+            get: {
+                session.editingTemplate?.elements.first(where: { $0.id == el.id })?.frame
+                    ?? el.frame
+            },
+            set: { newFrame in
+                updateElement(id: el.id) { $0.frame = newFrame }
+            }
+        )
+        let selected = Binding<Bool>(
+            get: { selectedElementId == el.id },
+            set: { if $0 { selectedElementId = el.id } }
+        )
+        let gridOn = session.editingTemplate?.gridEnabled ?? true
+        let gridSize = session.editingTemplate?.gridSize ?? 20
+        let config = appState.settings.printerConfig
+        let minH = MovieTicketPrintMetrics.lineHeightPoints(
+            heightScale: 1, paperWidth: paper.width, dotsPerLine: config.dotsPerLine
+        )
+
+        if el.kind == .logo {
+            if let img = session.logoImages[el.id] {
+                return AnyView(
+                    LogoBoxOverlay(
+                        title: "Logo",
+                        image: img,
+                        frame: binding,
+                        isSelected: selected,
+                        paperSize: paper,
+                        onFrameChanged: {
+                            syncLogoScaleFromFrame(id: el.id)
+                        },
+                        onInteractionChanged: { active in
+                            canvasGestureActive = active
+                        },
+                        onDelete: {
+                            selectedElementId = nil
+                            guard var t = session.editingTemplate else { return }
+                            t.elements.removeAll { $0.id == el.id }
+                            session.editingTemplate = t
+                            session.logoImages.removeValue(forKey: el.id)
+                        },
+                        chromeOnly: false,
+                        isLocked: el.isLocked
+                    )
+                )
+            }
+            return AnyView(
+                MovieTicketElementBoxOverlay(
+                    frame: binding,
+                    isSelected: selected,
+                    title: "Logo",
+                    previewText: "[Logo]",
+                    fontSize: 12,
+                    textAlignment: 1,
+                    paperSize: paper,
+                    gridEnabled: gridOn,
+                    gridSize: gridSize,
+                    accent: .orange,
+                    chromeOnly: false,
+                    placeholderMode: true,
+                    isLocked: el.isLocked,
+                    minSize: CGSize(width: 36, height: minH),
+                    onInteractionChanged: { active in
+                        canvasGestureActive = active
+                    }
+                )
+            )
+        }
+
+        return AnyView(
+            MovieTicketElementBoxOverlay(
+                frame: binding,
+                isSelected: selected,
+                title: elementTitle(el),
+                previewText: elementPlaceholderLabel(el),
+                fontSize: el.fontSize,
+                textAlignment: el.alignment,
+                paperSize: paper,
+                gridEnabled: gridOn,
+                gridSize: gridSize,
+                accent: accent(for: el),
+                chromeOnly: false,
+                placeholderMode: true,
+                isLocked: el.isLocked,
+                minSize: CGSize(width: 36, height: minH),
+                onInteractionChanged: { active in
+                    canvasGestureActive = active
+                }
+            )
+        )
+    }
+
+    // MARK: - Inspector
+
+    private var inspectorColumn: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                templateProps
+                Divider()
+                if let id = selectedElementId,
+                   session.editingTemplate?.elements.contains(where: { $0.id == id }) == true {
+                    elementInspector(elementId: id)
+                } else {
+                    Text("从画布或下方列表选中元素以编辑属性")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Divider()
+                elementListSection
+                Divider()
+                pdfRulesSection
+            }
+            .padding()
+        }
+    }
+
+    private var templateProps: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("模板属性").font(.headline)
+            if session.editingTemplate != nil {
+                labeled("画布高度") {
+                    Slider(
+                        value: Binding(
+                            get: { Double(session.editingTemplate?.canvasHeight ?? 560) },
+                            set: { session.editingTemplate?.canvasHeight = CGFloat($0) }
+                        ),
+                        in: 300...1200,
+                        step: 20
+                    )
+                }
+                labeled("无特定座位文案") {
+                    TextField("General Admission", text: Binding(
+                        get: { session.editingTemplate?.unallocatedSeatLabel ?? "" },
+                        set: { session.editingTemplate?.unallocatedSeatLabel = $0 }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                }
+            }
+        }
+    }
+
+    private var elementListSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("元素列表").font(.headline)
+            let elements = (session.editingTemplate?.elements ?? []).sorted(by: { $0.zIndex < $1.zIndex })
+            if elements.isEmpty {
+                Text("暂无元素").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(elements) { el in
+                    Button { selectedElementId = el.id } label: {
+                        HStack {
+                            Circle().fill(accent(for: el)).frame(width: 8, height: 8)
+                            Text(elementTitle(el)).lineLimit(1)
+                            Spacer()
+                            if selectedElementId == el.id {
+                                Image(systemName: "checkmark.circle.fill")
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func elementInspector(elementId: UUID) -> some View {
+        guard let el = session.editingTemplate?.elements.first(where: { $0.id == elementId }) else {
+            return AnyView(EmptyView())
+        }
+        return AnyView(
+            VStack(alignment: .leading, spacing: 10) {
+                Text("元素：\(elementTitle(el))").font(.headline)
+                labeled("显示名称") {
+                    TextField("可选", text: Binding(
+                        get: { elementValue(id: elementId, \.displayName, default: "") },
+                        set: { v in updateElement(id: elementId) { $0.displayName = v } }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                }
+                Toggle("锁定位置", isOn: Binding(
+                    get: { elementValue(id: elementId, \.isLocked, default: false) },
+                    set: { v in updateElement(id: elementId) { $0.isLocked = v } }
+                ))
+                HStack {
+                    labeled("X") {
+                        NumericField(value: Double(el.frame.x)) { v in
+                            updateElement(id: elementId) { $0.frame.x = CGFloat(v) }
+                        }
+                        .frame(width: 64)
+                    }
+                    labeled("Y") {
+                        NumericField(value: Double(el.frame.y)) { v in
+                            updateElement(id: elementId) { $0.frame.y = CGFloat(v) }
+                        }
+                        .frame(width: 64)
+                    }
+                }
+
+                if el.kind == .logo {
+                    labeled("缩放 %") {
+                        HStack(spacing: 8) {
+                            TextField(
+                                "",
+                                value: Binding(
+                                    get: { elementValue(id: elementId, \.logoScalePercent, default: 100) },
+                                    set: { setLogoScalePercent(id: elementId, percent: $0) }
+                                ),
+                                format: .number.precision(.fractionLength(0))
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 56)
+                            Text("%")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Stepper(
+                                "",
+                                value: Binding(
+                                    get: { elementValue(id: elementId, \.logoScalePercent, default: 100) },
+                                    set: { setLogoScalePercent(id: elementId, percent: $0) }
+                                ),
+                                in: SequenceLogoItem.minScalePercent...SequenceLogoItem.maxScalePercent,
+                                step: 5
+                            )
+                            .labelsHidden()
+                        }
+                        Text("相对导入时基准尺寸缩放，中心点保持不动；彩色图导入时自动转黑白")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    HStack {
+                        labeled("宽") {
+                            NumericField(value: Double(el.frame.width), range: 36...2000) { v in
+                                updateElement(id: elementId) { $0.frame.width = CGFloat(v) }
+                            }
+                            .frame(width: 64)
+                        }
+                        labeled("高") {
+                            NumericField(value: Double(el.frame.height), range: 12...2000) { v in
+                                updateElement(id: elementId) { $0.frame.height = CGFloat(v) }
+                            }
+                            .frame(width: 64)
+                        }
+                    }
+                    Text("宽高可独立调整（非等比例）")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+
+                    // Built-in printer font only supports ×1/×2/×3 — expose as choices, not free numbers.
+                    let printScale = MovieTicketRitzESCPOS.printScale(
+                        fontSize: el.fontSize, boxHeight: el.frame.height
+                    )
+                    let paperW = session.editingTemplate?.paperSize.width ?? 302
+                    let dots = appState.settings.printerConfig.dotsPerLine
+                    labeled("打印宽") {
+                        Picker("", selection: Binding(
+                            get: { printScale.width },
+                            set: { level in
+                                let fs: CGFloat = level <= 1 ? 11 : (level == 2 ? 14 : 20)
+                                updateElement(id: elementId) { el in
+                                    el.fontSize = fs
+                                    let scale = MovieTicketRitzESCPOS.printScale(
+                                        fontSize: fs, boxHeight: el.frame.height
+                                    )
+                                    el.frame.height = MovieTicketPrintMetrics.lineHeightPoints(
+                                        heightScale: scale.height,
+                                        paperWidth: paperW,
+                                        dotsPerLine: dots
+                                    )
+                                }
+                            }
+                        )) {
+                            Text("1×").tag(1)
+                            Text("2×").tag(2)
+                            Text("3×").tag(3)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+                    labeled("打印高") {
+                        Picker("", selection: Binding(
+                            get: { printScale.height },
+                            set: { level in
+                                let h = max(level, printScale.width)
+                                let boxH = MovieTicketPrintMetrics.lineHeightPoints(
+                                    heightScale: h, paperWidth: paperW, dotsPerLine: dots
+                                )
+                                updateElement(id: elementId) { $0.frame.height = boxH }
+                            }
+                        )) {
+                            Text("1×").tag(1)
+                            Text("2×").tag(2)
+                            Text("3×").tag(3)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+                    Text("内置字体仅 1×/2×/3×；占位框高=打印字高；当前 \(printScale.width)×\(printScale.height)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Toggle("粗体", isOn: Binding(
+                        get: { elementValue(id: elementId, \.isBold, default: false) },
+                        set: { v in updateElement(id: elementId) { $0.isBold = v } }
+                    ))
+                    labeled("对齐") {
+                        Picker("", selection: Binding(
+                            get: { elementValue(id: elementId, \.alignment, default: 0) },
+                            set: { v in updateElement(id: elementId) { $0.alignment = v } }
+                        )) {
+                            Text("左对齐").tag(0)
+                            Text("居中").tag(1)
+                            Text("右对齐").tag(2)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+                    if el.kind == .textBox || el.kind == .fieldPlaceholder || el.kind == .currentDate || el.kind == .currentTime {
+                        Toggle("反色 Invert", isOn: Binding(
+                            get: { elementValue(id: elementId, \.isInverted, default: false) },
+                            set: { v in updateElement(id: elementId) { $0.isInverted = v } }
+                        ))
+                    }
+                    if el.fieldKind == .movieTitle {
+                        Toggle("片名限制单行（超出隐藏）", isOn: Binding(
+                            get: {
+                                session.editingTemplate?.elements
+                                    .first(where: { $0.id == elementId })?.singleLineClip != false
+                            },
+                            set: { v in updateElement(id: elementId) { $0.singleLineClip = v } }
+                        ))
+                        Text("开启后，片名只显示一行，超出元素框的部分不打印")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    if el.kind == .textBox {
+                        TextField("文字内容", text: Binding(
+                            get: { elementValue(id: elementId, \.content, default: "") },
+                            set: { v in updateElement(id: elementId) { $0.content = v } }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                    }
+                    if el.kind == .currentDate {
+                        Picker("日期格式", selection: Binding(
+                            get: { elementValue(id: elementId, \.dateFormat, default: .eeeMMMd) },
+                            set: { v in updateElement(id: elementId) { $0.dateFormat = v } }
+                        )) {
+                            ForEach(MovieTicketDateFormat.allCases) { Text($0.displayName).tag($0) }
+                        }
+                    }
+                    if el.kind == .currentTime || el.fieldKind == .startTime || el.fieldKind == .endTime {
+                        Picker("时间格式", selection: Binding(
+                            get: { elementValue(id: elementId, \.timeFormat, default: .hmma) },
+                            set: { v in updateElement(id: elementId) { $0.timeFormat = v } }
+                        )) {
+                            ForEach(MovieTicketTimeFormat.allCases) { Text($0.displayName).tag($0) }
+                        }
+                    }
+                    if el.fieldKind == .timeRange {
+                        Picker("开始格式", selection: Binding(
+                            get: { elementValue(id: elementId, \.rangeStartFormat, default: .hmma) },
+                            set: { v in updateElement(id: elementId) { $0.rangeStartFormat = v } }
+                        )) {
+                            ForEach(MovieTicketTimeFormat.allCases) { Text($0.displayName).tag($0) }
+                        }
+                        Picker("结束格式", selection: Binding(
+                            get: { elementValue(id: elementId, \.rangeEndFormat, default: .hmma) },
+                            set: { v in updateElement(id: elementId) { $0.rangeEndFormat = v } }
+                        )) {
+                            ForEach(MovieTicketTimeFormat.allCases) { Text($0.displayName).tag($0) }
+                        }
+                        TextField("连接词", text: Binding(
+                            get: { elementValue(id: elementId, \.rangeConnector, default: " - ") },
+                            set: { v in updateElement(id: elementId) { $0.rangeConnector = v } }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                    }
+                }
+                Button("删除元素", role: .destructive) {
+                    selectedElementId = nil
+                    guard var t = session.editingTemplate else { return }
+                    if el.kind == .logo {
+                        session.logoImages.removeValue(forKey: elementId)
+                    }
+                    t.elements.removeAll { $0.id == elementId }
+                    session.editingTemplate = t
+                }
+            }
+        )
+    }
+
+    // MARK: - PDF rules
+
+    private var pdfRulesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("PDF 识别规则").font(.headline)
+            Text("每个模板只能链接一条规则。框选为相对坐标，可识别不同页面尺寸；跨尺寸请优先用「识别关键词」。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Button("新建规则") {
+                var rule = MovieTicketPDFRule(name: "新规则")
+                if let tid = session.editingTemplate?.id {
+                    rule.linkedTemplateId = tid
+                }
+                session.savePDFRule(rule)
+                editingRule = session.pdfRules.first { $0.id == rule.id } ?? rule
+                if let tid = session.editingTemplate?.id {
+                    session.linkRule(rule.id, to: tid)
+                }
+                status = "已新建并链接规则"
+            }
+
+            ForEach(session.pdfRules) { rule in
+                HStack(alignment: .center, spacing: 8) {
+                    Button(rule.name) {
+                        editingRule = rule
+                        loadSamplePDF(for: rule)
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    if session.editingTemplate?.pdfRuleId == rule.id {
+                        Text("已链接")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.green)
+                        Button("取消链接") {
+                            if let tid = session.editingTemplate?.id {
+                                session.unlinkRule(from: tid)
+                                status = "已取消链接"
+                            }
+                        }
+                        .controlSize(.small)
+                    } else {
+                        Button("链接到当前模板") {
+                            if let tid = session.editingTemplate?.id {
+                                session.linkRule(rule.id, to: tid)
+                                status = "已链接规则「\(rule.name)」（原链接已替换）"
+                            }
+                        }
+                        .controlSize(.small)
+                    }
+                    Button("删", role: .destructive) {
+                        session.deletePDFRule(rule.id)
+                        if editingRule?.id == rule.id {
+                            editingRule = nil
+                            pdfPageImage = nil
+                        }
+                    }
+                    .controlSize(.small)
+                }
+            }
+
+            if let rule = editingRule {
+                Divider()
+                Text("编辑：\(rule.name)").font(.subheadline.weight(.semibold))
+                TextField("规则名称", text: Binding(
+                    get: { editingRule?.name ?? "" },
+                    set: { editingRule?.name = $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                TextField("检测关键字（逗号分隔，如 ritz）", text: Binding(
+                    get: { (editingRule?.detectorKeywords ?? []).joined(separator: ", ") },
+                    set: { raw in
+                        editingRule?.detectorKeywords = raw
+                            .split(separator: ",")
+                            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                            .filter { !$0.isEmpty }
+                    }
+                ))
+                .textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("上传样板 PDF") { pickSamplePDF() }
+                    Button("保存规则") {
+                        if let r = editingRule {
+                            session.savePDFRule(r)
+                            status = "规则已保存"
+                        }
+                    }
+                }
+
+                if pdfPageImage != nil {
+                    Text("已映射 \(editingRule?.regions.count ?? 0) 个区域")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(editingRule?.regions ?? []) { region in
+                        HStack {
+                            Text(region.fieldKind.displayName)
+                            Text(region.captureMode.displayName)
+                                .foregroundStyle(.secondary)
+                            if !region.extractSample.isEmpty {
+                                Text("「\(region.extractSample)」")
+                                    .foregroundStyle(.orange)
+                            } else if region.extractKind != .entire {
+                                Text(region.extractKind.displayName)
+                                    .foregroundStyle(.orange)
+                            }
+                            if !region.valueMappings.isEmpty {
+                                Text("映射×\(region.valueMappings.count)")
+                                    .foregroundStyle(.purple)
+                            }
+                            Spacer()
+                            Button("改") {
+                                openPDFRegionEditor()
+                            }
+                            .controlSize(.small)
+                            .help("在 PDF 区域编辑器中修改此映射")
+                            Button("删", role: .destructive) {
+                                editingRule?.regions.removeAll { $0.id == region.id }
+                            }
+                            .controlSize(.small)
+                        }
+                        .font(.caption)
+                    }
+            Button("打开 PDF 区域编辑器…") {
+                openPDFRegionEditor()
+            }
+            .buttonStyle(.borderedProminent)
+                    Button("测试识别…") { testRecognition() }
+                    if !testResults.isEmpty {
+                        ForEach(testResults, id: \.self) { line in
+                            Text(line).font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    Text("请先上传样板 PDF，再打开区域编辑器框选。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func restoreKeyWindow() {
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            let candidates = NSApp.windows.filter {
+                $0.isVisible && $0.canBecomeKey && !($0 is NSPanel)
+            }
+            if let window = candidates.first {
+                window.makeKeyAndOrderFront(nil)
+                window.makeFirstResponder(window.contentView)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var pdfRegionEditorSheetContent: some View {
+        if let image = pdfPageImage, editingRule != nil {
+            MovieTicketPDFRegionEditorSheet(
+                rule: Binding(
+                    get: { editingRule! },
+                    set: { editingRule = $0 }
+                ),
+                pageImage: image,
+                pageSize: pdfPageSize,
+                templateElements: session.editingTemplate?.elements ?? [],
+                samplePDFURL: editingRule.flatMap { session.store.samplePDFURL(for: $0) },
+                onSave: { updated in
+                    var toSave = updated
+                    toSave.recordSamplePageSize(pdfPageSize)
+                    editingRule = toSave
+                    session.savePDFRule(toSave)
+                    status = "规则已保存（\(toSave.regions.count) 个区域）"
+                },
+                onDismiss: { closePDFRegionEditor() }
+            )
+        } else {
+            VStack(spacing: 12) {
+                Text("无法打开 PDF 预览")
+                Button("返回模板") { closePDFRegionEditor() }
+            }
+            .padding()
+        }
+    }
+
+    private func openPDFRegionEditor() {
+        canvasGestureActive = false
+        showPDFRegionEditor = true
+    }
+
+    private func closePDFRegionEditor() {
+        showPDFRegionEditor = false
+    }
+
+    // MARK: - Helpers
+
+    private func labeled<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+            content()
+        }
+    }
+
+    private func elementTitle(_ el: MovieTicketElement) -> String {
+        let custom = el.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !custom.isEmpty { return custom }
+        switch el.kind {
+        case .textBox: return "文字"
+        case .fieldPlaceholder: return el.fieldKind?.displayName ?? "字段"
+        case .currentDate: return "当前日期"
+        case .currentTime: return "当前时间"
+        case .logo: return "Logo"
+        }
+    }
+
+    /// Short label shown inside placeholder boxes (not a print-style preview).
+    private func elementPlaceholderLabel(_ el: MovieTicketElement) -> String {
+        "[\(elementTitle(el))]"
+    }
+
+    private func accent(for el: MovieTicketElement) -> Color {
+        switch el.kind {
+        case .fieldPlaceholder: return .blue
+        case .textBox: return .purple
+        case .currentDate, .currentTime: return .teal
+        case .logo: return .orange
+        }
+    }
+
+    private func elementValue<T>(id: UUID, _ keyPath: WritableKeyPath<MovieTicketElement, T>, default defaultValue: T) -> T {
+        session.editingTemplate?.elements.first(where: { $0.id == id })?[keyPath: keyPath] ?? defaultValue
+    }
+
+    private func updateElement(id: UUID, _ body: (inout MovieTicketElement) -> Void) {
+        guard var t = session.editingTemplate,
+              let idx = t.elements.firstIndex(where: { $0.id == id }) else { return }
+        body(&t.elements[idx])
+        session.editingTemplate = t
+    }
+
+    private func addField(_ kind: MovieTicketFieldKind) {
+        guard var t = session.editingTemplate else { return }
+        if t.hasElement(field: kind) {
+            status = "已存在「\(kind.displayName)」"
+            return
+        }
+        let paperW = t.paperSize.width
+        let dots = appState.settings.printerConfig.dotsPerLine
+        let defaultH = MovieTicketPrintMetrics.lineHeightPoints(
+            heightScale: 1, paperWidth: paperW, dotsPerLine: dots
+        )
+        let el = MovieTicketElement(
+            kind: .fieldPlaceholder,
+            frame: SequencePlaceholderFrame(
+                x: 12,
+                y: 200,
+                width: kind == .barcode || kind == .qrCode ? 200 : 160,
+                height: kind == .barcode || kind == .qrCode ? 56 : defaultH
+            ),
+            zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1,
+            fieldKind: kind
+        )
+        t.elements.append(el)
+        session.editingTemplate = t
+        selectedElementId = el.id
+    }
+
+    private func addTextBox() {
+        guard var t = session.editingTemplate else { return }
+        let el = MovieTicketElement(
+            kind: .textBox,
+            frame: SequencePlaceholderFrame(x: 12, y: 20, width: 160, height: 28),
+            zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1,
+            content: "文本"
+        )
+        t.elements.append(el)
+        session.editingTemplate = t
+        selectedElementId = el.id
+    }
+
+    private func addCurrentDate() {
+        guard var t = session.editingTemplate else { return }
+        let el = MovieTicketElement(
+            kind: .currentDate,
+            frame: SequencePlaceholderFrame(x: 12, y: 400, width: 180, height: 24),
+            zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1
+        )
+        t.elements.append(el)
+        session.editingTemplate = t
+        selectedElementId = el.id
+    }
+
+    private func addCurrentTime() {
+        guard var t = session.editingTemplate else { return }
+        let el = MovieTicketElement(
+            kind: .currentTime,
+            frame: SequencePlaceholderFrame(x: 200, y: 400, width: 90, height: 24),
+            zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1
+        )
+        t.elements.append(el)
+        session.editingTemplate = t
+        selectedElementId = el.id
+    }
+
+    private func pickBackground() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [
+            .png, .jpeg, .tiff, .gif, .bmp,
+            UTType(filenameExtension: "webp") ?? .png
+        ].compactMap { $0 }
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let img = NSImage(contentsOf: url) else { return }
+        session.setBackground(ImagePreprocessor.toBinaryBlackWhite(img))
+    }
+
+    /// Same import path as 快速打印: pick image → B&W → `SequenceLogoItem.makeDefault` frame.
+    private func pickLogo() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [
+            .png, .jpeg, .tiff, .gif, .bmp,
+            UTType(filenameExtension: "webp") ?? .png
+        ].compactMap { $0 }
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let img = NSImage(contentsOf: url) else { return }
+        guard var t = session.editingTemplate else { return }
+        let mono = ImagePreprocessor.toBinaryBlackWhite(img)
+        let id = UUID()
+        let paper = t.paperSize
+        let item = SequenceLogoItem.makeDefault(
+            id: id,
+            imageFilename: MovieTicketTemplateStore.logoFilename(for: id),
+            imageSize: mono.size,
+            paperWidth: paper.width,
+            paperSize: paper,
+            staggerIndex: session.logoImages.count,
+            zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1
+        )
+        var el = MovieTicketElement(
+            kind: .logo,
+            frame: item.frame,
+            zIndex: item.zIndex,
+            imageFilename: item.imageFilename,
+            logoScalePercent: item.scalePercent,
+            logoBaseWidth: item.baseWidth,
+            logoBaseHeight: item.baseHeight
+        )
+        el.id = id
+        t.elements.append(el)
+        session.editingTemplate = t
+        session.logoImages[id] = mono
+        selectedElementId = id
+    }
+
+    private func setLogoScalePercent(id: UUID, percent: Double) {
+        guard var t = session.editingTemplate,
+              let idx = t.elements.firstIndex(where: { $0.id == id }),
+              t.elements[idx].kind == .logo else { return }
+        let p = min(SequenceLogoItem.maxScalePercent, max(SequenceLogoItem.minScalePercent, percent.rounded()))
+        var el = t.elements[idx]
+        let baseW = max(1, el.logoBaseWidth)
+        let baseH = max(1, el.logoBaseHeight)
+        let cx = el.frame.x + el.frame.width / 2
+        let cy = el.frame.y + el.frame.height / 2
+        let w = max(36, baseW * p / 100)
+        let h = max(24, baseH * p / 100)
+        el.logoScalePercent = p
+        el.frame = SequencePlaceholderFrame(
+            x: cx - w / 2,
+            y: cy - h / 2,
+            width: w,
+            height: h
+        ).clamped(to: t.paperSize, minSize: CGSize(width: 36, height: 24))
+        t.elements[idx] = el
+        session.editingTemplate = t
+    }
+
+    private func syncLogoScaleFromFrame(id: UUID) {
+        guard var t = session.editingTemplate,
+              let idx = t.elements.firstIndex(where: { $0.id == id }),
+              t.elements[idx].kind == .logo else { return }
+        var el = t.elements[idx]
+        let baseW = max(1, el.logoBaseWidth)
+        let p = min(
+            SequenceLogoItem.maxScalePercent,
+            max(SequenceLogoItem.minScalePercent, (Double(el.frame.width / baseW) * 100).rounded())
+        )
+        el.logoScalePercent = p
+        let w = max(36, baseW * p / 100)
+        let h = max(24, el.logoBaseHeight * p / 100)
+        el.frame.width = w
+        el.frame.height = h
+        el.frame = el.frame.clamped(to: t.paperSize, minSize: CGSize(width: 36, height: 24))
+        t.elements[idx] = el
+        session.editingTemplate = t
+    }
+
+    private func pickSamplePDF() {
+        guard let rule = editingRule else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.pdf]
+        let result = panel.runModal()
+        canvasGestureActive = false
+        restoreKeyWindow()
+        guard result == .OK, let url = panel.url else { return }
+        if let name = session.store.importSamplePDF(from: url, for: rule.id) {
+            editingRule?.samplePDFFilename = name
+            loadSamplePDF(for: editingRule!)
+            editingRule?.recordSamplePageSize(pdfPageSize)
+            session.savePDFRule(editingRule!)
+            status = "已上传样板 PDF（相对框选可应用于其它页面尺寸）"
+            openPDFRegionEditor()
+        }
+    }
+
+    private func loadSamplePDF(for rule: MovieTicketPDFRule) {
+        guard let url = session.store.samplePDFURL(for: rule),
+              let doc = PDFDocument(url: url) else {
+            pdfPageImage = nil
+            return
+        }
+        if let rendered = MovieTicketPDFPageRenderer.image(from: doc) {
+            pdfPageImage = rendered.0
+            pdfPageSize = rendered.1
+        } else if let page = doc.page(at: 0) {
+            pdfPageSize = MovieTicketPDFGeometry.displaySize(of: page)
+            pdfPageImage = nil
+        }
+
+        // Record baseline size only; do NOT clear regions — relative rules must work across sizes.
+        if var current = editingRule, current.id == rule.id,
+           current.samplePageWidth == nil, pdfPageSize.width > 0 {
+            current.recordSamplePageSize(pdfPageSize)
+            editingRule = current
+        }
+    }
+
+    private func testRecognition() {
+        guard let rule = editingRule else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.pdf]
+        let result = panel.runModal()
+        canvasGestureActive = false
+        restoreKeyWindow()
+        guard result == .OK, let url = panel.url else { return }
+        let fields = MovieTicketPDFRecognitionService.extractAllFields(from: url, rule: rule)
+        if fields.isEmpty {
+            testResults = ["未抽到文本。请确认是文字型 PDF，且框选区域正确。"]
+        } else {
+            testResults = fields.map { "\($0.key.displayName): \($0.value)" }
+        }
+    }
+
+    /// Snap all placeholder box heights to the printer Font A / barcode block heights.
+    private func syncPlaceholderSizesToPrint() {
+        guard var t = session.editingTemplate else { return }
+        let config = appState.settings.printerConfig
+        MovieTicketPrintMetrics.syncTemplateHeights(&t, config: config)
+        session.editingTemplate = t
+    }
+
+    private func openPrintPreview() {
+        showPrintPreview = true
+        regeneratePrintPreview()
+    }
+
+    private func regeneratePrintPreview() {
+        guard let t = session.editingTemplate else {
+            printPreviewImage = nil
+            return
+        }
+        let sample = MovieTicketDraft.ritzMatrixSample()
+        let result = MovieTicketPrintComposer.compose(
+            template: t,
+            draft: sample,
+            backgroundImage: session.backgroundImage,
+            logoImages: session.logoImages,
+            config: appState.settings.printerConfig
+        )
+        printPreviewImage = result.previewImage
+    }
+}
+
+// MARK: - Numeric input
+
+/// Numeric text field that only writes back on Enter/blur, so typing (including
+/// clearing the field) is not fought by live re-renders of the whole template.
+private struct NumericField: View {
+    var value: Double
+    var range: ClosedRange<Double>? = nil
+    var onCommit: (Double) -> Void
+
+    @State private var text: String = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("", text: $text)
+            .textFieldStyle(.roundedBorder)
+            .focused($focused)
+            .onAppear { text = format(value) }
+            .onChange(of: value) { _, newValue in
+                if !focused { text = format(newValue) }
+            }
+            .onChange(of: focused) { _, isFocused in
+                if !isFocused { commit() }
+            }
+            .onSubmit { commit() }
+    }
+
+    private func commit() {
+        guard let raw = Double(text.trimmingCharacters(in: .whitespaces)) else {
+            text = format(value)
+            return
+        }
+        let clamped = range.map { min($0.upperBound, max($0.lowerBound, raw)) } ?? raw
+        onCommit(clamped)
+        text = format(clamped)
+    }
+
+    private func format(_ d: Double) -> String { String(Int(d.rounded())) }
+}
+
+// MARK: - Grid / PDF page preview
+
+private struct MovieTicketGridBackground: View {
+    var size: CGSize
+    var step: CGFloat
+
+    var body: some View {
+        Canvas { ctx, _ in
+            var path = Path()
+            var x: CGFloat = 0
+            while x <= size.width {
+                path.move(to: CGPoint(x: x, y: 0))
+                path.addLine(to: CGPoint(x: x, y: size.height))
+                x += step
+            }
+            var y: CGFloat = 0
+            while y <= size.height {
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: size.width, y: y))
+                y += step
+            }
+            ctx.stroke(path, with: .color(.gray.opacity(0.25)), lineWidth: 0.5)
+        }
+        .frame(width: size.width, height: size.height)
+        .allowsHitTesting(false)
+    }
+}

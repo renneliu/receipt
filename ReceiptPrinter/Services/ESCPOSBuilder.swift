@@ -14,6 +14,8 @@ final class ESCPOSBuilder {
     private var data = Data()
     private let config: PrinterConfig
     private var isDoubleSize = false
+    /// Font B (ESC M 1) uses more columns on 80mm (typically 64).
+    private var columnsOverride: Int?
     /// Avoid re-sending `FS &` before every fragment (can reset the printer's line buffer).
     private var chineseModeActive = false
 
@@ -22,10 +24,36 @@ final class ESCPOSBuilder {
     }
 
     private var effectiveColumns: Int {
-        max(8, isDoubleSize ? config.columnsPerLine / 2 : config.columnsPerLine)
+        let base = columnsOverride ?? config.columnsPerLine
+        return max(8, isDoubleSize ? base / 2 : base)
     }
 
     func build() -> Data { data }
+
+    @discardableResult
+    func selectFontB(columns: Int = 64) -> Self {
+        data.append(contentsOf: [0x1B, 0x4D, 0x01]) // ESC M 1
+        columnsOverride = columns
+        return self
+    }
+
+    @discardableResult
+    func selectFontA() -> Self {
+        data.append(contentsOf: [0x1B, 0x4D, 0x00]) // ESC M 0
+        columnsOverride = nil
+        return self
+    }
+
+    /// Prepend harmless NUL padding at job start. This POS-80 drops the first
+    /// 64-byte USB bulk packet (runtime: top stub loses `Ritz Cinemas`/`Cinema 1`
+    /// + first `GS !`, leaving a leading `.` from a split `FS .`). NUL bytes are
+    /// ignored (no print, no feed, no style change), so padding past 64 bytes
+    /// makes real content survive without altering any downstream bytes.
+    @discardableResult
+    func jobStartPadding(bytes count: Int = 96) -> Self {
+        data.append(contentsOf: Array(repeating: UInt8(0x00), count: max(0, count)))
+        return self
+    }
 
     @discardableResult
     func initialize() -> Self {
@@ -84,6 +112,13 @@ final class ESCPOSBuilder {
     }
 
     @discardableResult
+    func setLeftMargin(dots: Int) -> Self {
+        let d = max(0, min(dots, max(0, config.dotsPerLine / 2)))
+        data.append(contentsOf: [0x1D, 0x4C, UInt8(d & 0xFF), UInt8((d >> 8) & 0xFF)])
+        return self
+    }
+
+    @discardableResult
     func resetLineSpacing() -> Self {
         data.append(contentsOf: [0x1B, 0x32])
         return self
@@ -107,14 +142,28 @@ final class ESCPOSBuilder {
         return self
     }
 
+    /// Arbitrary `GS !` magnification: width/height each 1…8× (printer built-in font).
+    /// Lets movie-ticket lines be sized directly from template element values.
+    @discardableResult
+    func applyMagnification(width: Int, height: Int) -> Self {
+        let w = max(1, min(8, width))
+        let h = max(1, min(8, height))
+        isDoubleSize = w >= 2
+        data.append(contentsOf: [0x1D, 0x21, UInt8(((w - 1) << 4) | (h - 1))])
+        return self
+    }
+
     @discardableResult
     func applyTextSize(_ size: TextSize) -> Self {
-        isDoubleSize = size == .double
+        isDoubleSize = (size == .double || size == .doubleTall)
         let mode: UInt8 = switch size {
         case .normal: 0x00
-        case .tall: 0x01
+        case .tall: 0x01      // height ×2
+        case .taller: 0x02   // height ×3
         // Successful jobs 20260714-224905 used GS ! 0x11 — keep width+height ×2.
         case .double: 0x11
+        // Ritz title: same width as header (stroke≈5–6) but ~1.5× taller → w×2 h×3.
+        case .doubleTall: 0x12
         }
         data.append(contentsOf: [0x1D, 0x21, mode])
         return self
@@ -233,6 +282,14 @@ final class ESCPOSBuilder {
         return self
     }
 
+    /// Feed a fixed number of dots (ESC J). Prefer this over ESC d before tall GS !
+    /// lines — line feeds scale with character height and under-advance at job start.
+    @discardableResult
+    func feedDots(_ dots: UInt8) -> Self {
+        data.append(contentsOf: [0x1B, 0x4A, dots])
+        return self
+    }
+
     @discardableResult
     func line(char: Character = "-") -> Self {
         let width = config.dotsPerLine / 12
@@ -320,12 +377,18 @@ final class ESCPOSBuilder {
         width: UInt8 = 2,
         printHRI: Bool = true
     ) -> Self {
+        // Epson GS k 73 (Code128) requires a codeset selector; without `{B`
+        // many POS-80 clones print a blank/wrong symbol (Ritz diag 20260716-144611).
+        var payload = content
+        if type == .code128, !payload.hasPrefix("{") {
+            payload = "{B" + payload
+        }
         align(.center)
         data.append(contentsOf: [0x1D, 0x68, height])
         data.append(contentsOf: [0x1D, 0x48, printHRI ? 2 : 0])
         data.append(contentsOf: [0x1D, 0x77, min(width, 6)])
-        data.append(contentsOf: [0x1D, 0x6B, type.rawValue, UInt8(content.utf8.count)])
-        if let bytes = content.data(using: .ascii) {
+        data.append(contentsOf: [0x1D, 0x6B, type.rawValue, UInt8(payload.utf8.count)])
+        if let bytes = payload.data(using: .ascii) {
             data.append(bytes)
         }
         newline()
@@ -365,15 +428,15 @@ final class ESCPOSBuilder {
     func imageBanded(_ nsImage: NSImage, maxWidth: Int? = nil, bandHeight: Int = 160) -> Self {
         let targetWidth = maxWidth ?? config.dotsPerLine
         guard let raster = BarcodeGenerator.rasterizeImage(nsImage, maxWidth: targetWidth) else { return self }
-        appendRasterImageBanded(raster, bandHeight: max(24, bandHeight))
+        appendRasterImageBanded(raster, bandHeight: max(24, bandHeight), trailingFeed: true)
         return self
     }
 
     private func appendRasterImage(_ raster: RasterImage) {
-        appendRasterImageBanded(raster, bandHeight: raster.height)
+        appendRasterImageBanded(raster, bandHeight: raster.height, trailingFeed: true)
     }
 
-    private func appendRasterImageBanded(_ raster: RasterImage, bandHeight: Int) {
+    private func appendRasterImageBanded(_ raster: RasterImage, bandHeight: Int, trailingFeed: Bool = true) {
         let widthBytes = raster.widthBytes
         let xL = UInt8(widthBytes & 0xFF)
         let xH = UInt8((widthBytes >> 8) & 0xFF)
@@ -394,7 +457,9 @@ final class ESCPOSBuilder {
             data.append(slice)
             y += rows
         }
-        feed(lines: 1)
+        if trailingFeed {
+            feed(lines: 1)
+        }
     }
 
     @discardableResult
