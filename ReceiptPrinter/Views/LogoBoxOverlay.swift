@@ -17,6 +17,11 @@ struct LogoBoxOverlay: View {
     var chromeOnly: Bool = false
     /// When true, position drag is disabled (resize still allowed).
     var isLocked: Bool = false
+    /// `additive` is true when ⌘ is held (toggle multi-select).
+    var onSelectRequest: ((_ additive: Bool) -> Void)? = nil
+    /// When set, position drag reports translation from gesture start (parent moves selection).
+    var onTranslateChanged: ((CGSize) -> Void)? = nil
+    var onTranslateEnded: (() -> Void)? = nil
 
     @State private var dragStart: SequencePlaceholderFrame?
     @State private var resizeStart: SequencePlaceholderFrame?
@@ -87,17 +92,31 @@ struct LogoBoxOverlay: View {
         .contentShape(Rectangle())
         .position(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
         .gesture(dragGesture)
-        .onTapGesture { isSelected = true }
+        .onTapGesture {
+            if let onSelectRequest {
+                onSelectRequest(NSEvent.modifierFlags.contains(.command))
+            } else {
+                isSelected = true
+            }
+        }
     }
 
     private var dragGesture: some Gesture {
         DragGesture()
             .onChanged { value in
-                isSelected = true
-                guard !isLocked else { return }
                 if dragStart == nil {
+                    if let onSelectRequest {
+                        if !isSelected { onSelectRequest(false) }
+                    } else {
+                        isSelected = true
+                    }
                     dragStart = frame
                     onInteractionChanged?(true)
+                }
+                guard !isLocked else { return }
+                if let onTranslateChanged {
+                    onTranslateChanged(value.translation)
+                    return
                 }
                 guard let start = dragStart else { return }
                 var next = start
@@ -109,7 +128,11 @@ struct LogoBoxOverlay: View {
                 guard dragStart != nil else { return }
                 dragStart = nil
                 onInteractionChanged?(false)
-                onFrameChanged?()
+                if let onTranslateEnded {
+                    onTranslateEnded()
+                } else {
+                    onFrameChanged?()
+                }
             }
     }
 

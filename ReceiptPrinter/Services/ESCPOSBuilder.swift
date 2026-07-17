@@ -415,9 +415,11 @@ final class ESCPOSBuilder {
     }
 
     @discardableResult
-    func image(_ nsImage: NSImage, maxWidth: Int? = nil) -> Self {
+    func image(_ nsImage: NSImage, maxWidth: Int? = nil, scaleToWidth: Bool = false) -> Self {
         let targetWidth = maxWidth ?? config.dotsPerLine
-        guard let raster = BarcodeGenerator.rasterizeImage(nsImage, maxWidth: targetWidth) else { return self }
+        guard let raster = BarcodeGenerator.rasterizeImage(
+            nsImage, maxWidth: targetWidth, scaleToWidth: scaleToWidth
+        ) else { return self }
         appendRasterImage(raster)
         return self
     }
@@ -425,9 +427,16 @@ final class ESCPOSBuilder {
     /// Whole-page bitmaps as successive short `GS v 0` bands (no gap feed between bands).
     /// POS-80 often misreads one tall `GS v 0` as text; banded strips keep logo+text layout.
     @discardableResult
-    func imageBanded(_ nsImage: NSImage, maxWidth: Int? = nil, bandHeight: Int = 160) -> Self {
+    func imageBanded(
+        _ nsImage: NSImage,
+        maxWidth: Int? = nil,
+        bandHeight: Int = 160,
+        scaleToWidth: Bool = false
+    ) -> Self {
         let targetWidth = maxWidth ?? config.dotsPerLine
-        guard let raster = BarcodeGenerator.rasterizeImage(nsImage, maxWidth: targetWidth) else { return self }
+        guard let raster = BarcodeGenerator.rasterizeImage(
+            nsImage, maxWidth: targetWidth, scaleToWidth: scaleToWidth
+        ) else { return self }
         appendRasterImageBanded(raster, bandHeight: max(24, bandHeight), trailingFeed: true)
         return self
     }
@@ -465,8 +474,11 @@ final class ESCPOSBuilder {
     @discardableResult
     func cut(feedLines override: Int? = nil, reassertChinese: Bool = true) -> Self {
         if config.cutPaper {
-            let lines = max(1, min(override ?? config.feedLinesBeforeCut, 255))
-            feed(lines: lines)
+            // Allow 0 so movie-ticket templates can shorten the tail before the cutter.
+            let lines = max(0, min(override ?? config.feedLinesBeforeCut, 255))
+            if lines > 0 {
+                feed(lines: lines)
+            }
             // Full cut (GS V 0) — works on this POS-80 after text jobs.
             data.append(contentsOf: [0x1D, 0x56, 0x00])
             if reassertChinese {

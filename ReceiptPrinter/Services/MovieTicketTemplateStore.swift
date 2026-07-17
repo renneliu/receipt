@@ -207,24 +207,99 @@ final class MovieTicketTemplateStore {
 
     private static let ritzSampleLayoutVersionKey = "ReceiptPrinter.MovieTicket.RitzSampleLayoutVersion"
     private static let ritzSampleLayoutVersion = 5
+    private static let imaxSydneySeedVersionKey = "ReceiptPrinter.MovieTicket.IMAXSydneySeedVersion"
+    private static let imaxSydneySeedVersion = 3
+
+    private static let cutFeedMigrateKey = "ReceiptPrinter.MovieTicket.CutFeedDefaultV1"
 
     private func seedIfNeeded() {
         let existing = loadAll()
         if existing.isEmpty {
             saveMeta(MovieTicketTemplate.makeBlank(name: "示例影票"))
             UserDefaults.standard.set(Self.ritzSampleLayoutVersion, forKey: Self.ritzSampleLayoutVersionKey)
+            seedIMAXSydneyIfNeeded(existing: [])
+            migrateCutFeedDefaultsIfNeeded()
             return
         }
         // One-time migrate stock sample to the Ritz dual-stub layout.
         let applied = UserDefaults.standard.integer(forKey: Self.ritzSampleLayoutVersionKey)
-        guard applied < Self.ritzSampleLayoutVersion,
-              let old = existing.first(where: { $0.name == "示例影票" }) else { return }
-        var ritz = MovieTicketTemplate.makeBlank(name: "示例影票")
-        ritz.id = old.id
-        ritz.createdAt = old.createdAt
-        ritz.pdfRuleId = old.pdfRuleId
-        saveMeta(ritz)
-        UserDefaults.standard.set(Self.ritzSampleLayoutVersion, forKey: Self.ritzSampleLayoutVersionKey)
+        if applied < Self.ritzSampleLayoutVersion,
+           let old = existing.first(where: { $0.name == "示例影票" }) {
+            var ritz = MovieTicketTemplate.makeBlank(name: "示例影票")
+            ritz.id = old.id
+            ritz.createdAt = old.createdAt
+            ritz.pdfRuleId = old.pdfRuleId
+            saveMeta(ritz)
+            UserDefaults.standard.set(Self.ritzSampleLayoutVersion, forKey: Self.ritzSampleLayoutVersionKey)
+        }
+        seedIMAXSydneyIfNeeded(existing: existing)
+        migrateCutFeedDefaultsIfNeeded()
+    }
+
+    /// Existing templates had no per-template cut feed and inherited the global 12-line
+    /// printer default (long tails). Seed a shorter movie-ticket default once.
+    private func migrateCutFeedDefaultsIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: Self.cutFeedMigrateKey) else { return }
+        for var t in loadAll() where t.feedLinesBeforeCut == nil {
+            t.feedLinesBeforeCut = 4
+            saveMeta(t)
+        }
+        UserDefaults.standard.set(true, forKey: Self.cutFeedMigrateKey)
+    }
+
+    /// Install / refresh the bundled IMAX SYDNEY template + logo.
+    private func seedIMAXSydneyIfNeeded(existing: [MovieTicketTemplate]) {
+        let applied = UserDefaults.standard.integer(forKey: Self.imaxSydneySeedVersionKey)
+        guard applied < Self.imaxSydneySeedVersion else { return }
+
+        let made = MovieTicketTemplate.makeIMAXSydney()
+        if let old = existing.first(where: {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare("IMAX SYDNEY") == .orderedSame
+        }) {
+            // Refresh stock layout while preserving id / PDF rule / createdAt.
+            var t = made.template
+            t.id = old.id
+            t.createdAt = old.createdAt
+            t.pdfRuleId = old.pdfRuleId
+            // Keep existing logo files if present; rewrite element ids would orphan them,
+            // so re-attach bundled logo onto the new logo element id.
+            saveMeta(t)
+            if let logo = Self.bundledIMAXSydneyLogo() {
+                let mono = ImagePreprocessor.toBinaryBlackWhite(logo)
+                _ = saveLogos(template: t, logos: [made.logoElementId: mono])
+            }
+        } else {
+            let t = made.template
+            saveMeta(t)
+            if let logo = Self.bundledIMAXSydneyLogo() {
+                let mono = ImagePreprocessor.toBinaryBlackWhite(logo)
+                _ = saveLogos(template: t, logos: [made.logoElementId: mono])
+            }
+        }
+        UserDefaults.standard.set(Self.imaxSydneySeedVersion, forKey: Self.imaxSydneySeedVersionKey)
+    }
+
+    private static func bundledIMAXSydneyLogo() -> NSImage? {
+        let candidates: [URL?] = [
+            Bundle.module.url(
+                forResource: "IMAXSydneyLogo",
+                withExtension: "png",
+                subdirectory: "MovieTicket"
+            ),
+            Bundle.module.url(forResource: "IMAXSydneyLogo", withExtension: "png"),
+            // `build-debug-app.sh` copies Resources into the .app Contents/Resources tree.
+            Bundle.main.url(
+                forResource: "IMAXSydneyLogo",
+                withExtension: "png",
+                subdirectory: "MovieTicket"
+            ),
+            Bundle.main.url(forResource: "IMAXSydneyLogo", withExtension: "png")
+        ]
+        for url in candidates {
+            if let url, let img = NSImage(contentsOf: url) { return img }
+        }
+        return nil
     }
 }
 

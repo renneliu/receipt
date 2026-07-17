@@ -101,6 +101,30 @@ struct MovieTicketDraft: Codable, Equatable {
         if let t0 = cal.date(from: time) { sample.showStartTime = t0 }
         return sample
     }
+
+    /// Reference draft matching the IMAX Sydney Event Cinemas ticket (for 示例对照).
+    static func imaxSydneySample() -> MovieTicketDraft {
+        var sample = MovieTicketDraft(
+            movieTitle: "THE ODYSSEY (M)",
+            movieDurationMinutes: 183,
+            adDurationMinutes: 0,
+            seatModeUnallocated: false,
+            seatArea: "L-9",
+            serialNumber: "536011/001",
+            ticketType: "CBIMAX",
+            hall: "IMAX 1",
+            ticketPrice: "43.00"
+        )
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        var day = DateComponents()
+        day.year = 2026; day.month = 7; day.day = 16
+        if let d = cal.date(from: day) { sample.showDate = d }
+        var time = DateComponents()
+        time.hour = 17; time.minute = 40
+        if let t0 = cal.date(from: time) { sample.showStartTime = t0 }
+        return sample
+    }
 }
 
 // MARK: - Field / element kinds
@@ -253,10 +277,54 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
     /// Shown on ticket when main page selects 无特定座位.
     var unallocatedSeatLabel: String = "ADMIT"
     var pdfRuleId: UUID?
+    /// Native print layout: `ritz` (default dual-stub) or `imaxSydney` (Event Cinemas IMAX).
+    /// Optional so older saved templates decode unchanged.
+    var layoutStyle: String? = nil
+    /// Lines to advance after ticket content before the cutter fires.
+    /// `nil` = use global `PrinterConfig.feedLinesBeforeCut`. Smaller = shorter tail / less waste.
+    var feedLinesBeforeCut: Int? = nil
 
     var paperSize: CGSize { CGSize(width: 302, height: max(200, canvasHeight)) }
 
+    var usesIMAXSydneyLayout: Bool {
+        if layoutStyle == "imaxSydney" { return true }
+        return name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare("IMAX SYDNEY") == .orderedSame
+    }
+
+    /// Effective cut feed for this template (0…40).
+    func resolvedFeedLinesBeforeCut(config: PrinterConfig) -> Int {
+        let raw = feedLinesBeforeCut ?? config.feedLinesBeforeCut
+        return max(0, min(40, raw))
+    }
+
     mutating func touch() { updatedAt = Date() }
+
+    /// Rebuild stock geometry while keeping identity / name / PDF link / media filenames.
+    /// - Returns the new template and the logo element id when the stock layout includes one.
+    static func factoryReset(preserving meta: MovieTicketTemplate) -> (template: MovieTicketTemplate, logoElementId: UUID?) {
+        if meta.usesIMAXSydneyLayout {
+            let made = makeIMAXSydney()
+            var t = made.template
+            t.id = meta.id
+            t.name = meta.name
+            t.createdAt = meta.createdAt
+            t.pdfRuleId = meta.pdfRuleId
+            t.backgroundImageFilename = meta.backgroundImageFilename
+            t.backgroundScalePercent = meta.backgroundScalePercent
+            t.feedLinesBeforeCut = meta.feedLinesBeforeCut
+            return (t, made.logoElementId)
+        }
+        var t = makeBlank(name: meta.name)
+        t.id = meta.id
+        t.createdAt = meta.createdAt
+        t.pdfRuleId = meta.pdfRuleId
+        t.backgroundImageFilename = meta.backgroundImageFilename
+        t.backgroundScalePercent = meta.backgroundScalePercent
+        t.feedLinesBeforeCut = meta.feedLinesBeforeCut
+        t.unallocatedSeatLabel = meta.unallocatedSeatLabel.isEmpty ? t.unallocatedSeatLabel : meta.unallocatedSeatLabel
+        return (t, nil)
+    }
 
     /// Ritz Cinemas dual-stub layout (tear-off stub + barcode stub), matching thermal ticket style.
     static func makeBlank(name: String = "新影票模板") -> MovieTicketTemplate {
@@ -264,6 +332,7 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
         t.unallocatedSeatLabel = "ADMIT"
         t.canvasHeight = 430
         t.gridSize = 20
+        t.feedLinesBeforeCut = 4
         var z = 0
         func nextZ() -> Int {
             z += 1
@@ -289,6 +358,152 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
         t.elements += ritzStubElements(yOffset: 172, zBase: &z, includeBarcode: true)
         t.canvasHeight = 450
         return t
+    }
+
+    /// Event Cinemas IMAX Sydney single-stub layout (logo → barcode → title → seat → footer).
+    /// Returns the template and the logo element id so the store can attach the bundled PNG.
+    static func makeIMAXSydney() -> (template: MovieTicketTemplate, logoElementId: UUID) {
+        var t = MovieTicketTemplate(name: "IMAX SYDNEY")
+        t.layoutStyle = "imaxSydney"
+        t.unallocatedSeatLabel = "SEAT GA"
+        t.gridSize = 20
+        t.canvasHeight = 520
+        t.feedLinesBeforeCut = 4
+        var z = 0
+        func nextZ() -> Int {
+            z += 1
+            return z
+        }
+        let left: CGFloat = 8
+        let width: CGFloat = 286
+        let logoId = UUID()
+
+        // Header logo — IMAX / SYDNEY wordmark (bundled asset attached at seed time).
+        var logo = MovieTicketElement(
+            kind: .logo,
+            frame: SequencePlaceholderFrame(x: 12, y: 8, width: 278, height: 94),
+            zIndex: nextZ(),
+            alignment: 1,
+            logoScalePercent: 100,
+            logoBaseWidth: 278,
+            logoBaseHeight: 94
+        )
+        logo.id = logoId
+        t.elements.append(logo)
+
+        t.elements.append(contentsOf: [
+            MovieTicketElement(
+                kind: .textBox,
+                frame: SequencePlaceholderFrame(x: left, y: 82, width: width, height: 14),
+                zIndex: nextZ(),
+                content: "IMAX Sydney",
+                fontSize: 11,
+                alignment: 1
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 36, y: 104, width: 230, height: 56),
+                zIndex: nextZ(),
+                alignment: 1,
+                fieldKind: .barcode
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: 160, width: width, height: 14),
+                zIndex: nextZ(),
+                fontSize: 11,
+                alignment: 1,
+                fieldKind: .serialNumber
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: 196, width: width, height: 24),
+                zIndex: nextZ(),
+                fontSize: 14,
+                isBold: true,
+                alignment: 0,
+                fieldKind: .hall
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: 224, width: width, height: 28),
+                zIndex: nextZ(),
+                fontSize: 16,
+                isBold: true,
+                alignment: 0,
+                fieldKind: .movieTitle,
+                singleLineClip: true
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: 258, width: width, height: 16),
+                zIndex: nextZ(),
+                fontSize: 11,
+                alignment: 0,
+                fieldKind: .timeRange,
+                rangeStartFormat: .eeeMMMdhmma,
+                rangeEndFormat: .hmma,
+                rangeConnector: " - "
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: 300, width: width, height: 40),
+                zIndex: nextZ(),
+                fontSize: 18,
+                isBold: true,
+                alignment: 0,
+                fieldKind: .seatArea
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: 348, width: 140, height: 14),
+                zIndex: nextZ(),
+                fontSize: 11,
+                alignment: 0,
+                fieldKind: .ticketType
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 168, y: 348, width: 126, height: 14),
+                zIndex: nextZ(),
+                fontSize: 11,
+                alignment: 2,
+                fieldKind: .ticketPrice
+            ),
+            MovieTicketElement(
+                kind: .textBox,
+                frame: SequencePlaceholderFrame(x: left, y: 368, width: width, height: 12),
+                zIndex: nextZ(),
+                content: "EFTP | T/N: {serial} | d: {datetime} | u: 9613",
+                fontSize: 9,
+                alignment: 1
+            ),
+            MovieTicketElement(
+                kind: .textBox,
+                frame: SequencePlaceholderFrame(x: left, y: 390, width: width, height: 12),
+                zIndex: nextZ(),
+                content: String(repeating: "-", count: 42),
+                fontSize: 10,
+                alignment: 1
+            ),
+            MovieTicketElement(
+                kind: .textBox,
+                frame: SequencePlaceholderFrame(x: left, y: 410, width: width, height: 14),
+                zIndex: nextZ(),
+                content: "PLEASE RETAIN YOUR TICKET AS PROOF OF PURCHASE",
+                fontSize: 11,
+                alignment: 1
+            ),
+            MovieTicketElement(
+                kind: .textBox,
+                frame: SequencePlaceholderFrame(x: left, y: 426, width: width, height: 14),
+                zIndex: nextZ(),
+                content: "WWW.EVENTCINEMAS.COM.AU",
+                fontSize: 11,
+                alignment: 1
+            )
+        ])
+        return (t, logoId)
     }
 
     /// One Ritz ticket half. Tight leading to match thermal print; title uses double-height stretch at render.

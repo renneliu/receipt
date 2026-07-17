@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Draggable / resizable box for movie-ticket template canvas elements.
@@ -24,6 +25,11 @@ struct MovieTicketElementBoxOverlay: View {
     var onFrameChanged: (() -> Void)? = nil
     /// true while drag/resize is active so the parent can skip expensive live recomposes.
     var onInteractionChanged: ((Bool) -> Void)? = nil
+    /// `additive` is true when ⌘ is held (toggle multi-select).
+    var onSelectRequest: ((_ additive: Bool) -> Void)? = nil
+    /// When set, position drag reports translation from gesture start (parent moves selection).
+    var onTranslateChanged: ((CGSize) -> Void)? = nil
+    var onTranslateEnded: (() -> Void)? = nil
 
     @State private var dragStart: SequencePlaceholderFrame?
     @State private var resizeStart: SequencePlaceholderFrame?
@@ -135,7 +141,13 @@ struct MovieTicketElementBoxOverlay: View {
         .contentShape(Rectangle())
         .position(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
         .gesture(dragGesture)
-        .onTapGesture { isSelected = true }
+        .onTapGesture {
+            if let onSelectRequest {
+                onSelectRequest(NSEvent.modifierFlags.contains(.command))
+            } else {
+                isSelected = true
+            }
+        }
     }
 
     private func snap(_ value: CGFloat) -> CGFloat {
@@ -146,11 +158,21 @@ struct MovieTicketElementBoxOverlay: View {
     private var dragGesture: some Gesture {
         DragGesture()
             .onChanged { value in
-                isSelected = true
-                guard !isLocked else { return }
                 if dragStart == nil {
+                    if let onSelectRequest {
+                        if !isSelected {
+                            onSelectRequest(false)
+                        }
+                    } else {
+                        isSelected = true
+                    }
                     dragStart = frame
                     onInteractionChanged?(true)
+                }
+                guard !isLocked else { return }
+                if let onTranslateChanged {
+                    onTranslateChanged(value.translation)
+                    return
                 }
                 guard let start = dragStart else { return }
                 var next = start
@@ -162,14 +184,22 @@ struct MovieTicketElementBoxOverlay: View {
                 guard dragStart != nil else { return }
                 dragStart = nil
                 onInteractionChanged?(false)
-                onFrameChanged?()
+                if let onTranslateEnded {
+                    onTranslateEnded()
+                } else {
+                    onFrameChanged?()
+                }
             }
     }
 
     private var resizeGesture: some Gesture {
         DragGesture()
             .onChanged { value in
-                isSelected = true
+                if let onSelectRequest {
+                    if !isSelected { onSelectRequest(false) }
+                } else {
+                    isSelected = true
+                }
                 if resizeStart == nil {
                     resizeStart = frame
                     onInteractionChanged?(true)

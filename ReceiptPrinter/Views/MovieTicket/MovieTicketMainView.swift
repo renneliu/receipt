@@ -198,6 +198,27 @@ struct MovieTicketMainView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Group {
+                    Text("切纸位置").font(.headline)
+                    HStack(spacing: 10) {
+                        Stepper(
+                            "切纸前走纸 \(cutFeedLines) 行",
+                            value: Binding(
+                                get: { cutFeedLines },
+                                set: { setCutFeedLines($0) }
+                            ),
+                            in: 0...40
+                        )
+                        Button("恢复默认") {
+                            setCutFeedLines(appState.settings.printerConfig.feedLinesBeforeCut)
+                        }
+                        .controlSize(.small)
+                    }
+                    Text("控制打印结束后到切刀之间的空白；越小越省纸，过小可能裁到票面。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 HStack {
                     Button("预览") { previewTicket() }
                         .disabled(template == nil || isPrinting)
@@ -206,7 +227,11 @@ struct MovieTicketMainView: View {
                     }
                     .disabled(template == nil || isPrinting)
                     Button("填入真票示例") {
-                        session.draft = .ritzMatrixSample()
+                        if template?.usesIMAXSydneyLayout == true {
+                            session.draft = .imaxSydneySample()
+                        } else {
+                            session.draft = .ritzMatrixSample()
+                        }
                     }
                     Button("打印记录") { showHistory = true }
                     Button("清空草稿") { session.resetDraft() }
@@ -230,6 +255,17 @@ struct MovieTicketMainView: View {
             }
             .labelsHidden()
         }
+    }
+
+    private var cutFeedLines: Int {
+        template?.resolvedFeedLinesBeforeCut(config: appState.settings.printerConfig)
+            ?? appState.settings.printerConfig.feedLinesBeforeCut
+    }
+
+    private func setCutFeedLines(_ value: Int) {
+        let clamped = max(0, min(40, value))
+        guard let id = template?.id else { return }
+        session.updateTemplateMeta(id: id) { $0.feedLinesBeforeCut = clamped }
     }
 
     private var endTimeText: String {

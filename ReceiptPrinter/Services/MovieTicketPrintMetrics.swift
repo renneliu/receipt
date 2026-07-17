@@ -38,11 +38,10 @@ enum MovieTicketPrintMetrics {
         config: PrinterConfig
     ) -> CGFloat {
         if el.fieldKind == .barcode {
-            return barcodeHeightPoints(
-                elementBoxHeight: el.frame.height,
-                paperWidth: paperWidth,
-                dotsPerLine: config.dotsPerLine
-            )
+            // Keep the editor box height as the source of truth. Remapping through
+            // barcodeHeightPoints (pt → ESC/POS dots → pt) is non-idempotent on
+            // 80mm paper (~0.8×) and was capping usable heights around ~40 after sync.
+            return max(24, el.frame.height)
         }
         if el.fieldKind == .qrCode {
             // QR uses the box's shorter side in compose; keep stored height as the block size.

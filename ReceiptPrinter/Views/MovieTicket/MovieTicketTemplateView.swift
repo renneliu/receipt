@@ -7,7 +7,14 @@ struct MovieTicketTemplateView: View {
     @EnvironmentObject private var session: MovieTicketSession
     @EnvironmentObject private var appState: AppState
 
-    @State private var selectedElementId: UUID?
+    @State private var selectedElementIds: Set<UUID> = []
+    /// Last clicked / focused element (inspector target when a single item is selected).
+    @State private var lastSelectedId: UUID?
+    /// Anchor for ⇧ range selection in the element list / canvas.
+    @State private var selectionAnchorId: UUID?
+    @State private var groupDragOrigins: [UUID: SequencePlaceholderFrame] = [:]
+    /// Nudge step (points) for the multi-select arrow toolbar.
+    @State private var nudgeStep: CGFloat = 1
     @State private var canvasGestureActive = false
     @State private var status: String = ""
     @State private var editingRule: MovieTicketPDFRule?
@@ -21,10 +28,17 @@ struct MovieTicketTemplateView: View {
     @State private var canvasEpoch: Int = 0
     /// Designer view zoom (1.0 = actual paper points). Default 2× for easier editing on 80mm tickets.
     @State private var displayScale: CGFloat = 2
+    /// Snapshots of `editingTemplate` for 撤销 (one entry per gesture / inspector edit).
+    @State private var undoStack: [MovieTicketTemplate] = []
+    @State private var undoPushedForGesture = false
+    @State private var confirmFactoryReset = false
+    @State private var showUnsavedDialog = false
+    @State private var pendingLeaveAction: (() -> Void)?
 
     private static let zoomMin: CGFloat = 0.5
     private static let zoomMax: CGFloat = 4
     private static let zoomStep: CGFloat = 0.25
+    private static let maxUndo = 50
 
     private var templateBinding: Binding<MovieTicketTemplate?> {
         Binding(
@@ -55,8 +69,10 @@ struct MovieTicketTemplateView: View {
         .onAppear {
             if session.editingTemplate == nil, let t = session.activeTemplate {
                 session.beginEditing(t)
+                undoStack = []
             }
-            syncPlaceholderSizesToPrint()
+            syncPlaceholderSizesToPrint(recordUndo: false)
+            session.markEditingClean()
         }
         .onChange(of: showPDFRegionEditor) { _, isOpen in
             canvasGestureActive = false
@@ -65,8 +81,45 @@ struct MovieTicketTemplateView: View {
                 restoreKeyWindow()
             }
         }
+        .onChange(of: session.editingTemplate?.id) { _, _ in
+            undoStack = []
+            undoPushedForGesture = false
+            clearSelection()
+        }
         .sheet(isPresented: $showPrintPreview) {
             printPreviewSheet
+        }
+        .confirmationDialog(
+            "恢复此模板的出厂布局？当前画布将被替换（可用撤销找回）。",
+            isPresented: $confirmFactoryReset,
+            titleVisibility: .visible
+        ) {
+            Button("恢复默认布局", role: .destructive) { resetToFactoryLayout() }
+            Button("取消", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "模板有未保存的更改，是否保存？",
+            isPresented: $showUnsavedDialog,
+            titleVisibility: .visible
+        ) {
+            Button("保存") {
+                session.saveEditingTemplate()
+                status = session.message
+                let action = pendingLeaveAction
+                pendingLeaveAction = nil
+                action?()
+            }
+            Button("不保存", role: .destructive) {
+                session.discardEditingChanges()
+                undoStack = []
+                clearSelection()
+                let action = pendingLeaveAction
+                pendingLeaveAction = nil
+                action?()
+            }
+            Button("取消", role: .cancel) {
+                pendingLeaveAction = nil
+            }
         }
     }
 
@@ -76,9 +129,14 @@ struct MovieTicketTemplateView: View {
         VStack(alignment: .leading, spacing: 8) {
             templateChrome
             toolBar
-            Text("画布为占位符布局（块高=实际打印字高）；点「打印预览」查看真实打印效果")
+            Text(session.editingTemplate?.usesIMAXSydneyLayout == true
+                 ? "IMAX：Y 控制行序；票型+票价同行，左右位置跟画布 X。列表 ⌘/⇧ 多选。"
+                 : "列表支持 ⌘加减选 / ⇧连选；多选后可用方向键微调；拖拽可批量移动。")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+            if selectedElementIds.count > 1 {
+                selectionNudgeBar
+            }
             ScrollView([.vertical, .horizontal]) {
                 canvas
                     .scaleEffect(displayScale, anchor: .topLeading)
@@ -105,16 +163,44 @@ struct MovieTicketTemplateView: View {
                         var copy = t
                         copy.name = newValue
                         session.editingTemplate = copy
+                        session.markEditingDirty()
                     }
                 ))
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 220)
             }
-            Button("新建模板") { session.createTemplate() }
-            Button("保存") { session.saveEditingTemplate() }
+            Button("新建模板") {
+                requestLeaveEditing {
+                    session.createTemplate()
+                    undoStack = []
+                    clearSelection()
+                    status = "已新建模板"
+                }
+            }
+            Button("复制模板") {
+                if let copied = session.duplicateTemplate() {
+                    undoStack = []
+                    clearSelection()
+                    status = "已复制为「\(copied.name)」"
+                }
+            }
+            .disabled(session.editingTemplate == nil)
+            .help("复制当前模板，名称形如 原名(1)")
+            Button("保存") {
+                session.saveEditingTemplate()
+                status = session.message.isEmpty ? "模板已保存" : session.message
+            }
+            Button("撤销") { performUndo() }
+                .disabled(undoStack.isEmpty)
+                .help("撤回上一步画布或属性修改")
+            Button("默认布局") { confirmFactoryReset = true }
+                .disabled(session.editingTemplate == nil)
+                .help("恢复为应用生成的原始布局")
             Button("删除模板", role: .destructive) {
                 if let id = session.editingTemplate?.id {
                     session.deleteTemplate(id)
+                    undoStack = []
+                    clearSelection()
                     status = "已删除模板"
                 }
             }
@@ -122,7 +208,18 @@ struct MovieTicketTemplateView: View {
             Spacer()
             Picker("选用", selection: Binding(
                 get: { session.settings.activeTemplateId },
-                set: { if let id = $0 { session.selectTemplate(id); session.beginEditing(session.activeTemplate!) } }
+                set: { newId in
+                    guard let id = newId else { return }
+                    guard id != session.editingTemplate?.id else { return }
+                    requestLeaveEditing {
+                        session.selectTemplate(id)
+                        if let t = session.templates.first(where: { $0.id == id }) {
+                            session.beginEditing(t)
+                            undoStack = []
+                            clearSelection()
+                        }
+                    }
+                }
             )) {
                 ForEach(session.templates) { t in
                     Text(t.name).tag(Optional(t.id))
@@ -150,12 +247,18 @@ struct MovieTicketTemplateView: View {
             HStack {
                 Toggle("参考网格", isOn: Binding(
                     get: { session.editingTemplate?.gridEnabled ?? true },
-                    set: { v in session.editingTemplate?.gridEnabled = v }
+                    set: { v in
+                        session.editingTemplate?.gridEnabled = v
+                        session.markEditingDirty()
+                    }
                 ))
                 Button("背景图") { pickBackground() }
                 Button("清除背景") { session.setBackground(nil) }
                 Button("Logo") { pickLogo() }
-                Button("对齐打印尺寸") { syncPlaceholderSizesToPrint(); status = "已按打印字高对齐占位框" }
+                Button("对齐打印尺寸") {
+                    syncPlaceholderSizesToPrint(recordUndo: true)
+                    status = "已按打印字高对齐占位框"
+                }
                 Button("打印预览") { openPrintPreview() }
                 Spacer(minLength: 8)
                 zoomControls
@@ -230,6 +333,7 @@ struct MovieTicketTemplateView: View {
         .frame(width: paper.width, height: paper.height)
         .clipped()
         .border(Color.secondary.opacity(0.4))
+        .onTapGesture { clearSelection() }
     }
 
     private var printPreviewSheet: some View {
@@ -270,12 +374,12 @@ struct MovieTicketTemplateView: View {
                     ?? el.frame
             },
             set: { newFrame in
-                updateElement(id: el.id) { $0.frame = newFrame }
+                updateElement(id: el.id, recordUndo: false) { $0.frame = newFrame }
             }
         )
         let selected = Binding<Bool>(
-            get: { selectedElementId == el.id },
-            set: { if $0 { selectedElementId = el.id } }
+            get: { selectedElementIds.contains(el.id) },
+            set: { if $0 { selectElement(el.id, additive: false) } }
         )
         let gridOn = session.editingTemplate?.gridEnabled ?? true
         let gridSize = session.editingTemplate?.gridSize ?? 20
@@ -297,17 +401,35 @@ struct MovieTicketTemplateView: View {
                             syncLogoScaleFromFrame(id: el.id)
                         },
                         onInteractionChanged: { active in
-                            canvasGestureActive = active
+                            noteCanvasInteraction(active)
                         },
                         onDelete: {
-                            selectedElementId = nil
+                            pushUndoSnapshot()
+                            removeFromSelection(el.id)
                             guard var t = session.editingTemplate else { return }
                             t.elements.removeAll { $0.id == el.id }
                             session.editingTemplate = t
                             session.logoImages.removeValue(forKey: el.id)
+                            session.markEditingDirty()
                         },
                         chromeOnly: false,
-                        isLocked: el.isLocked
+                        isLocked: el.isLocked,
+                        onSelectRequest: { _ in
+                            selectElementWithModifiers(el.id)
+                        },
+                        onTranslateChanged: { translation in
+                            applyGroupTranslate(
+                                anchorId: el.id,
+                                translation: translation,
+                                paper: paper,
+                                gridEnabled: gridOn,
+                                gridSize: gridSize
+                            )
+                        },
+                        onTranslateEnded: {
+                            endGroupTranslate()
+                            syncLogoScaleFromFrame(id: el.id)
+                        }
                     )
                 )
             }
@@ -328,8 +450,21 @@ struct MovieTicketTemplateView: View {
                     isLocked: el.isLocked,
                     minSize: CGSize(width: 36, height: minH),
                     onInteractionChanged: { active in
-                        canvasGestureActive = active
-                    }
+                        noteCanvasInteraction(active)
+                    },
+                    onSelectRequest: { _ in
+                        selectElementWithModifiers(el.id)
+                    },
+                    onTranslateChanged: { translation in
+                        applyGroupTranslate(
+                            anchorId: el.id,
+                            translation: translation,
+                            paper: paper,
+                            gridEnabled: gridOn,
+                            gridSize: gridSize
+                        )
+                    },
+                    onTranslateEnded: { endGroupTranslate() }
                 )
             )
         }
@@ -351,8 +486,21 @@ struct MovieTicketTemplateView: View {
                 isLocked: el.isLocked,
                 minSize: CGSize(width: 36, height: minH),
                 onInteractionChanged: { active in
-                    canvasGestureActive = active
-                }
+                    noteCanvasInteraction(active)
+                },
+                onSelectRequest: { _ in
+                    selectElementWithModifiers(el.id)
+                },
+                onTranslateChanged: { translation in
+                    applyGroupTranslate(
+                        anchorId: el.id,
+                        translation: translation,
+                        paper: paper,
+                        gridEnabled: gridOn,
+                        gridSize: gridSize
+                    )
+                },
+                onTranslateEnded: { endGroupTranslate() }
             )
         )
     }
@@ -364,11 +512,13 @@ struct MovieTicketTemplateView: View {
             VStack(alignment: .leading, spacing: 12) {
                 templateProps
                 Divider()
-                if let id = selectedElementId,
-                   session.editingTemplate?.elements.contains(where: { $0.id == id }) == true {
+                if selectedElementIds.count > 1 {
+                    multiSelectInspector
+                } else if let id = lastSelectedId ?? selectedElementIds.first,
+                          session.editingTemplate?.elements.contains(where: { $0.id == id }) == true {
                     elementInspector(elementId: id)
                 } else {
-                    Text("从画布或下方列表选中元素以编辑属性")
+                    Text("从画布或下方列表选中元素以编辑属性；⌘点击可多选")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -389,7 +539,10 @@ struct MovieTicketTemplateView: View {
                     Slider(
                         value: Binding(
                             get: { Double(session.editingTemplate?.canvasHeight ?? 560) },
-                            set: { session.editingTemplate?.canvasHeight = CGFloat($0) }
+                            set: {
+                                session.editingTemplate?.canvasHeight = CGFloat($0)
+                                session.markEditingDirty()
+                            }
                         ),
                         in: 300...1200,
                         step: 20
@@ -398,28 +551,119 @@ struct MovieTicketTemplateView: View {
                 labeled("无特定座位文案") {
                     TextField("General Admission", text: Binding(
                         get: { session.editingTemplate?.unallocatedSeatLabel ?? "" },
-                        set: { session.editingTemplate?.unallocatedSeatLabel = $0 }
+                        set: {
+                            session.editingTemplate?.unallocatedSeatLabel = $0
+                            session.markEditingDirty()
+                        }
                     ))
                     .textFieldStyle(.roundedBorder)
                 }
+                labeled("切纸前走纸") {
+                    HStack(spacing: 8) {
+                        Stepper(
+                            "\(session.editingTemplate?.resolvedFeedLinesBeforeCut(config: appState.settings.printerConfig) ?? 0) 行",
+                            value: Binding(
+                                get: {
+                                    session.editingTemplate?.resolvedFeedLinesBeforeCut(
+                                        config: appState.settings.printerConfig
+                                    ) ?? 0
+                                },
+                                set: { newValue in
+                                    session.editingTemplate?.feedLinesBeforeCut =
+                                        max(0, min(40, newValue))
+                                    session.markEditingDirty()
+                                }
+                            ),
+                            in: 0...40
+                        )
+                    }
+                }
+                Text("打印结束后再走纸再切刀；数值越小票尾越短，过小可能裁到内容。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var multiSelectInspector: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("已选中 \(selectedElementIds.count) 个元素").font(.headline)
+            Text("列表：⌘加减选 · ⇧连选；画布拖拽可批量移动。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            selectionNudgeControls
+            Button("删除选中", role: .destructive) {
+                deleteSelectedElements()
+            }
+        }
+    }
+
+    /// Compact bar above the canvas when multi-select is active.
+    private var selectionNudgeBar: some View {
+        HStack(spacing: 10) {
+            Text("已选 \(selectedElementIds.count)")
+                .font(.caption.weight(.semibold))
+            selectionNudgeControls
+            Spacer(minLength: 0)
+            Button("清除选中") { clearSelection() }
+                .font(.caption)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var selectionNudgeControls: some View {
+        HStack(spacing: 6) {
+            Text("微调").font(.caption2).foregroundStyle(.secondary)
+            Picker("", selection: $nudgeStep) {
+                Text("1pt").tag(CGFloat(1))
+                Text("5pt").tag(CGFloat(5))
+                Text("10pt").tag(CGFloat(10))
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 140)
+            .controlSize(.small)
+
+            nudgeArrowButton("arrow.up", dx: 0, dy: -nudgeStep)
+            nudgeArrowButton("arrow.down", dx: 0, dy: nudgeStep)
+            nudgeArrowButton("arrow.left", dx: -nudgeStep, dy: 0)
+            nudgeArrowButton("arrow.right", dx: nudgeStep, dy: 0)
+        }
+        .controlSize(.small)
+    }
+
+    private func nudgeArrowButton(_ systemName: String, dx: CGFloat, dy: CGFloat) -> some View {
+        Button {
+            nudgeSelection(dx: dx, dy: dy)
+        } label: {
+            Image(systemName: systemName)
+                .frame(width: 22, height: 22)
+        }
+        .buttonStyle(.bordered)
+        .help("移动选中元素")
     }
 
     private var elementListSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("元素列表").font(.headline)
+            Text("⌘点击加减选 · ⇧点击连选")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             let elements = (session.editingTemplate?.elements ?? []).sorted(by: { $0.zIndex < $1.zIndex })
             if elements.isEmpty {
                 Text("暂无元素").font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(elements) { el in
-                    Button { selectedElementId = el.id } label: {
+                    Button {
+                        selectElementWithModifiers(el.id)
+                    } label: {
                         HStack {
                             Circle().fill(accent(for: el)).frame(width: 8, height: 8)
                             Text(elementTitle(el)).lineLimit(1)
                             Spacer()
-                            if selectedElementId == el.id {
+                            if selectedElementIds.contains(el.id) {
                                 Image(systemName: "checkmark.circle.fill")
                             }
                         }
@@ -449,20 +693,29 @@ struct MovieTicketTemplateView: View {
                     get: { elementValue(id: elementId, \.isLocked, default: false) },
                     set: { v in updateElement(id: elementId) { $0.isLocked = v } }
                 ))
-                HStack {
+                HStack(alignment: .top, spacing: 12) {
                     labeled("X") {
-                        NumericField(value: Double(el.frame.x)) { v in
+                        NumericStepperField(
+                            value: Double(el.frame.x),
+                            range: 0...2000,
+                            step: 1
+                        ) { v in
                             updateElement(id: elementId) { $0.frame.x = CGFloat(v) }
                         }
-                        .frame(width: 64)
                     }
                     labeled("Y") {
-                        NumericField(value: Double(el.frame.y)) { v in
+                        NumericStepperField(
+                            value: Double(el.frame.y),
+                            range: 0...4000,
+                            step: 1
+                        ) { v in
                             updateElement(id: elementId) { $0.frame.y = CGFloat(v) }
                         }
-                        .frame(width: 64)
                     }
                 }
+                Text("元素可重叠放置；重叠时打印不再插入额外空行，便于压缩行距。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
 
                 if el.kind == .logo {
                     labeled("缩放 %") {
@@ -514,62 +767,73 @@ struct MovieTicketTemplateView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
 
-                    // Built-in printer font only supports ×1/×2/×3 — expose as choices, not free numbers.
-                    let printScale = MovieTicketRitzESCPOS.printScale(
-                        fontSize: el.fontSize, boxHeight: el.frame.height
-                    )
-                    let paperW = session.editingTemplate?.paperSize.width ?? 302
-                    let dots = appState.settings.printerConfig.dotsPerLine
-                    labeled("打印宽") {
-                        Picker("", selection: Binding(
-                            get: { printScale.width },
-                            set: { level in
-                                let fs: CGFloat = level <= 1 ? 11 : (level == 2 ? 14 : 20)
-                                updateElement(id: elementId) { el in
-                                    el.fontSize = fs
-                                    let scale = MovieTicketRitzESCPOS.printScale(
-                                        fontSize: fs, boxHeight: el.frame.height
-                                    )
-                                    el.frame.height = MovieTicketPrintMetrics.lineHeightPoints(
-                                        heightScale: scale.height,
-                                        paperWidth: paperW,
-                                        dotsPerLine: dots
-                                    )
+                    let isBarcodeOrQR = el.fieldKind == .barcode || el.fieldKind == .qrCode
+                    if isBarcodeOrQR {
+                        Text(el.fieldKind == .barcode
+                             ? "条码高度由上方「高」控制，会随保存保留；与文字 1×/2×/3× 无关。"
+                             : "二维码尺寸由宽高控制。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        // Built-in printer font only supports ×1/×2/×3 — expose as choices, not free numbers.
+                        let printScale = MovieTicketRitzESCPOS.printScale(
+                            fontSize: el.fontSize, boxHeight: el.frame.height
+                        )
+                        let paperW = session.editingTemplate?.paperSize.width ?? 302
+                        let dots = appState.settings.printerConfig.dotsPerLine
+                        labeled("打印宽") {
+                            Picker("", selection: Binding(
+                                get: { printScale.width },
+                                set: { level in
+                                    let fs: CGFloat = level <= 1 ? 11 : (level == 2 ? 14 : 20)
+                                    updateElement(id: elementId) { el in
+                                        el.fontSize = fs
+                                        let scale = MovieTicketRitzESCPOS.printScale(
+                                            fontSize: fs, boxHeight: el.frame.height
+                                        )
+                                        el.frame.height = MovieTicketPrintMetrics.lineHeightPoints(
+                                            heightScale: scale.height,
+                                            paperWidth: paperW,
+                                            dotsPerLine: dots
+                                        )
+                                    }
                                 }
+                            )) {
+                                Text("1×").tag(1)
+                                Text("2×").tag(2)
+                                Text("3×").tag(3)
                             }
-                        )) {
-                            Text("1×").tag(1)
-                            Text("2×").tag(2)
-                            Text("3×").tag(3)
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                    }
-                    labeled("打印高") {
-                        Picker("", selection: Binding(
-                            get: { printScale.height },
-                            set: { level in
-                                let h = max(level, printScale.width)
-                                let boxH = MovieTicketPrintMetrics.lineHeightPoints(
-                                    heightScale: h, paperWidth: paperW, dotsPerLine: dots
-                                )
-                                updateElement(id: elementId) { $0.frame.height = boxH }
+                        labeled("打印高") {
+                            Picker("", selection: Binding(
+                                get: { printScale.height },
+                                set: { level in
+                                    let h = max(level, printScale.width)
+                                    let boxH = MovieTicketPrintMetrics.lineHeightPoints(
+                                        heightScale: h, paperWidth: paperW, dotsPerLine: dots
+                                    )
+                                    updateElement(id: elementId) { $0.frame.height = boxH }
+                                }
+                            )) {
+                                Text("1×").tag(1)
+                                Text("2×").tag(2)
+                                Text("3×").tag(3)
                             }
-                        )) {
-                            Text("1×").tag(1)
-                            Text("2×").tag(2)
-                            Text("3×").tag(3)
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
+                        Text("内置字体仅 1×/2×/3×；占位框高=打印字高；当前 \(printScale.width)×\(printScale.height)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                    Text("内置字体仅 1×/2×/3×；占位框高=打印字高；当前 \(printScale.width)×\(printScale.height)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Toggle("粗体", isOn: Binding(
-                        get: { elementValue(id: elementId, \.isBold, default: false) },
-                        set: { v in updateElement(id: elementId) { $0.isBold = v } }
-                    ))
+                    if !isBarcodeOrQR {
+                        Toggle("粗体", isOn: Binding(
+                            get: { elementValue(id: elementId, \.isBold, default: false) },
+                            set: { v in updateElement(id: elementId) { $0.isBold = v } }
+                        ))
+                    }
                     labeled("对齐") {
                         Picker("", selection: Binding(
                             get: { elementValue(id: elementId, \.alignment, default: 0) },
@@ -644,13 +908,15 @@ struct MovieTicketTemplateView: View {
                     }
                 }
                 Button("删除元素", role: .destructive) {
-                    selectedElementId = nil
+                    pushUndoSnapshot()
+                    removeFromSelection(elementId)
                     guard var t = session.editingTemplate else { return }
                     if el.kind == .logo {
                         session.logoImages.removeValue(forKey: elementId)
                     }
                     t.elements.removeAll { $0.id == elementId }
                     session.editingTemplate = t
+                    session.markEditingDirty()
                 }
             }
         )
@@ -888,11 +1154,266 @@ struct MovieTicketTemplateView: View {
         session.editingTemplate?.elements.first(where: { $0.id == id })?[keyPath: keyPath] ?? defaultValue
     }
 
-    private func updateElement(id: UUID, _ body: (inout MovieTicketElement) -> Void) {
+    private func updateElement(
+        id: UUID,
+        recordUndo: Bool = true,
+        _ body: (inout MovieTicketElement) -> Void
+    ) {
         guard var t = session.editingTemplate,
               let idx = t.elements.firstIndex(where: { $0.id == id }) else { return }
+        if recordUndo { pushUndoSnapshot() }
         body(&t.elements[idx])
         session.editingTemplate = t
+        session.markEditingDirty()
+    }
+
+    private func orderedElementIds() -> [UUID] {
+        (session.editingTemplate?.elements ?? [])
+            .sorted(by: { $0.zIndex < $1.zIndex })
+            .map(\.id)
+    }
+
+    /// Selection with macOS modifiers: ⌘ toggle, ⇧ range (from anchor), plain replace.
+    private func selectElementWithModifiers(_ id: UUID) {
+        let flags = NSEvent.modifierFlags
+        let command = flags.contains(.command)
+        let shift = flags.contains(.shift)
+
+        if shift {
+            let ordered = orderedElementIds()
+            let anchor = selectionAnchorId ?? lastSelectedId ?? id
+            guard let a = ordered.firstIndex(of: anchor),
+                  let b = ordered.firstIndex(of: id) else {
+                selectElement(id, additive: command)
+                return
+            }
+            let range = Set(ordered[min(a, b)...max(a, b)])
+            if command {
+                selectedElementIds.formUnion(range)
+            } else {
+                selectedElementIds = range
+            }
+            lastSelectedId = id
+            return
+        }
+
+        if command {
+            selectElement(id, additive: true)
+            if selectionAnchorId == nil {
+                selectionAnchorId = id
+            }
+            return
+        }
+
+        selectedElementIds = [id]
+        lastSelectedId = id
+        selectionAnchorId = id
+    }
+
+    private func selectElement(_ id: UUID, additive: Bool) {
+        if additive {
+            if selectedElementIds.contains(id) {
+                selectedElementIds.remove(id)
+                if lastSelectedId == id {
+                    lastSelectedId = selectedElementIds.first
+                }
+            } else {
+                selectedElementIds.insert(id)
+                lastSelectedId = id
+            }
+        } else {
+            selectedElementIds = [id]
+            lastSelectedId = id
+            selectionAnchorId = id
+        }
+    }
+
+    private func clearSelection() {
+        selectedElementIds = []
+        lastSelectedId = nil
+        selectionAnchorId = nil
+        groupDragOrigins = [:]
+    }
+
+    private func nudgeSelection(dx: CGFloat, dy: CGFloat) {
+        guard !selectedElementIds.isEmpty, var t = session.editingTemplate else { return }
+        let paper = CGSize(width: t.paperSize.width, height: t.canvasHeight)
+        var allowedDx = dx
+        var allowedDy = dy
+        for el in t.elements where selectedElementIds.contains(el.id) && !el.isLocked {
+            allowedDx = min(allowedDx, paper.width - el.frame.width - el.frame.x)
+            allowedDx = max(allowedDx, -el.frame.x)
+            allowedDy = min(allowedDy, paper.height - el.frame.height - el.frame.y)
+            allowedDy = max(allowedDy, -el.frame.y)
+        }
+        guard allowedDx != 0 || allowedDy != 0 else { return }
+        pushUndoSnapshot()
+        for i in t.elements.indices {
+            guard selectedElementIds.contains(t.elements[i].id), !t.elements[i].isLocked else { continue }
+            t.elements[i].frame.x += allowedDx
+            t.elements[i].frame.y += allowedDy
+        }
+        session.editingTemplate = t
+        session.markEditingDirty()
+    }
+
+    private func removeFromSelection(_ id: UUID) {
+        selectedElementIds.remove(id)
+        if lastSelectedId == id {
+            lastSelectedId = selectedElementIds.first
+        }
+    }
+
+    private func requestLeaveEditing(action: @escaping () -> Void) {
+        if session.isEditingDirty {
+            pendingLeaveAction = action
+            showUnsavedDialog = true
+        } else {
+            action()
+        }
+    }
+
+    private func applyGroupTranslate(
+        anchorId: UUID,
+        translation: CGSize,
+        paper: CGSize,
+        gridEnabled: Bool,
+        gridSize: CGFloat
+    ) {
+        if groupDragOrigins.isEmpty {
+            if !selectedElementIds.contains(anchorId) {
+                selectElement(anchorId, additive: false)
+            }
+            let ids = selectedElementIds
+            groupDragOrigins = Dictionary(uniqueKeysWithValues:
+                (session.editingTemplate?.elements ?? [])
+                    .filter { ids.contains($0.id) }
+                    .map { ($0.id, $0.frame) }
+            )
+            if groupDragOrigins.isEmpty {
+                if let frame = session.editingTemplate?.elements.first(where: { $0.id == anchorId })?.frame {
+                    groupDragOrigins = [anchorId: frame]
+                }
+            }
+        }
+        guard !groupDragOrigins.isEmpty, var t = session.editingTemplate else { return }
+
+        func snap(_ value: CGFloat) -> CGFloat {
+            guard gridEnabled, gridSize > 0 else { return value }
+            return (value / gridSize).rounded() * gridSize
+        }
+
+        let anchorOrigin = groupDragOrigins[anchorId]
+            ?? groupDragOrigins[lastSelectedId ?? anchorId]
+            ?? groupDragOrigins.values.first!
+        let proposedDx = snap(anchorOrigin.x + translation.width) - anchorOrigin.x
+        let proposedDy = snap(anchorOrigin.y + translation.height) - anchorOrigin.y
+
+        var dx = proposedDx
+        var dy = proposedDy
+        for (id, origin) in groupDragOrigins {
+            guard let el = t.elements.first(where: { $0.id == id }), !el.isLocked else { continue }
+            dx = min(dx, paper.width - origin.width - origin.x)
+            dx = max(dx, -origin.x)
+            dy = min(dy, paper.height - origin.height - origin.y)
+            dy = max(dy, -origin.y)
+        }
+
+        for i in t.elements.indices {
+            let id = t.elements[i].id
+            guard let origin = groupDragOrigins[id], !t.elements[i].isLocked else { continue }
+            var next = origin
+            next.x = origin.x + dx
+            next.y = origin.y + dy
+            t.elements[i].frame = next
+        }
+        session.editingTemplate = t
+        session.markEditingDirty()
+    }
+
+    private func endGroupTranslate() {
+        groupDragOrigins = [:]
+    }
+
+    private func deleteSelectedElements() {
+        guard !selectedElementIds.isEmpty, var t = session.editingTemplate else { return }
+        pushUndoSnapshot()
+        let ids = selectedElementIds
+        for id in ids {
+            if t.elements.first(where: { $0.id == id })?.kind == .logo {
+                session.logoImages.removeValue(forKey: id)
+            }
+        }
+        t.elements.removeAll { ids.contains($0.id) }
+        session.editingTemplate = t
+        session.markEditingDirty()
+        clearSelection()
+        status = "已删除 \(ids.count) 个元素"
+    }
+
+    private func noteCanvasInteraction(_ active: Bool) {
+        canvasGestureActive = active
+        if active {
+            if !undoPushedForGesture {
+                pushUndoSnapshot()
+                undoPushedForGesture = true
+            }
+        } else {
+            undoPushedForGesture = false
+        }
+    }
+
+    private func pushUndoSnapshot() {
+        guard let t = session.editingTemplate else { return }
+        if let last = undoStack.last, last == t { return }
+        undoStack.append(t)
+        if undoStack.count > Self.maxUndo {
+            undoStack.removeFirst(undoStack.count - Self.maxUndo)
+        }
+    }
+
+    private func performUndo() {
+        guard let prev = undoStack.popLast() else { return }
+        session.editingTemplate = prev
+        session.markEditingDirty()
+        selectedElementIds = selectedElementIds.filter { id in
+            prev.elements.contains(where: { $0.id == id })
+        }
+        if let last = lastSelectedId,
+           prev.elements.contains(where: { $0.id == last }) == false {
+            lastSelectedId = selectedElementIds.first
+        }
+        status = "已撤销"
+    }
+
+    private func resetToFactoryLayout() {
+        guard let current = session.editingTemplate else { return }
+        pushUndoSnapshot()
+        let oldLogoId = current.elements.first(where: { $0.kind == .logo })?.id
+        let oldLogoImage = oldLogoId.flatMap { session.logoImages[$0] }
+        let made = MovieTicketTemplate.factoryReset(preserving: current)
+        var next = made.template
+        if let newLogoId = made.logoElementId {
+            if let oldLogoImage {
+                session.logoImages[newLogoId] = oldLogoImage
+            } else if let oldLogoId, let img = session.logoImages[oldLogoId] {
+                session.logoImages[newLogoId] = img
+            }
+            if let oldLogoId, oldLogoId != newLogoId {
+                session.logoImages.removeValue(forKey: oldLogoId)
+            }
+            // Keep on-disk filename if present on the previous logo element.
+            if let oldLogoId,
+               let oldEl = current.elements.first(where: { $0.id == oldLogoId }),
+               let name = oldEl.imageFilename,
+               let idx = next.elements.firstIndex(where: { $0.id == newLogoId }) {
+                next.elements[idx].imageFilename = name
+            }
+        }
+        session.editingTemplate = next
+        session.markEditingDirty()
+        clearSelection()
+        status = "已恢复默认布局（可用撤销找回上一版）"
     }
 
     private func addField(_ kind: MovieTicketFieldKind) {
@@ -901,6 +1422,7 @@ struct MovieTicketTemplateView: View {
             status = "已存在「\(kind.displayName)」"
             return
         }
+        pushUndoSnapshot()
         let paperW = t.paperSize.width
         let dots = appState.settings.printerConfig.dotsPerLine
         let defaultH = MovieTicketPrintMetrics.lineHeightPoints(
@@ -919,11 +1441,13 @@ struct MovieTicketTemplateView: View {
         )
         t.elements.append(el)
         session.editingTemplate = t
-        selectedElementId = el.id
+        session.markEditingDirty()
+        selectElement(el.id, additive: false)
     }
 
     private func addTextBox() {
         guard var t = session.editingTemplate else { return }
+        pushUndoSnapshot()
         let el = MovieTicketElement(
             kind: .textBox,
             frame: SequencePlaceholderFrame(x: 12, y: 20, width: 160, height: 28),
@@ -932,11 +1456,13 @@ struct MovieTicketTemplateView: View {
         )
         t.elements.append(el)
         session.editingTemplate = t
-        selectedElementId = el.id
+        session.markEditingDirty()
+        selectElement(el.id, additive: false)
     }
 
     private func addCurrentDate() {
         guard var t = session.editingTemplate else { return }
+        pushUndoSnapshot()
         let el = MovieTicketElement(
             kind: .currentDate,
             frame: SequencePlaceholderFrame(x: 12, y: 400, width: 180, height: 24),
@@ -944,11 +1470,13 @@ struct MovieTicketTemplateView: View {
         )
         t.elements.append(el)
         session.editingTemplate = t
-        selectedElementId = el.id
+        session.markEditingDirty()
+        selectElement(el.id, additive: false)
     }
 
     private func addCurrentTime() {
         guard var t = session.editingTemplate else { return }
+        pushUndoSnapshot()
         let el = MovieTicketElement(
             kind: .currentTime,
             frame: SequencePlaceholderFrame(x: 200, y: 400, width: 90, height: 24),
@@ -956,7 +1484,8 @@ struct MovieTicketTemplateView: View {
         )
         t.elements.append(el)
         session.editingTemplate = t
-        selectedElementId = el.id
+        session.markEditingDirty()
+        selectElement(el.id, additive: false)
     }
 
     private func pickBackground() {
@@ -1007,7 +1536,8 @@ struct MovieTicketTemplateView: View {
         t.elements.append(el)
         session.editingTemplate = t
         session.logoImages[id] = mono
-        selectedElementId = id
+        session.markEditingDirty()
+        selectElement(id, additive: false)
     }
 
     private func setLogoScalePercent(id: UUID, percent: Double) {
@@ -1110,11 +1640,13 @@ struct MovieTicketTemplateView: View {
     }
 
     /// Snap all placeholder box heights to the printer Font A / barcode block heights.
-    private func syncPlaceholderSizesToPrint() {
+    private func syncPlaceholderSizesToPrint(recordUndo: Bool) {
         guard var t = session.editingTemplate else { return }
+        if recordUndo { pushUndoSnapshot() }
         let config = appState.settings.printerConfig
         MovieTicketPrintMetrics.syncTemplateHeights(&t, config: config)
         session.editingTemplate = t
+        if recordUndo { session.markEditingDirty() }
     }
 
     private func openPrintPreview() {
@@ -1127,7 +1659,9 @@ struct MovieTicketTemplateView: View {
             printPreviewImage = nil
             return
         }
-        let sample = MovieTicketDraft.ritzMatrixSample()
+        let sample = t.usesIMAXSydneyLayout
+            ? MovieTicketDraft.imaxSydneySample()
+            : MovieTicketDraft.ritzMatrixSample()
         let result = MovieTicketPrintComposer.compose(
             template: t,
             draft: sample,
@@ -1176,6 +1710,32 @@ private struct NumericField: View {
     }
 
     private func format(_ d: Double) -> String { String(Int(d.rounded())) }
+}
+
+/// Number field + up/down steppers for fine-tuning frame coordinates.
+private struct NumericStepperField: View {
+    var value: Double
+    var range: ClosedRange<Double>
+    var step: Double
+    var onCommit: (Double) -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            NumericField(value: value, range: range, onCommit: onCommit)
+                .frame(width: 56)
+            Stepper(
+                "",
+                value: Binding(
+                    get: { value },
+                    set: { onCommit(min(range.upperBound, max(range.lowerBound, $0))) }
+                ),
+                in: range,
+                step: step
+            )
+            .labelsHidden()
+            .controlSize(.small)
+        }
+    }
 }
 
 // MARK: - Grid / PDF page preview

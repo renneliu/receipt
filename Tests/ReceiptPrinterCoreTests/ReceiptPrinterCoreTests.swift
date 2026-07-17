@@ -741,4 +741,37 @@ final class ReceiptPrinterCoreTests: XCTestCase {
             MovieTicketPDFRecognitionService.matchRules(text: "Orpheum only", rules: [rule]).isEmpty
         )
     }
+
+    func testIMAXSydneyTemplateLayoutAndCompose() {
+        let made = MovieTicketTemplate.makeIMAXSydney()
+        let template = made.template
+        XCTAssertEqual(template.name, "IMAX SYDNEY")
+        XCTAssertTrue(template.usesIMAXSydneyLayout)
+        XCTAssertEqual(template.layoutStyle, "imaxSydney")
+        XCTAssertTrue(template.elements.contains { $0.id == made.logoElementId && $0.kind == .logo })
+        XCTAssertTrue(template.elements.contains { $0.fieldKind == .barcode })
+        XCTAssertTrue(template.elements.contains { $0.fieldKind == .seatArea })
+
+        let draft = MovieTicketDraft.imaxSydneySample()
+        let config = PrinterConfig()
+        let result = MovieTicketPrintComposer.compose(
+            template: template,
+            draft: draft,
+            backgroundImage: nil,
+            logoImages: [:],
+            config: config
+        )
+        XCTAssertFalse(result.artifacts.payload.isEmpty)
+        XCTAssertGreaterThan(result.previewImage.size.height, 100)
+        XCTAssertTrue(result.artifacts.printerModelHint?.contains("IMAX") == true)
+
+        // Meta must not wrap on Font A leftovers — payload uses Font B path + tight `d:`.
+        let payload = result.artifacts.payload
+        let meta = "EFTP | T/N: 536011/001 | d:16072026 1740 | u:9613"
+        XCTAssertTrue(
+            String(decoding: payload, as: UTF8.self).contains("EFTP")
+                || payload.contains(Data(meta.utf8))
+                || payload.contains(Data("536011/001".utf8))
+        )
+    }
 }

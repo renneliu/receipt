@@ -156,7 +156,7 @@ enum MovieTicketRitzESCPOS {
 
         builder.selectFontA()
         builder.resetLineSpacing()
-        let feed = max(config.feedLinesBeforeCut, 8)
+        let feed = template.resolvedFeedLinesBeforeCut(config: config)
         return builder.cut(feedLines: feed).build()
     }
 

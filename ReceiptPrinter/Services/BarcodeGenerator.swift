@@ -16,8 +16,15 @@ enum BarcodeGenerator {
         return image
     }
 
-    static func rasterizeImage(_ image: NSImage, maxWidth: Int, threshold: UInt8 = 128) -> RasterImage? {
-        rasterizeWithPNG(image, maxWidth: maxWidth, threshold: threshold)?.raster
+    static func rasterizeImage(
+        _ image: NSImage,
+        maxWidth: Int,
+        threshold: UInt8 = 128,
+        scaleToWidth: Bool = false
+    ) -> RasterImage? {
+        rasterizeWithPNG(
+            image, maxWidth: maxWidth, threshold: threshold, scaleToWidth: scaleToWidth
+        )?.raster
     }
 
     /// Diagnostics-friendly rasterization: 1-bit raster + PNG of the 8-bit RGB intermediate.
@@ -26,11 +33,23 @@ enum BarcodeGenerator {
         let grayPNG: Data?
     }
 
-    static func rasterizeWithPNG(_ image: NSImage, maxWidth: Int, threshold: UInt8 = 128) -> RasterizeOutput? {
+    /// - Parameter scaleToWidth: When true, output width is `maxWidth` (may upscale). When false
+    ///   (default), width is `min(maxWidth, source)` — 1 preview pixel ≈ 1 printer dot.
+    static func rasterizeWithPNG(
+        _ image: NSImage,
+        maxWidth: Int,
+        threshold: UInt8 = 128,
+        scaleToWidth: Bool = false
+    ) -> RasterizeOutput? {
         guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
 
-        // 1 preview pixel → 1 printer dot; width must be multiple of 8 for GS v 0
-        let width = min(maxWidth, ((max(cgImage.width, 8) + 7) / 8) * 8)
+        // Width must be multiple of 8 for GS v 0.
+        let width: Int
+        if scaleToWidth {
+            width = max(8, (maxWidth / 8) * 8)
+        } else {
+            width = min(maxWidth, ((max(cgImage.width, 8) + 7) / 8) * 8)
+        }
         guard width > 0 else { return nil }
         let aspect = Double(cgImage.height) / Double(max(cgImage.width, 1))
         let height = max(1, Int((Double(width) * aspect).rounded()))
