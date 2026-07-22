@@ -1102,7 +1102,9 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
                 fontSize: 14,
                 isBold: true,
                 alignment: 0,
-                fieldKind: .hall
+                fieldKind: .hall,
+                // IMAX tickets print hall as recognized (e.g. "IMAX 1"), not "Cinema 1".
+                hallDisplayMode: .asRecognized
             ),
             MovieTicketElement(
                 kind: .fieldPlaceholder,

@@ -24,7 +24,8 @@ enum OrpheumTicketRenderer {
                 rightPrefix: "Cinema ",
                 highlight: hall,
                 leftBold: true,
-                leftSize: .double
+                leftSize: .double,
+                preferSingleLine: true
             )
 
         builder.align(.center)

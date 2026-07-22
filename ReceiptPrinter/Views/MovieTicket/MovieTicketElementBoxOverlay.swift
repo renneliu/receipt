@@ -21,7 +21,7 @@ struct MovieTicketElementBoxOverlay: View {
     /// When true, position drag is disabled (resize still allowed).
     var isLocked: Bool = false
     /// Minimum resize size (defaults match legacy; print placeholders may use a shorter min height).
-    var minSize: CGSize = CGSize(width: 36, height: 22)
+    var minSize: CGSize = CGSize(width: 12, height: 22)
     var onFrameChanged: (() -> Void)? = nil
     /// true while drag/resize is active so the parent can skip expensive live recomposes.
     var onInteractionChanged: ((Bool) -> Void)? = nil

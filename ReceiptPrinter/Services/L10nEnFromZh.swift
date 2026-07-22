@@ -150,6 +150,7 @@ extension L10n {
         "定位方式": "Locate mode",
         "宽": "Width",
         "宽高可独立调整（非等比例）": "Width and height are independent",
+        "改「宽」会同步打印字宽（1×/2×/3×）；打印预览跟打印字宽走。": "Changing Width also sets print width (1×/2×/3×); print preview follows print width.",
         "宽（换行）": "Width (wrap)",
         "对比报告": "Comparison report",
         "对比选中的两个作业": "Compare two selected jobs",

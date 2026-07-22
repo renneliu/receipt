@@ -3,7 +3,16 @@ import Foundation
 
 /// Native ESC/POS dual-stub ticket matching the classic Hayden Orpheum layout
 /// (`OrpheumTicketRenderer` / 「电影票 (Orpheum)」).
+///
+/// Typography follows template element `fontSize` / box height via
+/// `MovieTicketRitzESCPOS.printScale` (same 1×/2×/3× controls as the template editor).
 enum MovieTicketOrpheumESCPOS {
+    private struct LineStyle {
+        var widthScale: Int = 1
+        var heightScale: Int = 1
+        var bold: Bool = false
+    }
+
     static func render(
         template: MovieTicketTemplate,
         draft: MovieTicketDraft,
@@ -15,8 +24,9 @@ enum MovieTicketOrpheumESCPOS {
         let builder = ESCPOSBuilder(config: config)
         builder.jobStartPadding(bytes: 96)
         builder.initialize()
+        builder.selectFontA()
         renderStub(builder, fields: fields, includeBarcode: false)
-        builder.align(.center).text("--------------------------").newline()
+        builder.align(.center).applyMagnification(width: 1, height: 1).text("--------------------------").newline()
         renderStub(builder, fields: fields, includeBarcode: true)
         builder.resetStyle()
         let feed = template.resolvedFeedLinesBeforeCut(config: config)
@@ -33,20 +43,61 @@ enum MovieTicketOrpheumESCPOS {
         let fields = resolvedFields(template: template, draft: draft, config: config)
         let widthDots = max(8, config.dotsPerLine)
         let width = CGFloat(widthDots)
-        let rowH: CGFloat = 28
-        let height: CGFloat = 520
+        let cell = MovieTicketPrintMetrics.fontACellDots
+
+        var measureY: CGFloat = 12
+        measureY += cell.height * CGFloat(max(
+            fields.venueStyle.heightScale,
+            fields.cinemaStyle.heightScale,
+            fields.hallStyle.heightScale
+        ))
+        measureY += cell.height * CGFloat(fields.titleStyle.heightScale) + 4
+        measureY += cell.height * CGFloat(fields.whenStyle.heightScale) + 4
+        measureY += cell.height * CGFloat(max(fields.admitStyle.heightScale, fields.typeStyle.heightScale))
+        measureY += includeBarcodeEstimate(fields: fields, widthDots: widthDots)
+        measureY += 20 // dash
+        measureY += cell.height * CGFloat(max(
+            fields.venueStyle.heightScale,
+            fields.cinemaStyle.heightScale,
+            fields.hallStyle.heightScale
+        ))
+        measureY += cell.height * CGFloat(fields.titleStyle.heightScale) + 4
+        measureY += cell.height * CGFloat(fields.whenStyle.heightScale) + 4
+        measureY += cell.height * CGFloat(max(fields.admitStyle.heightScale, fields.typeStyle.heightScale))
+        measureY += includeBarcodeEstimate(fields: fields, widthDots: widthDots, withBarcode: true)
+        let height = max(1 as CGFloat, ceil(measureY))
 
         return NSImage(size: NSSize(width: width, height: height), flipped: true) { _ in
             NSColor.white.setFill()
             NSRect(x: 0, y: 0, width: width, height: height).fill()
 
             var y: CGFloat = 12
-            drawStubPreview(fields: fields, includeBarcode: false, widthDots: widthDots, y: &y, rowH: rowH)
-            drawCentered("--------------------------", y: &y, widthDots: widthDots, size: 12, bold: false)
+            drawStubPreview(fields: fields, includeBarcode: false, widthDots: widthDots, y: &y)
+            drawCentered(
+                "--------------------------",
+                y: &y,
+                widthDots: widthDots,
+                size: 11,
+                bold: false,
+                lineHeight: cell.height
+            )
             y += 6
-            drawStubPreview(fields: fields, includeBarcode: true, widthDots: widthDots, y: &y, rowH: rowH)
+            drawStubPreview(fields: fields, includeBarcode: true, widthDots: widthDots, y: &y)
             return true
         }
+    }
+
+    private static func includeBarcodeEstimate(
+        fields: Fields,
+        widthDots: Int,
+        withBarcode: Bool = false
+    ) -> CGFloat {
+        _ = widthDots
+        if withBarcode {
+            return CGFloat(fields.barcodeHeight) + 4
+                + MovieTicketPrintMetrics.fontACellDots.height * CGFloat(fields.serialStyle.heightScale)
+        }
+        return MovieTicketPrintMetrics.fontACellDots.height * CGFloat(fields.serialStyle.heightScale)
     }
 
     // MARK: - Resolve
@@ -54,6 +105,8 @@ enum MovieTicketOrpheumESCPOS {
     private struct Fields {
         var venue: String
         var hallNumber: String
+        /// Reverse-print payload including pad spaces; width tracks hall placeholder 「宽」.
+        var hallHighlightText: String
         var movie: String
         var when: String
         var ticketType: String
@@ -62,8 +115,16 @@ enum MovieTicketOrpheumESCPOS {
         var barcode: String
         var barcodeLabel: String
         var admit: String
-        /// When true, emit title via `appendRawTextLine` (already clipped to one line).
         var titleForceSingleLine: Bool
+        var barcodeHeight: UInt8
+        var venueStyle: LineStyle
+        var cinemaStyle: LineStyle
+        var hallStyle: LineStyle
+        var titleStyle: LineStyle
+        var whenStyle: LineStyle
+        var admitStyle: LineStyle
+        var typeStyle: LineStyle
+        var serialStyle: LineStyle
     }
 
     private static func resolvedFields(
@@ -71,11 +132,26 @@ enum MovieTicketOrpheumESCPOS {
         draft: MovieTicketDraft,
         config: PrinterConfig
     ) -> Fields {
-        let venue = template.elements
-            .first(where: { $0.kind == .textBox && $0.content.localizedCaseInsensitiveContains("orpheum") })?
-            .content.trimmingCharacters(in: .whitespacesAndNewlines)
-            ?? "Orpheum"
+        let venueEl = template.elements.first {
+            $0.kind == .textBox && $0.content.localizedCaseInsensitiveContains("orpheum")
+        }
+        let cinemaEl = template.elements.first {
+            $0.kind == .textBox
+                && $0.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                .localizedCaseInsensitiveCompare("Cinema") == .orderedSame
+        }
         let hallEl = template.elements.first { $0.fieldKind == .hall }
+        let titleEl = template.elements.first {
+            $0.kind == .fieldPlaceholder && $0.fieldKind == .movieTitle
+        }
+        let whenEl = template.elements.first { $0.fieldKind == .timeRange }
+        let seatEl = template.elements.first { $0.fieldKind == .seatArea }
+        let typeEl = template.elements.first { $0.fieldKind == .ticketType }
+        let priceEl = template.elements.first { $0.fieldKind == .ticketPrice }
+        let serialEl = template.elements.first { $0.fieldKind == .serialNumber }
+        let barcodeEl = template.elements.first { $0.fieldKind == .barcode }
+
+        let venue = venueEl?.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Orpheum"
         let hallRaw = draft.hall.trimmingCharacters(in: .whitespacesAndNewlines)
         let hallNumber = MovieTicketElement.extractHallNumber(from: hallRaw)
         let n = hallNumber.isEmpty ? hallRaw : hallNumber
@@ -124,16 +200,32 @@ enum MovieTicketOrpheumESCPOS {
             return seat.isEmpty ? "ADMIT" : seat
         }()
 
-        let titleEl = template.elements.first {
-            $0.kind == .fieldPlaceholder && $0.fieldKind == .movieTitle
-        }
-        // Orpheum title prints at `.double` (width×2 height×2).
-        let titleWidthScale = 2
+        let venueStyle = style(from: venueEl, fallbackW: 2, fallbackH: 2, fallbackBold: true)
+        // Cinema label and hall number keep independent print scales.
+        let cinemaStyle = style(from: cinemaEl, fallbackW: 1, fallbackH: 1, fallbackBold: false)
+        let hallStyle = style(from: hallEl, fallbackW: 2, fallbackH: 2, fallbackBold: true)
+        let hallHighlightText = MovieTicketPrintMetrics.invertedHallHighlightText(
+            number: n,
+            frameWidth: hallEl?.frame.width,
+            widthScale: hallStyle.widthScale,
+            paperWidth: template.paperSize.width,
+            dotsPerLine: config.dotsPerLine,
+            columnsPerLine: config.columnsPerLine
+        )
+        let titleStyle = style(from: titleEl, fallbackW: 2, fallbackH: 2, fallbackBold: true)
+        let whenStyle = style(from: whenEl, fallbackW: 1, fallbackH: 1, fallbackBold: false)
+        let admitStyle = style(from: seatEl, fallbackW: 1, fallbackH: 1, fallbackBold: false)
+        let typeStyle = maxStyle(
+            style(from: typeEl, fallbackW: 1, fallbackH: 1, fallbackBold: false),
+            style(from: priceEl, fallbackW: 1, fallbackH: 1, fallbackBold: false)
+        )
+        let serialStyle = style(from: serialEl, fallbackW: 1, fallbackH: 1, fallbackBold: false)
+
         let rawTitle = draft.printedMovieTitle
         let clipCols = titleClipColumns(
             element: titleEl,
             config: config,
-            widthScale: titleWidthScale,
+            widthScale: titleStyle.widthScale,
             paperWidth: template.paperSize.width
         )
         let forceSingle = titleEl?.singleLineClip != false && clipCols != nil
@@ -142,10 +234,16 @@ enum MovieTicketOrpheumESCPOS {
             return ReceiptTextLayout.clip(rawTitle, maxColumns: clipCols)
         }()
 
-        _ = hallEl
+        let barcodeHeight: UInt8 = {
+            let h = barcodeEl?.frame.height ?? 72
+            let dots = Int((h * (110.0 / 72.0)).rounded())
+            return UInt8(max(24, min(255, dots)))
+        }()
+
         return Fields(
             venue: venue.isEmpty ? "Orpheum" : venue,
             hallNumber: n,
+            hallHighlightText: hallHighlightText,
             movie: movie,
             when: when,
             ticketType: draft.ticketType.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -154,7 +252,41 @@ enum MovieTicketOrpheumESCPOS {
             barcode: barcode,
             barcodeLabel: barcodeLabel,
             admit: admit,
-            titleForceSingleLine: forceSingle
+            titleForceSingleLine: forceSingle,
+            barcodeHeight: barcodeHeight,
+            venueStyle: venueStyle,
+            cinemaStyle: cinemaStyle,
+            hallStyle: hallStyle,
+            titleStyle: titleStyle,
+            whenStyle: whenStyle,
+            admitStyle: admitStyle,
+            typeStyle: typeStyle,
+            serialStyle: serialStyle
+        )
+    }
+
+    private static func style(
+        from el: MovieTicketElement?,
+        fallbackW: Int,
+        fallbackH: Int,
+        fallbackBold: Bool
+    ) -> LineStyle {
+        guard let el else {
+            return LineStyle(widthScale: fallbackW, heightScale: fallbackH, bold: fallbackBold)
+        }
+        let scale = MovieTicketRitzESCPOS.printScale(fontSize: el.fontSize, boxHeight: el.frame.height)
+        return LineStyle(
+            widthScale: scale.width,
+            heightScale: scale.height,
+            bold: el.isBold
+        )
+    }
+
+    private static func maxStyle(_ a: LineStyle, _ b: LineStyle) -> LineStyle {
+        LineStyle(
+            widthScale: max(a.widthScale, b.widthScale),
+            heightScale: max(a.heightScale, b.heightScale),
+            bold: a.bold || b.bold
         )
     }
 
@@ -181,62 +313,182 @@ enum MovieTicketOrpheumESCPOS {
             .tableRowWithHighlight(
                 left: fields.venue,
                 rightPrefix: "Cinema ",
-                highlight: fields.hallNumber,
-                leftBold: true,
-                leftSize: .double
+                highlight: fields.hallHighlightText,
+                leftBold: fields.venueStyle.bold,
+                leftWidth: fields.venueStyle.widthScale,
+                leftHeight: fields.venueStyle.heightScale,
+                rightBold: fields.cinemaStyle.bold,
+                rightWidth: fields.cinemaStyle.widthScale,
+                rightHeight: fields.cinemaStyle.heightScale,
+                highlightBold: fields.hallStyle.bold,
+                highlightWidth: fields.hallStyle.widthScale,
+                highlightHeight: fields.hallStyle.heightScale,
+                preferSingleLine: true,
+                padHighlight: false
             )
 
         let title = fields.movie.isEmpty ? " " : fields.movie
         builder.align(.center)
-            .bold(true)
-            .applyTextSize(.double)
+            .bold(fields.titleStyle.bold)
+            .applyMagnification(width: fields.titleStyle.widthScale, height: fields.titleStyle.heightScale)
         if fields.titleForceSingleLine {
             builder.appendRawTextLine(title).newline()
         } else {
             builder.text(title).newline()
         }
         builder.bold(false)
-            .applyTextSize(.normal)
+            .applyMagnification(width: 1, height: 1)
 
         builder.align(.left)
+            .bold(fields.whenStyle.bold)
+            .applyMagnification(width: fields.whenStyle.widthScale, height: fields.whenStyle.heightScale)
             .text(fields.when)
             .newline()
+            .bold(false)
+            .applyMagnification(width: 1, height: 1)
 
         let right = [fields.ticketType, fields.price].filter { !$0.isEmpty }.joined(separator: " ")
         builder.tableRowWithHighlight(
             left: fields.admit,
             rightPrefix: right,
             highlight: "",
-            leftBold: false,
-            leftSize: .normal
+            leftBold: fields.admitStyle.bold,
+            leftWidth: fields.admitStyle.widthScale,
+            leftHeight: fields.admitStyle.heightScale,
+            rightBold: fields.typeStyle.bold,
+            rightWidth: fields.typeStyle.widthScale,
+            rightHeight: fields.typeStyle.heightScale
         )
 
         if includeBarcode {
             let code = fields.barcode.isEmpty ? "000000" : fields.barcode
-            builder.barcode(type: .code128, content: code, height: 80, width: 2, printHRI: false)
-            builder.align(.center).text(fields.barcodeLabel).newline()
+            builder.barcode(
+                type: .code128,
+                content: code,
+                height: fields.barcodeHeight,
+                width: 2,
+                printHRI: false
+            )
+            builder.align(.center)
+                .bold(fields.serialStyle.bold)
+                .applyMagnification(width: fields.serialStyle.widthScale, height: fields.serialStyle.heightScale)
+                .text(fields.barcodeLabel)
+                .newline()
+                .bold(false)
+                .applyMagnification(width: 1, height: 1)
         } else {
-            builder.align(.center).text(fields.ticketCode).newline()
+            builder.align(.center)
+                .bold(fields.serialStyle.bold)
+                .applyMagnification(width: fields.serialStyle.widthScale, height: fields.serialStyle.heightScale)
+                .text(fields.ticketCode)
+                .newline()
+                .bold(false)
+                .applyMagnification(width: 1, height: 1)
         }
     }
 
     // MARK: - Preview
 
+    /// Measure/draw Font A text with independent GS ! width & height (like Ritz preview).
+    @discardableResult
+    private static func drawScaledText(
+        _ text: String,
+        at origin: NSPoint,
+        widthScale: Int,
+        heightScale: Int,
+        bold: Bool,
+        color: NSColor = .black,
+        draw: Bool = true
+    ) -> CGSize {
+        let wScale = max(1, widthScale)
+        let hScale = max(1, heightScale)
+        let fontSize: CGFloat = 11
+        let font = NSFont(name: bold ? "Menlo-Bold" : "Menlo-Regular", size: fontSize)
+            ?? .monospacedSystemFont(ofSize: fontSize, weight: bold ? .bold : .regular)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
+        let natural = (text as NSString).size(withAttributes: attrs)
+        let ink = CGSize(width: natural.width * CGFloat(wScale), height: natural.height * CGFloat(hScale))
+        guard draw else { return ink }
+        if let ctx = NSGraphicsContext.current?.cgContext {
+            ctx.saveGState()
+            ctx.translateBy(x: origin.x, y: origin.y)
+            ctx.scaleBy(x: CGFloat(wScale), y: CGFloat(hScale))
+            (text as NSString).draw(at: .zero, withAttributes: attrs)
+            ctx.restoreGState()
+        } else {
+            (text as NSString).draw(in: NSRect(origin: origin, size: ink), withAttributes: attrs)
+        }
+        return ink
+    }
+
     private static func drawStubPreview(
         fields: Fields,
         includeBarcode: Bool,
         widthDots: Int,
-        y: inout CGFloat,
-        rowH: CGFloat
+        y: inout CGFloat
     ) {
         drawHeaderRow(fields: fields, widthDots: widthDots, y: &y)
-        drawCentered(fields.movie.isEmpty ? " " : fields.movie, y: &y, widthDots: widthDots, size: 22, bold: true)
-        y += 4
-        drawLeft(fields.when, y: &y, widthDots: widthDots, size: 13, bold: false)
+
+        let titleText = fields.movie.isEmpty ? " " : fields.movie
+        let titleAdvance = MovieTicketPrintMetrics.fontACellDots.height
+            * CGFloat(fields.titleStyle.heightScale)
+        let titleInk = drawScaledText(
+            titleText,
+            at: .zero,
+            widthScale: fields.titleStyle.widthScale,
+            heightScale: fields.titleStyle.heightScale,
+            bold: fields.titleStyle.bold,
+            draw: false
+        )
+        _ = drawScaledText(
+            titleText,
+            at: NSPoint(x: max(0, (CGFloat(widthDots) - titleInk.width) / 2), y: y),
+            widthScale: fields.titleStyle.widthScale,
+            heightScale: fields.titleStyle.heightScale,
+            bold: fields.titleStyle.bold
+        )
+        y += max(titleAdvance, titleInk.height) + 4
+
+        let whenAdvance = MovieTicketPrintMetrics.fontACellDots.height
+            * CGFloat(fields.whenStyle.heightScale)
+        let whenInk = drawScaledText(
+            fields.when,
+            at: NSPoint(x: 8, y: y),
+            widthScale: fields.whenStyle.widthScale,
+            heightScale: fields.whenStyle.heightScale,
+            bold: fields.whenStyle.bold
+        )
+        y += max(whenAdvance, whenInk.height) + 4
+
         let right = [fields.ticketType, fields.price].filter { !$0.isEmpty }.joined(separator: " ")
-        drawSplitRow(left: fields.admit, right: right, widthDots: widthDots, y: &y)
+        let rowH = MovieTicketPrintMetrics.fontACellDots.height
+            * CGFloat(max(fields.admitStyle.heightScale, fields.typeStyle.heightScale))
+        _ = drawScaledText(
+            fields.admit,
+            at: NSPoint(x: 8, y: y),
+            widthScale: fields.admitStyle.widthScale,
+            heightScale: fields.admitStyle.heightScale,
+            bold: fields.admitStyle.bold
+        )
+        let rightInk = drawScaledText(
+            right,
+            at: .zero,
+            widthScale: fields.typeStyle.widthScale,
+            heightScale: fields.typeStyle.heightScale,
+            bold: fields.typeStyle.bold,
+            draw: false
+        )
+        _ = drawScaledText(
+            right,
+            at: NSPoint(x: CGFloat(widthDots) - rightInk.width - 8, y: y),
+            widthScale: fields.typeStyle.widthScale,
+            heightScale: fields.typeStyle.heightScale,
+            bold: fields.typeStyle.bold
+        )
+        y += rowH + 6
+
         if includeBarcode {
-            let barH: CGFloat = 70
+            let barH = CGFloat(fields.barcodeHeight)
             let barW = CGFloat(widthDots) * 0.88
             let barX = (CGFloat(widthDots) - barW) / 2
             if let img = MovieTicketPrintComposer.makeCode128Barcode(
@@ -252,33 +504,109 @@ enum MovieTicketOrpheumESCPOS {
                 )
             }
             y += barH + 4
-            drawCentered(fields.barcodeLabel, y: &y, widthDots: widthDots, size: 11, bold: false)
+            let serialAdvance = MovieTicketPrintMetrics.fontACellDots.height
+                * CGFloat(fields.serialStyle.heightScale)
+            let serialInk = drawScaledText(
+                fields.barcodeLabel,
+                at: .zero,
+                widthScale: fields.serialStyle.widthScale,
+                heightScale: fields.serialStyle.heightScale,
+                bold: fields.serialStyle.bold,
+                draw: false
+            )
+            _ = drawScaledText(
+                fields.barcodeLabel,
+                at: NSPoint(x: max(0, (CGFloat(widthDots) - serialInk.width) / 2), y: y),
+                widthScale: fields.serialStyle.widthScale,
+                heightScale: fields.serialStyle.heightScale,
+                bold: fields.serialStyle.bold
+            )
+            y += max(serialAdvance, serialInk.height)
         } else {
-            drawCentered(fields.ticketCode, y: &y, widthDots: widthDots, size: 12, bold: false)
+            let serialAdvance = MovieTicketPrintMetrics.fontACellDots.height
+                * CGFloat(fields.serialStyle.heightScale)
+            let serialInk = drawScaledText(
+                fields.ticketCode,
+                at: .zero,
+                widthScale: fields.serialStyle.widthScale,
+                heightScale: fields.serialStyle.heightScale,
+                bold: fields.serialStyle.bold,
+                draw: false
+            )
+            _ = drawScaledText(
+                fields.ticketCode,
+                at: NSPoint(x: max(0, (CGFloat(widthDots) - serialInk.width) / 2), y: y),
+                widthScale: fields.serialStyle.widthScale,
+                heightScale: fields.serialStyle.heightScale,
+                bold: fields.serialStyle.bold
+            )
+            y += max(serialAdvance, serialInk.height)
         }
-        y += rowH * 0.3
     }
 
     private static func drawHeaderRow(fields: Fields, widthDots: Int, y: inout CGFloat) {
-        let font = NSFont(name: "Menlo-Bold", size: 22) ?? .monospacedSystemFont(ofSize: 22, weight: .bold)
-        let small = NSFont(name: "Menlo-Regular", size: 14) ?? .monospacedSystemFont(ofSize: 14, weight: .regular)
-        let venue = fields.venue as NSString
-        venue.draw(at: NSPoint(x: 8, y: y), withAttributes: [.font: font, .foregroundColor: NSColor.black])
+        let rowH = MovieTicketPrintMetrics.fontACellDots.height
+            * CGFloat(max(
+                fields.venueStyle.heightScale,
+                fields.cinemaStyle.heightScale,
+                fields.hallStyle.heightScale
+            ))
 
-        let cinema = "Cinema " as NSString
-        let hall = "  \(fields.hallNumber)  " as NSString
-        let cinemaW = cinema.size(withAttributes: [.font: small]).width
-        let hallW = hall.size(withAttributes: [.font: small]).width
-        let rightX = CGFloat(widthDots) - cinemaW - hallW - 8
-        cinema.draw(at: NSPoint(x: rightX, y: y + 6), withAttributes: [
-            .font: small, .foregroundColor: NSColor.black
-        ])
-        let hallOrigin = NSPoint(x: rightX + cinemaW, y: y + 4)
-        let hallSize = hall.size(withAttributes: [.font: small])
+        _ = drawScaledText(
+            fields.venue,
+            at: NSPoint(x: 8, y: y),
+            widthScale: fields.venueStyle.widthScale,
+            heightScale: fields.venueStyle.heightScale,
+            bold: fields.venueStyle.bold
+        )
+
+        let cinema = "Cinema "
+        let hall = fields.hallHighlightText
+        let cinemaInk = drawScaledText(
+            cinema,
+            at: .zero,
+            widthScale: fields.cinemaStyle.widthScale,
+            heightScale: fields.cinemaStyle.heightScale,
+            bold: fields.cinemaStyle.bold,
+            draw: false
+        )
+        let hallInk = drawScaledText(
+            hall,
+            at: .zero,
+            widthScale: fields.hallStyle.widthScale,
+            heightScale: fields.hallStyle.heightScale,
+            bold: fields.hallStyle.bold,
+            draw: false
+        )
+        let rightX = CGFloat(widthDots) - cinemaInk.width - hallInk.width - 8
+        let cinemaY = y + max(0, (rowH - cinemaInk.height) / 2)
+        let hallY = y + max(0, (rowH - hallInk.height) / 2)
+
+        _ = drawScaledText(
+            cinema,
+            at: NSPoint(x: rightX, y: cinemaY),
+            widthScale: fields.cinemaStyle.widthScale,
+            heightScale: fields.cinemaStyle.heightScale,
+            bold: fields.cinemaStyle.bold
+        )
+
+        let hallOrigin = NSPoint(x: rightX + cinemaInk.width, y: hallY)
         NSColor.black.setFill()
-        NSRect(x: hallOrigin.x, y: hallOrigin.y, width: hallSize.width, height: hallSize.height + 2).fill()
-        hall.draw(at: hallOrigin, withAttributes: [.font: small, .foregroundColor: NSColor.white])
-        y += 32
+        NSRect(
+            x: hallOrigin.x,
+            y: hallOrigin.y,
+            width: hallInk.width,
+            height: max(hallInk.height, 2) + 2
+        ).fill()
+        _ = drawScaledText(
+            hall,
+            at: hallOrigin,
+            widthScale: fields.hallStyle.widthScale,
+            heightScale: fields.hallStyle.heightScale,
+            bold: fields.hallStyle.bold,
+            color: .white
+        )
+        y += rowH + 4
     }
 
     private static func drawCentered(
@@ -286,7 +614,8 @@ enum MovieTicketOrpheumESCPOS {
         y: inout CGFloat,
         widthDots: Int,
         size: CGFloat,
-        bold: Bool
+        bold: Bool,
+        lineHeight: CGFloat
     ) {
         let font = NSFont(name: bold ? "Menlo-Bold" : "Menlo-Regular", size: size)
             ?? .monospacedSystemFont(ofSize: size, weight: bold ? .bold : .regular)
@@ -294,32 +623,6 @@ enum MovieTicketOrpheumESCPOS {
         let w = (text as NSString).size(withAttributes: attrs).width
         let x = max(0, (CGFloat(widthDots) - w) / 2)
         (text as NSString).draw(at: NSPoint(x: x, y: y), withAttributes: attrs)
-        y += size + 8
-    }
-
-    private static func drawLeft(
-        _ text: String,
-        y: inout CGFloat,
-        widthDots: Int,
-        size: CGFloat,
-        bold: Bool
-    ) {
-        _ = widthDots
-        let font = NSFont(name: bold ? "Menlo-Bold" : "Menlo-Regular", size: size)
-            ?? .monospacedSystemFont(ofSize: size, weight: bold ? .bold : .regular)
-        (text as NSString).draw(at: NSPoint(x: 8, y: y), withAttributes: [
-            .font: font, .foregroundColor: NSColor.black
-        ])
-        y += size + 8
-    }
-
-    private static func drawSplitRow(left: String, right: String, widthDots: Int, y: inout CGFloat) {
-        let font = NSFont(name: "Menlo-Regular", size: 13)
-            ?? .monospacedSystemFont(ofSize: 13, weight: .regular)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
-        (left as NSString).draw(at: NSPoint(x: 8, y: y), withAttributes: attrs)
-        let rw = (right as NSString).size(withAttributes: attrs).width
-        (right as NSString).draw(at: NSPoint(x: CGFloat(widthDots) - rw - 8, y: y), withAttributes: attrs)
-        y += 22
+        y += max(lineHeight, size + 4)
     }
 }

@@ -102,6 +102,7 @@ enum MovieTicketPrintComposer {
             )
             hint = "Movie ticket native ESC/POS (canvas WYSIWYG)"
         }
+
         let pngData = preview.tiffRepresentation.flatMap {
             NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:])
         } ?? Data()

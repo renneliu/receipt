@@ -28,6 +28,29 @@ final class ESCPOSBuilder {
         return max(8, isDoubleSize ? base / 2 : base)
     }
 
+    /// Paper columns at 1× width (ignore current GS ! magnification).
+    private var baseColumns: Int {
+        max(8, columnsOverride ?? config.columnsPerLine)
+    }
+
+    /// Horizontal magnification for a text size (height-only sizes count as 1).
+    private static func widthMultiplier(for size: TextSize) -> Int {
+        switch size {
+        case .double, .doubleTall: return 2
+        default: return 1
+        }
+    }
+
+    private static func heightMultiplier(for size: TextSize) -> Int {
+        switch size {
+        case .normal: return 1
+        case .tall: return 2
+        case .taller: return 3
+        case .double: return 2
+        case .doubleTall: return 3
+        }
+    }
+
     func build() -> Data { data }
 
     @discardableResult
@@ -103,6 +126,13 @@ final class ESCPOSBuilder {
 
     private static func rowNeedsSplitLayout(leftSize: TextSize, rightSize: TextSize) -> Bool {
         leftSize == .double || rightSize == .double || leftSize != rightSize
+    }
+
+    private static func rowNeedsSplitLayout(
+        leftWidth: Int, leftHeight: Int, rightWidth: Int, rightHeight: Int
+    ) -> Bool {
+        leftWidth >= 2 || rightWidth >= 2
+            || leftWidth != rightWidth || leftHeight != rightHeight
     }
 
     @discardableResult
@@ -323,21 +353,77 @@ final class ESCPOSBuilder {
         leftBold: Bool = false,
         leftSize: TextSize = .normal,
         rightBold: Bool = false,
-        rightSize: TextSize = .normal
+        rightSize: TextSize = .normal,
+        /// Orpheum-style headers need venue + Cinema highlight on one physical line
+        /// even when left uses double-size Font A (preview already draws them together).
+        preferSingleLine: Bool = false
     ) -> Self {
-        let highlightText = highlight.isEmpty ? "" : "  \(highlight)  "
+        tableRowWithHighlight(
+            left: left,
+            rightPrefix: rightPrefix,
+            highlight: highlight,
+            leftBold: leftBold,
+            leftWidth: Self.widthMultiplier(for: leftSize),
+            leftHeight: Self.heightMultiplier(for: leftSize),
+            rightBold: rightBold,
+            rightWidth: Self.widthMultiplier(for: rightSize),
+            rightHeight: Self.heightMultiplier(for: rightSize),
+            preferSingleLine: preferSingleLine
+        )
+    }
 
-        if Self.rowNeedsSplitLayout(leftSize: leftSize, rightSize: rightSize) {
+    /// Same as `tableRowWithHighlight` but with arbitrary GS ! width/height (1…8).
+    /// Highlight may use its own magnification (e.g. Orpheum "Cinema " vs hall number).
+    @discardableResult
+    func tableRowWithHighlight(
+        left: String,
+        rightPrefix: String,
+        highlight: String,
+        leftBold: Bool = false,
+        leftWidth: Int = 1,
+        leftHeight: Int = 1,
+        rightBold: Bool = false,
+        rightWidth: Int = 1,
+        rightHeight: Int = 1,
+        highlightBold: Bool? = nil,
+        highlightWidth: Int? = nil,
+        highlightHeight: Int? = nil,
+        preferSingleLine: Bool = false,
+        /// When false, `highlight` is reverse-printed as-is (caller supplies any pad spaces).
+        padHighlight: Bool = true
+    ) -> Self {
+        let lw = max(1, min(8, leftWidth))
+        let lh = max(1, min(8, leftHeight))
+        let rw = max(1, min(8, rightWidth))
+        let rh = max(1, min(8, rightHeight))
+        let hw = max(1, min(8, highlightWidth ?? rightWidth))
+        let hh = max(1, min(8, highlightHeight ?? rightHeight))
+        let hBold = highlightBold ?? rightBold
+        let highlightText: String = {
+            if highlight.isEmpty { return "" }
+            return padHighlight ? "  \(highlight)  " : highlight
+        }()
+        let needsSplit = !preferSingleLine
+            && Self.rowNeedsSplitLayout(leftWidth: lw, leftHeight: lh, rightWidth: rw, rightHeight: rh)
+        let leftCols = ReceiptTextLayout.displayWidth(left)
+        let prefixCols = ReceiptTextLayout.displayWidth(rightPrefix)
+        let highlightCols = highlightText.isEmpty ? 0 : ReceiptTextLayout.displayWidth(highlightText)
+        let leftBudget = leftCols * lw
+        let rightBudget = prefixCols * rw + highlightCols * hw
+        let padding = max(1, baseColumns - leftBudget - rightBudget)
+
+        if needsSplit {
             align(.left)
-            bold(leftBold).applyTextSize(leftSize)
+            bold(leftBold).applyMagnification(width: lw, height: lh)
             appendEncoded(left)
             data.append(0x0A)
             resetStyle()
 
             align(.right)
-            bold(rightBold).applyTextSize(rightSize)
+            bold(rightBold).applyMagnification(width: rw, height: rh)
             appendEncoded(rightPrefix)
             if !highlightText.isEmpty {
+                bold(hBold).applyMagnification(width: hw, height: hh)
                 reversePrint(true)
                 appendEncoded(highlightText)
                 reversePrint(false)
@@ -347,19 +433,15 @@ final class ESCPOSBuilder {
             return self
         }
 
-        let leftCols = ReceiptTextLayout.displayWidth(left)
-        let rightCols = ReceiptTextLayout.displayWidth(rightPrefix)
-            + (highlightText.isEmpty ? 0 : ReceiptTextLayout.displayWidth(highlightText))
-        let padding = max(1, effectiveColumns - leftCols - rightCols)
-
         align(.left)
-        bold(leftBold).applyTextSize(leftSize)
+        bold(leftBold).applyMagnification(width: lw, height: lh)
         appendEncoded(left)
-        bold(false).applyTextSize(.normal)
+        bold(false).applyMagnification(width: 1, height: 1)
         appendEncoded(String(repeating: " ", count: padding))
-        bold(rightBold).applyTextSize(rightSize)
+        bold(rightBold).applyMagnification(width: rw, height: rh)
         appendEncoded(rightPrefix)
         if !highlightText.isEmpty {
+            bold(hBold).applyMagnification(width: hw, height: hh)
             reversePrint(true)
             appendEncoded(highlightText)
             reversePrint(false)

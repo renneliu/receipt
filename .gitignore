@@ -7,3 +7,6 @@ xcuserdata/
 .tmp_restore/
 *.log
 .swiftpm/
+
+# Local Application Support dumps (may include templates / secrets)
+backups/ReceiptPrinter-userdata-*.tar.gz

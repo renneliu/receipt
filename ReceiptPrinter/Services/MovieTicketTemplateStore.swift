@@ -208,7 +208,8 @@ final class MovieTicketTemplateStore {
     private static let ritzSampleLayoutVersionKey = "ReceiptPrinter.MovieTicket.RitzSampleLayoutVersion"
     private static let ritzSampleLayoutVersion = 5
     private static let imaxSydneySeedVersionKey = "ReceiptPrinter.MovieTicket.IMAXSydneySeedVersion"
-    private static let imaxSydneySeedVersion = 3
+    /// v4: hall field uses `.asRecognized` so "IMAX 1" is not rewritten to "Cinema 1".
+    private static let imaxSydneySeedVersion = 4
 
     private static let orpheumSeedVersionKey = "ReceiptPrinter.MovieTicket.OrpheumSeedVersion"
     private static let orpheumSeedVersion = 1
