@@ -28,6 +28,8 @@ cat > "$OUT" << PLIST
     <string>com.receiptprinter.app</string>
     <key>CFBundleName</key>
     <string>ReceiptPrinter</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

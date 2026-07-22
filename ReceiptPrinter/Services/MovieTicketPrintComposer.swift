@@ -42,6 +42,34 @@ enum MovieTicketPrintComposer {
                 now: now
             )
             hint = "Movie ticket native ESC/POS (IMAX Sydney Font A + logo)"
+        } else if template.usesOrpheumLayout {
+            escposPayload = MovieTicketOrpheumESCPOS.render(
+                template: template,
+                draft: draft,
+                config: config,
+                now: now
+            )
+            preview = MovieTicketOrpheumESCPOS.previewImage(
+                template: template,
+                draft: draft,
+                config: config,
+                now: now
+            )
+            hint = "Movie ticket native ESC/POS (Orpheum dual-stub)"
+        } else if template.usesDendyLayout {
+            escposPayload = MovieTicketDendyESCPOS.render(
+                template: template,
+                draft: draft,
+                config: config,
+                now: now
+            )
+            preview = MovieTicketDendyESCPOS.previewImage(
+                template: template,
+                draft: draft,
+                config: config,
+                now: now
+            )
+            hint = "Movie ticket native ESC/POS (Dendy centered QR)"
         } else if template.usesRitzLayout {
             escposPayload = MovieTicketRitzESCPOS.render(
                 template: template,
@@ -79,7 +107,7 @@ enum MovieTicketPrintComposer {
         } ?? Data()
 
         let artifacts = PrintArtifacts(
-            sourceText: draft.movieTitle,
+            sourceText: draft.printedMovieTitle,
             attributedRTFD: nil,
             pngData: pngData,
             rasterData: Data(),

@@ -210,6 +210,13 @@ final class MovieTicketTemplateStore {
     private static let imaxSydneySeedVersionKey = "ReceiptPrinter.MovieTicket.IMAXSydneySeedVersion"
     private static let imaxSydneySeedVersion = 3
 
+    private static let orpheumSeedVersionKey = "ReceiptPrinter.MovieTicket.OrpheumSeedVersion"
+    private static let orpheumSeedVersion = 1
+
+    private static let dendySeedVersionKey = "ReceiptPrinter.MovieTicket.DendySeedVersion"
+    /// v6: title↔cinema gaps follow canvas Y; tighter stock vertical layout.
+    private static let dendySeedVersion = 6
+
     private static let cutFeedMigrateKey = "ReceiptPrinter.MovieTicket.CutFeedDefaultV1"
 
     private func seedIfNeeded() {
@@ -218,6 +225,8 @@ final class MovieTicketTemplateStore {
             saveMeta(MovieTicketTemplate.makeRitz(name: "示例影票"))
             UserDefaults.standard.set(Self.ritzSampleLayoutVersion, forKey: Self.ritzSampleLayoutVersionKey)
             seedIMAXSydneyIfNeeded(existing: [])
+            seedOrpheumIfNeeded(existing: [])
+            seedDendyIfNeeded(existing: [])
             migrateCutFeedDefaultsIfNeeded()
             return
         }
@@ -233,6 +242,8 @@ final class MovieTicketTemplateStore {
             UserDefaults.standard.set(Self.ritzSampleLayoutVersion, forKey: Self.ritzSampleLayoutVersionKey)
         }
         seedIMAXSydneyIfNeeded(existing: existing)
+        seedOrpheumIfNeeded(existing: existing)
+        seedDendyIfNeeded(existing: existing)
         migrateCutFeedDefaultsIfNeeded()
     }
 
@@ -278,6 +289,58 @@ final class MovieTicketTemplateStore {
             }
         }
         UserDefaults.standard.set(Self.imaxSydneySeedVersion, forKey: Self.imaxSydneySeedVersionKey)
+    }
+
+    /// Install / refresh the bundled Orpheum dual-stub template.
+    private func seedOrpheumIfNeeded(existing: [MovieTicketTemplate]) {
+        let applied = UserDefaults.standard.integer(forKey: Self.orpheumSeedVersionKey)
+        guard applied < Self.orpheumSeedVersion else { return }
+
+        let made = MovieTicketTemplate.makeOrpheum()
+        if let old = existing.first(where: {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare("Orpheum") == .orderedSame
+                || $0.layoutStyle == "orpheum"
+        }) {
+            var t = made
+            t.id = old.id
+            t.name = old.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? made.name : old.name
+            t.createdAt = old.createdAt
+            t.pdfRuleId = old.pdfRuleId
+            t.backgroundImageFilename = old.backgroundImageFilename
+            t.backgroundScalePercent = old.backgroundScalePercent
+            t.feedLinesBeforeCut = old.feedLinesBeforeCut ?? made.feedLinesBeforeCut
+            saveMeta(t)
+        } else {
+            saveMeta(made)
+        }
+        UserDefaults.standard.set(Self.orpheumSeedVersion, forKey: Self.orpheumSeedVersionKey)
+    }
+
+    /// Install / refresh the bundled Dendy centered-QR template.
+    private func seedDendyIfNeeded(existing: [MovieTicketTemplate]) {
+        let applied = UserDefaults.standard.integer(forKey: Self.dendySeedVersionKey)
+        guard applied < Self.dendySeedVersion else { return }
+
+        let made = MovieTicketTemplate.makeDendy()
+        if let old = existing.first(where: {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare("Dendy") == .orderedSame
+                || $0.layoutStyle == "dendy"
+        }) {
+            var t = made
+            t.id = old.id
+            t.name = old.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? made.name : old.name
+            t.createdAt = old.createdAt
+            t.pdfRuleId = old.pdfRuleId
+            t.backgroundImageFilename = old.backgroundImageFilename
+            t.backgroundScalePercent = old.backgroundScalePercent
+            t.feedLinesBeforeCut = old.feedLinesBeforeCut ?? made.feedLinesBeforeCut
+            saveMeta(t)
+        } else {
+            saveMeta(made)
+        }
+        UserDefaults.standard.set(Self.dendySeedVersion, forKey: Self.dendySeedVersionKey)
     }
 
     private static func bundledIMAXSydneyLogo() -> NSImage? {

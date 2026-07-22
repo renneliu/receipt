@@ -125,7 +125,7 @@ final class POSReceiptSession: ObservableObject {
         editingTemplate = saved
         reloadTemplates()
         loadImages(for: saved)
-        message = "模板已保存"
+        message = L10n.ui("模板已保存")
     }
 
     /// Push in-memory editing fields into `templates` so 主页面 sees unsaved tweaks (e.g. 字号/宽).
@@ -276,13 +276,13 @@ final class POSReceiptSession: ObservableObject {
     func refreshBoundExcel() async -> Bool {
         guard let source = templateForExcelRefresh(),
               let bookmark = source.excelBookmarkData else {
-            message = "当前模板未绑定 Excel"
+            message = L10n.ui("当前模板未绑定 Excel")
             return false
         }
         let templateId = source.id
         let map = source.excelColumnMap
-        let fileName = source.excelDisplayName ?? "表格"
-        message = "正在刷新 Excel…"
+        let fileName = source.excelDisplayName ?? L10n.ui("表格")
+        message = L10n.ui("正在刷新 Excel…")
         let result = await Self.loadCatalogOffMain(bookmarkData: bookmark, map: map)
         switch result {
         case .success(let packed):

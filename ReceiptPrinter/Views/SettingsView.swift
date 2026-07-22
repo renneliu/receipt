@@ -1,182 +1,451 @@
+import AppKit
 import SwiftUI
+
+/// Editable snapshot of settings that only commits on Save.
+struct SettingsDraft: Equatable {
+    var selectedPrinterName: String?
+    var printerConfig: PrinterConfig
+    var hasCompletedSetup: Bool
+    var defaultStartupPage: SidebarItem
+    var appLanguage: AppLanguage
+    var tmdbAPIKey: String
+
+    static func from(settings: AppSettings) -> SettingsDraft {
+        SettingsDraft(
+            selectedPrinterName: settings.selectedPrinterName,
+            printerConfig: settings.printerConfig,
+            hasCompletedSetup: settings.hasCompletedSetup,
+            defaultStartupPage: settings.defaultStartupPage,
+            appLanguage: settings.appLanguage,
+            tmdbAPIKey: settings.tmdbAPIKey
+        )
+    }
+}
+
+@MainActor
+final class SettingsDraftStore: ObservableObject {
+    @Published var draft: SettingsDraft
+    @Published var baseline: SettingsDraft
+    @Published var statusMessage: String?
+
+    var isDirty: Bool { draft != baseline }
+
+    var isTMDBKeyDirty: Bool {
+        draft.tmdbAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            != baseline.tmdbAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    init(settings: AppSettings = AppSettings()) {
+        let snap = SettingsDraft.from(settings: settings)
+        draft = snap
+        baseline = snap
+    }
+
+    func reload(from settings: AppSettings) {
+        let snap = SettingsDraft.from(settings: settings)
+        draft = snap
+        baseline = snap
+        statusMessage = nil
+    }
+
+    func discard() {
+        draft = baseline
+        statusMessage = nil
+    }
+
+    func restoreDefaults() {
+        let defaults = AppSettings.uiDefaults(keepingPrinter: draft.selectedPrinterName)
+        draft.printerConfig = defaults.printerConfig
+        draft.defaultStartupPage = defaults.defaultStartupPage
+        draft.appLanguage = defaults.appLanguage
+        draft.tmdbAPIKey = defaults.tmdbAPIKey
+        statusMessage = nil
+    }
+
+    func save(into appState: AppState) {
+        appState.settings.selectedPrinterName = draft.selectedPrinterName
+        appState.settings.printerConfig = draft.printerConfig
+        appState.settings.hasCompletedSetup = draft.hasCompletedSetup
+        appState.settings.defaultStartupPage = draft.defaultStartupPage
+        appState.settings.appLanguage = draft.appLanguage
+        appState.settings.tmdbAPIKey = draft.tmdbAPIKey
+        appState.settings.save()
+        L10n.current = draft.appLanguage
+        baseline = draft
+        statusMessage = L10n.t("settings.saved", draft.appLanguage)
+        appState.settingsHasUnsavedChanges = false
+        appState.objectWillChange.send()
+    }
+
+    /// Persist only the TMDB key (Keychain); leave other draft fields untouched.
+    func saveTMDBKey(into appState: AppState) {
+        let key = draft.tmdbAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft.tmdbAPIKey = key
+        appState.settings.tmdbAPIKey = key
+        baseline.tmdbAPIKey = key
+        statusMessage = L10n.t("settings.keySaved", draft.appLanguage)
+        appState.settingsHasUnsavedChanges = isDirty
+        appState.objectWillChange.send()
+    }
+
+    /// Clear the TMDB key in the draft and Keychain immediately.
+    func resetTMDBKey(into appState: AppState) {
+        draft.tmdbAPIKey = ""
+        appState.settings.tmdbAPIKey = ""
+        baseline.tmdbAPIKey = ""
+        statusMessage = L10n.t("settings.keyReset", draft.appLanguage)
+        appState.settingsHasUnsavedChanges = isDirty
+        appState.objectWillChange.send()
+    }
+}
 
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
-    @State private var printers: [String] = []
-    @State private var loadError: String?
-    @State private var draftClientID = ""
-    @State private var draftClientSecret = ""
-    @State private var draftRedirectURI = ""
-    @State private var draftSearchQuery = ""
-    @State private var draftTMDBKey = ""
-    @State private var oauthSaveTask: Task<Void, Never>?
 
     var body: some View {
-        Form {
-            if !appState.settings.hasCompletedSetup {
-                Section("首次设置") {
-                    Text("1. 在系统设置中添加 USB 热敏打印机（Generic 驱动）\n2. 下方选择打印机名称\n3. 可选：配置 Gmail 与影院规则")
-                        .foregroundStyle(.secondary)
-                    Button("我已完成打印机配置") {
-                        appState.settings.hasCompletedSetup = true
-                        appState.settings.save()
+        SettingsForm(store: appState.settingsDraftStore)
+    }
+}
+
+private struct SettingsForm: View {
+    @EnvironmentObject private var appState: AppState
+    @ObservedObject var store: SettingsDraftStore
+    @State private var printers: [String] = []
+    @State private var loadError: String?
+    @State private var showAPIKey = false
+
+    /// Preview language from the draft so labels update before Save.
+    private var language: AppLanguage { store.draft.appLanguage }
+    private let contentWidth: CGFloat = 560
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    header
+
+                    if !store.draft.hasCompletedSetup {
+                        settingsCard(title: L10n.t("settings.firstRun", language), systemImage: "checkmark.circle") {
+                            Text(L10n.t("settings.firstRunHint", language))
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button(L10n.t("settings.firstRunDone", language)) {
+                                store.draft.hasCompletedSetup = true
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.regular)
+                        }
+                    }
+
+                    settingsCard(title: L10n.t("settings.general", language), systemImage: "slider.horizontal.3") {
+                        settingsRow(L10n.t("settings.defaultPage", language)) {
+                            Picker("", selection: $store.draft.defaultStartupPage) {
+                                ForEach(SidebarItem.startupPageChoices) { item in
+                                    Text(item.title(language)).tag(item)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        divider
+                        settingsRow(L10n.t("settings.appLanguage", language)) {
+                            Picker("", selection: $store.draft.appLanguage) {
+                                ForEach(AppLanguage.allCases) { lang in
+                                    Text(lang.displayName).tag(lang)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
+                            .frame(maxWidth: 220, alignment: .leading)
+                        }
+                    }
+
+                    settingsCard(title: L10n.t("settings.printer", language), systemImage: "printer") {
+                        settingsRow(L10n.t("settings.cupsPrinter", language)) {
+                            Picker("", selection: Binding(
+                                get: { store.draft.selectedPrinterName ?? "" },
+                                set: { store.draft.selectedPrinterName = $0.isEmpty ? nil : $0 }
+                            )) {
+                                Text(L10n.t("settings.none", language)).tag("")
+                                ForEach(printers, id: \.self) { Text($0).tag($0) }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        HStack {
+                            Spacer(minLength: 148)
+                            Button(L10n.t("settings.refreshPrinters", language)) { refreshPrinters() }
+                                .controlSize(.small)
+                        }
+                        if let loadError {
+                            Text(loadError)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
+
+                    settingsCard(title: L10n.t("settings.paperEncoding", language), systemImage: "doc.plaintext") {
+                        settingsRow(L10n.t("settings.paperWidth", language)) {
+                            Picker("", selection: Binding(
+                                get: { store.draft.printerConfig.paperWidthMM },
+                                set: {
+                                    store.draft.printerConfig.paperWidthMM = $0
+                                    store.draft.printerConfig.dotsPerLine = $0 == 80 ? 576 : 384
+                                    store.draft.printerConfig.columnsPerLine = $0 == 80 ? 48 : 32
+                                }
+                            )) {
+                                Text("80mm").tag(80)
+                                Text("58mm").tag(58)
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
+                            .frame(maxWidth: 180, alignment: .leading)
+                        }
+                        divider
+                        settingsRow(L10n.t("settings.columns", language)) {
+                            Picker("", selection: $store.draft.printerConfig.columnsPerLine) {
+                                Text(L10n.t("settings.columns32", language)).tag(32)
+                                Text(L10n.t("settings.columns48", language)).tag(48)
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        divider
+                        settingsRow(L10n.t("settings.encoding", language)) {
+                            Picker("", selection: $store.draft.printerConfig.encoding) {
+                                ForEach(PrinterConfig.TextEncoding.allCases) { Text($0.rawValue).tag($0) }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        divider
+                        Toggle(isOn: $store.draft.printerConfig.cutPaper) {
+                            Text(L10n.t("settings.cutPaper", language))
+                                .font(.body)
+                        }
+                        .toggleStyle(.switch)
+                    }
+
+                    settingsCard(title: L10n.t("settings.tmdb", language), systemImage: "film") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(L10n.t("settings.apiKey", language))
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.secondary)
+                            HStack(spacing: 8) {
+                                Group {
+                                    if showAPIKey {
+                                        TextField("", text: $store.draft.tmdbAPIKey, prompt: Text("API Key"))
+                                    } else {
+                                        SecureField("", text: $store.draft.tmdbAPIKey, prompt: Text("API Key"))
+                                    }
+                                }
+                                .textFieldStyle(.roundedBorder)
+                                Button(showAPIKey
+                                       ? L10n.t("settings.hideKey", language)
+                                       : L10n.t("settings.showKey", language)) {
+                                    showAPIKey.toggle()
+                                }
+                                .controlSize(.regular)
+                            }
+                            Text(tmdbKeyStatusText)
+                                .font(.caption)
+                                .foregroundStyle(store.isTMDBKeyDirty ? .orange : .secondary)
+                            Text(L10n.t("settings.apiKeyHint", language))
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            HStack(spacing: 10) {
+                                Button(L10n.t("settings.resetKey", language)) {
+                                    store.resetTMDBKey(into: appState)
+                                }
+                                .disabled(
+                                    store.draft.tmdbAPIKey.isEmpty
+                                    && store.baseline.tmdbAPIKey.isEmpty
+                                )
+                                Button(L10n.t("settings.saveKey", language)) {
+                                    store.saveTMDBKey(into: appState)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!store.isTMDBKeyDirty)
+                                Spacer()
+                            }
+                        }
+                    }
+
+                    settingsCard(title: L10n.t("settings.about", language), systemImage: "info.circle") {
+                        HStack(spacing: 14) {
+                            Image(nsImage: aboutAppIcon)
+                                .resizable()
+                                .interpolation(.high)
+                                .frame(width: 64, height: 64)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("ReceiptPrinter")
+                                    .font(.title3.weight(.semibold))
+                                HStack {
+                                    Text(L10n.t("settings.author", language))
+                                        .foregroundStyle(.secondary)
+                                    Text(L10n.t("settings.authorName", language))
+                                }
+                                HStack {
+                                    Text(L10n.t("settings.version", language))
+                                        .foregroundStyle(.secondary)
+                                    Text(AppVersion.display)
+                                        .font(.body.monospacedDigit())
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
                     }
                 }
+                .frame(maxWidth: contentWidth)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 24)
             }
 
-            Section("打印机") {
-                Picker("CUPS 打印机", selection: Binding(
-                    get: { appState.settings.selectedPrinterName ?? "" },
-                    set: {
-                        appState.settings.selectedPrinterName = $0.isEmpty ? nil : $0
-                        appState.settings.save()
-                    }
-                )) {
-                    Text("未选择").tag("")
-                    ForEach(printers, id: \.self) { Text($0).tag($0) }
-                }
-                Button("刷新打印机列表") { refreshPrinters() }
-                if let loadError { Text(loadError).foregroundStyle(.red).font(.caption) }
-            }
-
-            Section("纸张与编码") {
-                Picker("纸宽", selection: Binding(
-                    get: { appState.settings.printerConfig.paperWidthMM },
-                    set: {
-                        appState.settings.printerConfig.paperWidthMM = $0
-                        appState.settings.printerConfig.dotsPerLine = $0 == 80 ? 576 : 384
-                        appState.settings.printerConfig.columnsPerLine = $0 == 80 ? 48 : 32
-                        appState.settings.save()
-                    }
-                )) {
-                    Text("80mm").tag(80)
-                    Text("58mm").tag(58)
-                }
-                Picker("每行字符宽度", selection: Binding(
-                    get: { appState.settings.printerConfig.columnsPerLine },
-                    set: {
-                        appState.settings.printerConfig.columnsPerLine = $0
-                        appState.settings.save()
-                    }
-                )) {
-                    Text("32（58mm 推荐）").tag(32)
-                    Text("48（80mm 推荐）").tag(48)
-                }
-                Picker("文本编码", selection: Binding(
-                    get: { appState.settings.printerConfig.encoding },
-                    set: {
-                        appState.settings.printerConfig.encoding = $0
-                        appState.settings.save()
-                    }
-                )) {
-                    ForEach(PrinterConfig.TextEncoding.allCases) { Text($0.rawValue).tag($0) }
-                }
-                Toggle("打印后切纸", isOn: Binding(
-                    get: { appState.settings.printerConfig.cutPaper },
-                    set: {
-                        appState.settings.printerConfig.cutPaper = $0
-                        appState.settings.save()
-                    }
-                ))
-            }
-
-            Section("电影票默认值") {
-                Stepper("默认广告时长 \(appState.settings.defaultAdvertisingMinutes) 分钟", value: Binding(
-                    get: { appState.settings.defaultAdvertisingMinutes },
-                    set: {
-                        appState.settings.defaultAdvertisingMinutes = $0
-                        appState.settings.save()
-                    }
-                ), in: 0...60)
-                Text("模板打印与电影票模板将使用此默认值推算结束时间。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("TMDB") {
-                SecureField("API Key", text: $draftTMDBKey)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: draftTMDBKey) { _, _ in
-                        appState.settings.tmdbAPIKey = draftTMDBKey
-                    }
-                Text("用于「匹配片长」。在 themoviedb.org 申请 API Key。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Gmail OAuth") {
-                TextField("Client ID", text: $draftClientID)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: draftClientID) { _, _ in scheduleSaveOAuthDrafts() }
-                SecureField("Client Secret", text: $draftClientSecret)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: draftClientSecret) { _, _ in scheduleSaveOAuthDrafts() }
-                TextField("Redirect URI", text: $draftRedirectURI)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: draftRedirectURI) { _, _ in scheduleSaveOAuthDrafts() }
-                Button("重置 Redirect URI 为默认值") {
-                    draftRedirectURI = GmailOAuthConfig.defaultRedirectURI
-                    scheduleSaveOAuthDrafts()
-                }
-                Text("Google Cloud 须创建「桌面应用」OAuth 客户端；Redirect URI 使用回环地址 \(GmailOAuthConfig.defaultRedirectURI)（无需在 Console 手动添加）")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                Stepper("同步间隔 \(Int(appState.settings.gmailSyncInterval)) 秒", value: Binding(
-                    get: { appState.settings.gmailSyncInterval },
-                    set: { appState.settings.gmailSyncInterval = $0; appState.settings.save() }
-                ), in: 60...3600, step: 60)
-                TextField("额外 Gmail 过滤（可选）", text: $draftSearchQuery)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: draftSearchQuery) { _, _ in scheduleSaveOAuthDrafts() }
-                Text("留空表示不限制时间。同步主要依据「影院规则」中的发件人/主题/正文；此处可填可选过滤，如 is:unread 或 newer_than:90d。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if appState.settings.gmailClientID.isEmpty {
-                    Text("当前未保存 Client ID。填写后会自动保存；若 Access Token 过期，缺少 Client ID 会导致同步失败。")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-            }
-
-            Section("关于") {
-                LabeledContent("版本", value: AppVersion.display)
-            }
+            footerBar
         }
-        .padding()
-        .navigationTitle("设置")
+        .background(Color(nsColor: .windowBackgroundColor))
+        .navigationTitle(L10n.t("settings.title", appState.settings.appLanguage))
         .onAppear {
+            store.reload(from: appState.settings)
             refreshPrinters()
-            loadOAuthDrafts()
+            appState.settingsHasUnsavedChanges = false
         }
-        .onDisappear {
-            persistOAuthDrafts()
-        }
-    }
-
-    private func loadOAuthDrafts() {
-        draftClientID = appState.settings.gmailClientID
-        draftClientSecret = appState.settings.gmailClientSecret
-        draftRedirectURI = appState.settings.gmailRedirectURI
-        draftSearchQuery = appState.settings.gmailSearchQuery
-        draftTMDBKey = appState.settings.tmdbAPIKey
-    }
-
-    private func scheduleSaveOAuthDrafts() {
-        oauthSaveTask?.cancel()
-        oauthSaveTask = Task {
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            guard !Task.isCancelled else { return }
-            await MainActor.run { persistOAuthDrafts() }
+        .onChange(of: store.draft) { _, _ in
+            appState.settingsHasUnsavedChanges = store.isDirty
         }
     }
 
-    private func persistOAuthDrafts() {
-        appState.settings.gmailClientID = draftClientID.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.settings.gmailClientSecret = draftClientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.settings.gmailRedirectURI = draftRedirectURI.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.settings.gmailSearchQuery = draftSearchQuery
-        appState.settings.save()
+    private var tmdbKeyStatusText: String {
+        if store.isTMDBKeyDirty {
+            return L10n.t("settings.apiKeyDirty", language)
+        }
+        if store.baseline.tmdbAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return L10n.t("settings.apiKeyEmpty", language)
+        }
+        return L10n.t("settings.apiKeyStored", language)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(L10n.t("settings.title", language))
+                .font(.largeTitle.weight(.semibold))
+            Text(L10n.t("settings.subtitle", language))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var footerBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 12) {
+                Group {
+                    if store.isDirty {
+                        Label(L10n.t("settings.dirtyHint", language), systemImage: "pencil.circle.fill")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.orange)
+                    } else if let statusMessage = store.statusMessage {
+                        Label(statusMessage, systemImage: "checkmark.circle.fill")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Button(L10n.t("settings.restoreDefaults", language)) {
+                    store.restoreDefaults()
+                    appState.settingsHasUnsavedChanges = store.isDirty
+                }
+                .controlSize(.large)
+                Button(L10n.t("settings.save", language)) {
+                    store.save(into: appState)
+                }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(!store.isDirty)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity)
+            .background(.bar)
+        }
+    }
+
+    private var divider: some View {
+        Divider().opacity(0.55)
+    }
+
+    private func settingsCard<Content: View>(
+        title: String,
+        systemImage: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
+                .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 12) {
+                content()
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    private func settingsRow<Content: View>(
+        _ title: String,
+        @ViewBuilder control: () -> Content
+    ) -> some View {
+        HStack(alignment: .center, spacing: 16) {
+            Text(title)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(width: 132, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            control()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var aboutAppIcon: NSImage {
+        Self.resolvedAppIcon()
+    }
+
+    /// Prefer bundled artwork over `NSApp.applicationIconImage` (often a generic placeholder).
+    private static func resolvedAppIcon() -> NSImage {
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
+           let img = NSImage(contentsOf: url) {
+            return img
+        }
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let img = NSImage(contentsOf: url) {
+            return img
+        }
+        #if SWIFT_PACKAGE
+        if let url = Bundle.module.url(forResource: "AppIcon", withExtension: "png"),
+           let img = NSImage(contentsOf: url) {
+            return img
+        }
+        #endif
+        return NSApp.applicationIconImage ?? NSImage(size: NSSize(width: 64, height: 64))
     }
 
     private func refreshPrinters() {

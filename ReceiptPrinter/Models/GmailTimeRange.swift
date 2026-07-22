@@ -13,12 +13,12 @@ enum GmailTimeRange: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .any: return "不限"
-        case .sixMonths: return "近 6 个月"
-        case .threeMonths: return "近 3 个月"
-        case .oneMonth: return "近 1 个月"
-        case .sevenDays: return "近 7 天"
-        case .custom: return "自定义"
+        case .any: return L10n.ui("不限")
+        case .sixMonths: return L10n.ui("近 6 个月")
+        case .threeMonths: return L10n.ui("近 3 个月")
+        case .oneMonth: return L10n.ui("近 1 个月")
+        case .sevenDays: return L10n.ui("近 7 天")
+        case .custom: return L10n.ui("自定义")
         }
     }
 

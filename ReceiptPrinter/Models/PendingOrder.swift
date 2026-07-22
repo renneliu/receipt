@@ -6,9 +6,9 @@ enum OrderStatus: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .pending: return "待打印"
-        case .printed: return "已打印"
-        case .ignored: return "已忽略"
+        case .pending: return L10n.ui("待打印")
+        case .printed: return L10n.ui("已打印")
+        case .ignored: return L10n.ui("已忽略")
         }
     }
 }

@@ -120,7 +120,7 @@ struct QuickPrintView: View {
             sidePanel
                 .frame(minWidth: 280, idealWidth: 320, maxWidth: 400)
         }
-        .navigationTitle("快速打印")
+        .navigationTitle(L10n.ui("快速打印"))
         .onAppear {
             loadSavedContent()
             loadDraftMedia()
@@ -245,7 +245,7 @@ struct QuickPrintView: View {
 
     private var sidePanel: some View {
         Form {
-            Section("文本格式") {
+            Section(L10n.ui("文本格式")) {
                 RichTextToolbar(
                     controller: editorController,
                     columnsPerLine: columns,
@@ -253,12 +253,12 @@ struct QuickPrintView: View {
                 )
             }
 
-            Section("版面图片") {
-                Text("背景在文字下方（等比居中，可用百分比缩放）；彩色 Logo/背景导入时自动转为黑白。可添加多个 Logo。")
+            Section(L10n.ui("版面图片")) {
+                Text(L10n.ui("背景在文字下方（等比居中，可用百分比缩放）；彩色 Logo/背景导入时自动转为黑白。可添加多个 Logo。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack {
-                    Button(backgroundImage == nil ? "添加背景图…" : "更换背景图…") {
+                    Button(backgroundImage == nil ? L10n.ui("添加背景图…") : L10n.ui("更换背景图…")) {
                         pickImage { img in
                             backgroundImage = ImagePreprocessor.toBinaryBlackWhite(img)
                             backgroundScalePercent = 100
@@ -266,7 +266,7 @@ struct QuickPrintView: View {
                         }
                     }
                     if backgroundImage != nil {
-                        Button("清除背景", role: .destructive) {
+                        Button(L10n.ui("清除背景"), role: .destructive) {
                             backgroundImage = nil
                             backgroundScalePercent = 100
                             persistDraftMedia()
@@ -275,7 +275,7 @@ struct QuickPrintView: View {
                 }
                 if backgroundImage != nil {
                     HStack(spacing: 8) {
-                        Text("背景大小")
+                        Text(L10n.ui("背景大小"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         TextField(
@@ -307,7 +307,7 @@ struct QuickPrintView: View {
                             .fill(Color.secondary.opacity(0.08))
                     )
                 }
-                Button("添加 Logo…") {
+                Button(L10n.ui("添加 Logo…")) {
                     pickImage { img in addLogo(img) }
                 }
                 if !logos.isEmpty {
@@ -323,13 +323,13 @@ struct QuickPrintView: View {
                                 }
                                 .buttonStyle(.plain)
                                 Spacer()
-                                Button("删除", role: .destructive) {
+                                Button(L10n.ui("删除"), role: .destructive) {
                                     removeLogo(id: item.id)
                                 }
                                 .controlSize(.small)
                             }
                             HStack(spacing: 8) {
-                                Text("大小")
+                                Text(L10n.ui("大小"))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 TextField(
@@ -365,8 +365,8 @@ struct QuickPrintView: View {
                 }
             }
 
-            Section("自动编号") {
-                Toggle("启用自动编号", isOn: Binding(
+            Section(L10n.ui("自动编号")) {
+                Toggle(L10n.ui("启用自动编号"), isOn: Binding(
                     get: { autoNumber.enabled },
                     set: { on in
                         autoNumber.enabled = on
@@ -382,17 +382,17 @@ struct QuickPrintView: View {
                         }
                     }
                 ))
-                Text("开启后可在画布上拖动编号框；每次打印后起始值自动增加（打印 N 张则 +N）。")
+                Text(L10n.ui("开启后可在画布上拖动编号框；每次打印后起始值自动增加（打印 N 张则 +N）。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if autoNumber.enabled {
                     HStack {
-                        Text("起始值")
+                        Text(L10n.ui("起始值"))
                         TextField("01", text: $autoNumber.startValue)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 120)
                     }
-                    Picker("字号", selection: Binding(
+                    Picker(L10n.ui("字号"), selection: Binding(
                         get: { autoNumber.fontSize },
                         set: { autoNumber.fontSize = $0 }
                     )) {
@@ -401,7 +401,7 @@ struct QuickPrintView: View {
                         }
                     }
                     HStack {
-                        Text("批量张数")
+                        Text(L10n.ui("批量张数"))
                         TextField(
                             "",
                             value: Binding(
@@ -415,7 +415,7 @@ struct QuickPrintView: View {
                         )
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 72)
-                        Text("张/次")
+                        Text(L10n.ui("张/次"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -429,9 +429,9 @@ struct QuickPrintView: View {
                 }
             }
 
-            Section("走纸 / 切纸") {
+            Section(L10n.ui("走纸 / 切纸")) {
                 HStack {
-                    Text("走纸行数")
+                    Text(L10n.ui("走纸行数"))
                     TextField(value: $feedLines, format: .number, prompt: Text("6")) {
                         EmptyView()
                     }
@@ -441,16 +441,16 @@ struct QuickPrintView: View {
                     .onChange(of: feedLines) { _, value in
                         feedLines = min(40, max(1, value))
                     }
-                    Text("行")
+                    Text(L10n.ui("行"))
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
                 HStack {
-                    Button("走纸") {
+                    Button(L10n.ui("走纸")) {
                         Task { await feedPaper() }
                     }
                     .disabled(appState.settings.selectedPrinterName == nil)
-                    Button("切纸") {
+                    Button(L10n.ui("切纸")) {
                         Task { await cutPaper() }
                     }
                     .disabled(appState.settings.selectedPrinterName == nil)
@@ -468,7 +468,7 @@ struct QuickPrintView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text("请先在「设置」中选择 CUPS 打印机")
+                Text(L10n.ui("请先在「设置」中选择 CUPS 打印机"))
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
@@ -479,10 +479,10 @@ struct QuickPrintView: View {
                     .lineLimit(1)
             }
             Spacer()
-            Button("清空") { clearContent() }
-            Button("存为模板") { saveAsTemplate() }
+            Button(L10n.ui("清空")) { clearContent() }
+            Button(L10n.ui("存为模板")) { saveAsTemplate() }
                 .disabled(attributedText.length == 0)
-            Button("预览") {
+            Button(L10n.ui("预览")) {
                 syncEditorToState()
                 let image = RichTextPrintRenderer.renderSequencePageImage(
                     attributedString: attributedText,
@@ -491,11 +491,12 @@ struct QuickPrintView: View {
                 )
                 previewPayload = QuickPrintPreviewPayload(image: image)
             }
-            Button(isPrinting ? "打印中..." : printButtonTitle) {
+            Button(isPrinting ? L10n.ui("打印中...") : printButtonTitle) {
                 syncEditorToState()
                 Task { await printDocument() }
             }
             .disabled(isPrinting || appState.settings.selectedPrinterName == nil)
+            .keyboardShortcut(.return, modifiers: .command)
         }
         .padding()
         .background(.bar)
@@ -503,9 +504,9 @@ struct QuickPrintView: View {
 
     private var printButtonTitle: String {
         if autoNumber.enabled, autoNumber.batchCount > 1 {
-            return "打印 \(autoNumber.batchCount) 张"
+            return "\(L10n.ui("打印")) \(autoNumber.batchCount) \(L10n.ui("张")) (⌘↩)"
         }
-        return "打印"
+        return L10n.ui("打印 (⌘↩)")
     }
 
     // MARK: - Persistence
@@ -515,8 +516,8 @@ struct QuickPrintView: View {
         let plain = saved.string
             .replacingOccurrences(of: "\r\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if plain == "Hello 测试小票\n\nReceiptPrinter 快速打印"
-            || plain == "Hello 测试小票\nReceiptPrinter 快速打印" {
+        if plain == L10n.ui("Hello 测试小票\n\nReceiptPrinter 快速打印")
+            || plain == L10n.ui("Hello 测试小票\nReceiptPrinter 快速打印") {
             store.clear()
             attributedText = NSAttributedString(string: "", attributes: AttributedTextView.defaultTypingAttributes())
             return
@@ -602,7 +603,7 @@ struct QuickPrintView: View {
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
         guard let image = NSImage(contentsOf: url) else {
-            message = "无法读取图片"
+            message = L10n.ui("无法读取图片")
             return
         }
         completion(image)
@@ -777,7 +778,7 @@ struct QuickPrintView: View {
                     autoNumber.advanceAfterPrint(count: count)
                     persistDraftMedia()
                 }
-                message = count > 1 ? "已发送 \(count) 张到打印机" : "已发送到打印机"
+                message = count > 1 ? "已发送 \(count) 张到打印机" : L10n.ui("已发送到打印机")
             } else {
                 message = "打印失败: \(record.transportError ?? "")"
             }
@@ -786,10 +787,10 @@ struct QuickPrintView: View {
 
     private func feedPaper() async {
         guard let printer = appState.settings.selectedPrinterName else {
-            message = "未选择打印机，无法走纸"
+            message = L10n.ui("未选择打印机，无法走纸")
             return
         }
-        message = "走纸中…"
+        message = L10n.ui("走纸中…")
         let data = ESCPOSBuilder(config: appState.settings.printerConfig)
             .initialize()
             .align(.left)
@@ -818,10 +819,10 @@ struct QuickPrintView: View {
 
     private func cutPaper() async {
         guard let printer = appState.settings.selectedPrinterName else {
-            message = "未选择打印机，无法切纸"
+            message = L10n.ui("未选择打印机，无法切纸")
             return
         }
-        message = "切纸中…"
+        message = L10n.ui("切纸中…")
         let feed = max(appState.settings.printerConfig.feedLinesBeforeCut, 12)
         let data = ESCPOSBuilder(config: appState.settings.printerConfig)
             .initialize()
@@ -845,7 +846,7 @@ struct QuickPrintView: View {
             appState.lastError = err
             message = err
         } else {
-            message = "已切纸"
+            message = L10n.ui("已切纸")
         }
     }
 }

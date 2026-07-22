@@ -153,7 +153,7 @@ struct SpreadsheetSequencePrintView: View {
             sidePanel
                 .frame(minWidth: 280, idealWidth: 320, maxWidth: 400)
         }
-        .navigationTitle("Excel表格序列打印")
+        .navigationTitle(L10n.ui("Excel表格序列打印"))
         .onAppear {
             loadSavedContent()
             loadDraftMedia()
@@ -291,7 +291,7 @@ struct SpreadsheetSequencePrintView: View {
 
     private var sidePanel: some View {
         Form {
-            Section("文本格式") {
+            Section(L10n.ui("文本格式")) {
                 RichTextToolbar(
                     controller: editorController,
                     columnsPerLine: columns,
@@ -299,11 +299,11 @@ struct SpreadsheetSequencePrintView: View {
                 )
             }
 
-            Section("导入表格") {
-                Text("导入 CSV/XLSX 后会按列自动创建可拖动占位框。打印为软件合成位图（无中文模式），避免混排乱码。")
+            Section(L10n.ui("导入表格")) {
+                Text(L10n.ui("导入 CSV/XLSX 后会按列自动创建可拖动占位框。打印为软件合成位图（无中文模式），避免混排乱码。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button("导入 Excel / CSV…") {
+                Button(L10n.ui("导入 Excel / CSV…")) {
                     importSpreadsheet()
                 }
                 if let sheet = spreadsheet {
@@ -321,12 +321,12 @@ struct SpreadsheetSequencePrintView: View {
                 }
             }
 
-            Section("版面图片") {
-                Text("背景在文字下方（等比居中，可用百分比缩放）；彩色 Logo/背景导入时自动转为黑白以保证热敏清晰。可添加多个 Logo。")
+            Section(L10n.ui("版面图片")) {
+                Text(L10n.ui("背景在文字下方（等比居中，可用百分比缩放）；彩色 Logo/背景导入时自动转为黑白以保证热敏清晰。可添加多个 Logo。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack {
-                    Button(backgroundImage == nil ? "添加背景图…" : "更换背景图…") {
+                    Button(backgroundImage == nil ? L10n.ui("添加背景图…") : L10n.ui("更换背景图…")) {
                         pickImage { img in
                             backgroundImage = ImagePreprocessor.toBinaryBlackWhite(img)
                             backgroundScalePercent = 100
@@ -334,7 +334,7 @@ struct SpreadsheetSequencePrintView: View {
                         }
                     }
                     if backgroundImage != nil {
-                        Button("清除背景", role: .destructive) {
+                        Button(L10n.ui("清除背景"), role: .destructive) {
                             backgroundImage = nil
                             backgroundScalePercent = 100
                             persistDraftMedia()
@@ -343,7 +343,7 @@ struct SpreadsheetSequencePrintView: View {
                 }
                 if backgroundImage != nil {
                     HStack(spacing: 8) {
-                        Text("背景大小")
+                        Text(L10n.ui("背景大小"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         TextField(
@@ -375,7 +375,7 @@ struct SpreadsheetSequencePrintView: View {
                             .fill(Color.secondary.opacity(0.08))
                     )
                 }
-                Button("添加 Logo…") {
+                Button(L10n.ui("添加 Logo…")) {
                     pickImage { img in
                         addLogo(img)
                     }
@@ -393,13 +393,13 @@ struct SpreadsheetSequencePrintView: View {
                                 }
                                 .buttonStyle(.plain)
                                 Spacer()
-                                Button("删除", role: .destructive) {
+                                Button(L10n.ui("删除"), role: .destructive) {
                                     removeLogo(id: item.id)
                                 }
                                 .controlSize(.small)
                             }
                             HStack(spacing: 8) {
-                                Text("大小")
+                                Text(L10n.ui("大小"))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 TextField(
@@ -432,14 +432,14 @@ struct SpreadsheetSequencePrintView: View {
                                 .fill(selectedLogoID == item.id ? Color.orange.opacity(0.12) : Color.secondary.opacity(0.08))
                         )
                     }
-                    Button("清除全部 Logo", role: .destructive) {
+                    Button(L10n.ui("清除全部 Logo"), role: .destructive) {
                         clearAllLogos()
                     }
                 }
             }
 
             if let sheet = spreadsheet, !sheet.headers.isEmpty {
-                Section("添加占位框") {
+                Section(L10n.ui("添加占位框")) {
                     FlowLayout(spacing: 6) {
                         ForEach(sheet.headers, id: \.self) { header in
                             let name = header.trimmingCharacters(in: .whitespaces)
@@ -452,7 +452,7 @@ struct SpreadsheetSequencePrintView: View {
                             }
                         }
                     }
-                    Text("也可在正文插入 {{列名}} 令牌：")
+                    Text(L10n.ui("也可在正文插入 {{列名}} 令牌："))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     FlowLayout(spacing: 6) {
@@ -472,7 +472,7 @@ struct SpreadsheetSequencePrintView: View {
             }
 
             if !placeholders.isEmpty {
-                Section("占位框") {
+                Section(L10n.ui("占位框")) {
                     ForEach(placeholders) { box in
                         HStack {
                             Button {
@@ -498,7 +498,7 @@ struct SpreadsheetSequencePrintView: View {
                         }
                     }
                     if selectedPlaceholder != nil {
-                        Button("删除选中占位框", role: .destructive) {
+                        Button(L10n.ui("删除选中占位框"), role: .destructive) {
                             if let id = selectedPlaceholderID {
                                 deletePlaceholder(id: id)
                             }
@@ -509,7 +509,7 @@ struct SpreadsheetSequencePrintView: View {
 
             if let box = selectedPlaceholder, let sheet = spreadsheet {
                 Section("序列内容 · \(box.bindingKey)") {
-                    Text("点选一行可在编辑区预览该行；数值可直接修改。")
+                    Text(L10n.ui("点选一行可在编辑区预览该行；数值可直接修改。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     ForEach(Array(sheet.rows.indices), id: \.self) { rowIndex in
@@ -517,12 +517,12 @@ struct SpreadsheetSequencePrintView: View {
                     }
                 }
             } else if spreadsheet != nil {
-                Section("序列内容") {
-                    Text("点选画布上的占位框后，这里显示该列各行数据。")
+                Section(L10n.ui("序列内容")) {
+                    Text(L10n.ui("点选画布上的占位框后，这里显示该列各行数据。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if let sheet = spreadsheet, !sheet.rows.isEmpty {
-                        Picker("预览行", selection: $selectedRowIndex) {
+                        Picker(L10n.ui("预览行"), selection: $selectedRowIndex) {
                             ForEach(Array(sheet.rows.indices), id: \.self) { i in
                                 Text("第 \(i + 1) 行").tag(i)
                             }
@@ -531,24 +531,25 @@ struct SpreadsheetSequencePrintView: View {
                 }
             }
 
-            Section("模板") {
-                Button("存为模板…") {
+            Section(L10n.ui("模板")) {
+                Button(L10n.ui("存为模板…")) {
                     saveName = "序列打印 \(Date().formatted(date: .abbreviated, time: .shortened))"
                     showSaveSheet = true
                 }
                 .disabled(attributedText.length == 0 && placeholders.isEmpty && backgroundImage == nil && logos.isEmpty)
-                Button("载入模板…") {
+                Button(L10n.ui("载入模板…")) {
                     savedTemplates = templateStore.loadAll()
                     showLoadSheet = true
                 }
             }
 
-            Section("打印") {
-                Button(isPrinting ? "打印中…" : "打印当前") {
+            Section(L10n.ui("打印")) {
+                Button(isPrinting ? L10n.ui("打印中…") : L10n.ui("打印当前 (⌘↩)")) {
                     Task { await printCurrent() }
                 }
                 .disabled(isPrinting || isSequencePrinting || appState.settings.selectedPrinterName == nil)
-                Button(isSequencePrinting ? "打印中…" : "打印序列") {
+                .keyboardShortcut(.return, modifiers: .command)
+                Button(isSequencePrinting ? L10n.ui("打印中…") : L10n.ui("打印序列")) {
                     Task { await sequencePrintAll() }
                 }
                 .disabled(
@@ -576,7 +577,7 @@ struct SpreadsheetSequencePrintView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 28, alignment: .trailing)
             TextField(
-                "值",
+                L10n.ui("值"),
                 text: Binding(
                     get: { cellValue(row: rowIndex, key: bindingKey) },
                     set: { setCellValue(row: rowIndex, key: bindingKey, value: $0) }
@@ -598,7 +599,7 @@ struct SpreadsheetSequencePrintView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text("请先在「设置」中选择 CUPS 打印机")
+                Text(L10n.ui("请先在「设置」中选择 CUPS 打印机"))
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
@@ -609,15 +610,15 @@ struct SpreadsheetSequencePrintView: View {
                     .lineLimit(1)
             }
             Spacer()
-            Button("清空") { clearContent() }
-            Button("预览") {
+            Button(L10n.ui("清空")) { clearContent() }
+            Button(L10n.ui("预览")) {
                 Task { await previewCurrent() }
             }
-            Button(isPrinting ? "打印中..." : "打印当前") {
+            Button(isPrinting ? L10n.ui("打印中...") : L10n.ui("打印当前 (⌘↩)")) {
                 Task { await printCurrent() }
             }
             .disabled(isPrinting || appState.settings.selectedPrinterName == nil)
-            Button(isSequencePrinting ? "打印中…" : "打印序列") {
+            Button(isSequencePrinting ? L10n.ui("打印中…") : L10n.ui("打印序列")) {
                 Task { await sequencePrintAll() }
             }
             .disabled(
@@ -632,13 +633,13 @@ struct SpreadsheetSequencePrintView: View {
 
     private var saveTemplateSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("存为模板").font(.headline)
-            TextField("模板名称", text: $saveName)
+            Text(L10n.ui("存为模板")).font(.headline)
+            TextField(L10n.ui("模板名称"), text: $saveName)
                 .textFieldStyle(.roundedBorder)
             HStack {
                 Spacer()
-                Button("取消") { showSaveSheet = false }
-                Button("保存") {
+                Button(L10n.ui("取消")) { showSaveSheet = false }
+                Button(L10n.ui("保存")) {
                     saveAsTemplate()
                     showSaveSheet = false
                 }
@@ -652,9 +653,9 @@ struct SpreadsheetSequencePrintView: View {
 
     private var loadTemplateSheet: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("载入模板").font(.headline)
+            Text(L10n.ui("载入模板")).font(.headline)
             if savedTemplates.isEmpty {
-                Text("暂无已存模板")
+                Text(L10n.ui("暂无已存模板"))
                     .foregroundStyle(.secondary)
             } else {
                 List {
@@ -683,7 +684,7 @@ struct SpreadsheetSequencePrintView: View {
             }
             HStack {
                 Spacer()
-                Button("关闭") { showLoadSheet = false }
+                Button(L10n.ui("关闭")) { showLoadSheet = false }
             }
         }
         .padding(20)
@@ -781,7 +782,7 @@ struct SpreadsheetSequencePrintView: View {
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
         guard let image = NSImage(contentsOf: url) else {
-            message = "无法读取图片"
+            message = L10n.ui("无法读取图片")
             return
         }
         completion(image)
@@ -1006,7 +1007,7 @@ struct SpreadsheetSequencePrintView: View {
                 : "POS-80 sequence native GBK"
         )
 
-        sequenceProgress = "正在打印序列…"
+        sequenceProgress = L10n.ui("正在打印序列…")
         let statusPollingWasActive = appState.gmailSync.isRunning
         let record = await appState.runDiagnosticPrint(
             artifacts: artifacts,
@@ -1133,7 +1134,7 @@ struct SpreadsheetSequencePrintView: View {
             statusPollingWasActive: statusPollingWasActive
         ) {
             if record.transportError == nil {
-                message = "已发送到打印机"
+                message = L10n.ui("已发送到打印机")
             } else {
                 message = "打印失败: \(record.transportError ?? "")"
             }

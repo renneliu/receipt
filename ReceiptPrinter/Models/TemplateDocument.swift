@@ -10,10 +10,10 @@ enum TemplateCategory: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .movieTicket: return "电影票"
-        case .receipt: return "小票"
-        case .label: return "标签"
-        case .custom: return "自定义"
+        case .movieTicket: return L10n.ui("电影票")
+        case .receipt: return L10n.ui("小票")
+        case .label: return L10n.ui("标签")
+        case .custom: return L10n.ui("自定义")
         }
     }
 }

@@ -177,6 +177,9 @@ enum MovieTicketPDFRecognitionService {
                     "SESSION TIME", "SHOWING", "Show Time", "Time"
                 ])
             }
+            if region.fieldKind == .endTime {
+                keywords.append(contentsOf: ["Ends at", "Ends", "Until"])
+            }
             if region.fieldKind == .showDate {
                 keywords.append(contentsOf: [
                     "SESSION DATE", "SHOWING", "Date"
@@ -245,13 +248,26 @@ enum MovieTicketPDFRecognitionService {
             }
         }
 
-        // Shared time logic (IMAX timeRange + Ritz startTime): prefer clock; keep composed
-        // session when the selection is incomplete so single-region rules still work.
+        // Shared time logic (IMAX timeRange + Ritz startTime).
+        // Default: clock only. When `recognizeDate` is on, keep/compose full session datetime.
         let isTimeField = region.fieldKind == .startTime || region.fieldKind == .timeRange
+        let wantDate = isTimeField && region.recognizesDateWithTime
         let labelOnly = isBareScheduleLabel(text)
         let partialSchedule = isPartialScheduleFragment(text)
         if isTimeField || labelOnly || partialSchedule || (containsClockTime(text) && !hasCalendarDate(text)) {
-            if let session = extractSessionDateTimeFromPage(page) {
+            if wantDate {
+                if let session = extractSessionDateTimeFromPage(page), isCompleteSessionValue(session) {
+                    if text.isEmpty || !isCompleteSessionValue(text) {
+                        text = session
+                        pathUsed = pathUsed == "none" ? "pageSession" : "pageSessionDate"
+                    }
+                } else if containsClockTime(text), !hasCalendarDate(text),
+                          let date = firstDateOnlyMatch(in: page.string ?? ""),
+                          let clock = firstClockOnlyMatch(in: text) {
+                    text = "\(date) \(normalizeClockToken(clock))"
+                    pathUsed = "composeDateClock"
+                }
+            } else if let session = extractSessionDateTimeFromPage(page) {
                 let currentComplete = isCompleteSessionValue(text) || (containsClockTime(text) && isTimeField)
                 if !currentComplete || (isTimeField && !containsClockTime(text)) {
                     // Prefer clock-only for time fields when a dedicated date region may exist.
@@ -263,6 +279,13 @@ enum MovieTicketPDFRecognitionService {
                         pathUsed = pathUsed == "none" ? "pageSession" : "pageSessionRecover"
                     }
                 }
+            }
+        }
+        // Enforce clock-only when the toggle is off (even if the box captured a full date line).
+        if isTimeField, !wantDate, let clock = firstClockOnlyMatch(in: text) {
+            text = normalizeClockToken(clock)
+            if pathUsed == "rect" || pathUsed == "expanded" || pathUsed == "keyword" {
+                pathUsed = "\(pathUsed)Clock"
             }
         }
 
@@ -342,30 +365,64 @@ enum MovieTicketPDFRecognitionService {
         return key
     }
 
-    /// Find Total (inc. GST) $N.NN on the full page — independent of page size / rect.
+    /// Find Total amount on the full page — independent of page size / rect.
+    /// Accepts whole dollars (`Total 29`) and decimals (`Total $29.00`); never walks
+    /// past the Total line into `Including Tax` / GST fragments.
     private static func extractTotalCurrencyFromPage(_ page: PDFPage) -> String? {
         guard let full = page.string, !full.isEmpty else { return nil }
+        return totalCurrency(fromPageText: full)
+    }
+
+    /// Exposed for tests / auto-detect. Parses booking PDF plain text for the order total.
+    static func totalCurrency(fromPageText full: String) -> String? {
         let patterns = [
-            #"(?i)Total(?:\s*\([^)]*\))?\s*(\$?\d{1,3}(?:,\d{3})*\.\d{2})"#,
-            #"(?i)Total\s+(?:inc\.?\s*)?GST\s*(\$?\d{1,3}(?:,\d{3})*\.\d{2})"#
+            // Same-line Total … amount (integer or .cc). Skip "Including Tax".
+            #"(?im)^(?!.*\bIncluding\b)[^\n]*\bTotal(?:\s*\([^)]*\))?\s*:?\s*(\$?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)\b"#,
+            #"(?i)\bTotal\s+(?:inc\.?\s*)?GST\s*:?\s*(\$?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)\b"#,
+            #"(?i)\bTotal(?:\s*\([^)]*\))?\s*:?\s*(\$?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)\b"#
         ]
         let ns = full as NSString
         let fullRange = NSRange(location: 0, length: ns.length)
         for pattern in patterns {
-            guard let re = try? NSRegularExpression(pattern: pattern),
-                  let match = re.firstMatch(in: full, range: fullRange),
-                  match.numberOfRanges > 1,
-                  let range = Range(match.range(at: 1), in: full) else { continue }
-            return String(full[range])
+            guard let re = try? NSRegularExpression(pattern: pattern) else { continue }
+            let matches = re.matches(in: full, range: fullRange)
+            for match in matches {
+                guard match.numberOfRanges > 1,
+                      let amountRange = Range(match.range(at: 1), in: full),
+                      let lineRange = Range(match.range, in: full) else { continue }
+                let line = String(full[lineRange])
+                // Never take the tax line (`Including Tax 2.64`).
+                if line.range(of: #"(?i)including\s+tax"#, options: .regularExpression) != nil {
+                    continue
+                }
+                return String(full[amountRange])
+            }
         }
-        // Fallback: amount immediately after the word Total (flexible glyph spacing).
+        // Fallback: amount on the same line after the word Total only (do not cross \n).
         if let range = firstMatchRange(of: "Total", in: full) {
-            let after = String(full[range.upperBound...].prefix(80))
-            if let amount = firstCurrencyAmount(in: after) {
+            let after = String(full[range.upperBound...])
+            let sameLine = String(after.prefix(while: { $0 != "\n" && $0 != "\r" }))
+            if sameLine.range(of: #"(?i)including\s+tax"#, options: .regularExpression) == nil,
+               let amount = firstMoneyAmount(in: sameLine) {
                 return amount
             }
         }
         return nil
+    }
+
+    /// `$12.00` / `29` / `26.5` — used for Total lines that omit trailing cents.
+    private static func firstMoneyAmount(in text: String) -> String? {
+        moneyAmounts(in: text).first
+    }
+
+    private static func moneyAmounts(in text: String) -> [String] {
+        guard let re = try? NSRegularExpression(
+            pattern: #"\$?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?"#
+        ) else { return [] }
+        let ns = text as NSString
+        return re.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap { match in
+            Range(match.range, in: text).map { String(text[$0]) }
+        }
     }
 
     /// Learn extract features from a user-typed sample that appears in the region preview.
@@ -530,7 +587,10 @@ enum MovieTicketPDFRecognitionService {
             }
             return scoped
         case .currency:
-            if let amount = firstCurrencyAmount(in: scoped) ?? (!key.isEmpty ? nil : lastCurrencyAmount(in: source)) {
+            // Prefer money tokens that allow whole dollars (Orpheum `Total 29`).
+            if let amount = firstMoneyAmount(in: scoped)
+                ?? firstCurrencyAmount(in: scoped)
+                ?? (!key.isEmpty ? nil : lastCurrencyAmount(in: source)) {
                 return amount
             }
             return scoped.isEmpty ? source : scoped
@@ -551,7 +611,9 @@ enum MovieTicketPDFRecognitionService {
     }
 
     private static func currencyAmounts(in text: String) -> [String] {
-        guard let re = try? NSRegularExpression(pattern: #"\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})"#) else {
+        // Strict decimals first (legacy Event/Ritz `$12.00`); callers that need
+        // whole dollars use `moneyAmounts` / `firstMoneyAmount`.
+        guard let re = try? NSRegularExpression(pattern: #"\$?\d{1,3}(?:,\d{3})*\.\d{2}"#) else {
             return []
         }
         let ns = text as NSString
@@ -599,10 +661,17 @@ enum MovieTicketPDFRecognitionService {
         return text
     }
 
-    /// Prefer "Screen N"; strip "CINEMA NUMBER" label fragments and trailing glyph noise.
+    /// Prefer "Screen N" / "Cinema N"; strip "CINEMA NUMBER" label fragments and trailing glyph noise.
     private static func refineHallValue(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if let re = try? NSRegularExpression(pattern: #"(?i)\bScreen\s+\d+\b"#) {
+            let ns = trimmed as NSString
+            if let match = re.firstMatch(in: trimmed, range: NSRange(location: 0, length: ns.length)),
+               let range = Range(match.range, in: trimmed) {
+                return String(trimmed[range])
+            }
+        }
+        if let re = try? NSRegularExpression(pattern: #"(?i)\bCinema\s+\d+\b"#) {
             let ns = trimmed as NSString
             if let match = re.firstMatch(in: trimmed, range: NSRange(location: 0, length: ns.length)),
                let range = Range(match.range, in: trimmed) {
@@ -968,7 +1037,18 @@ enum MovieTicketPDFRecognitionService {
                 || upper.contains("SESSION DATE")
                 || upper.contains("SCAN CODE")
                 || upper.hasPrefix("SCREEN ")
-                || (upper.hasPrefix("CINEM") && upper.contains("SCREEN")) {
+                || upper.hasPrefix("CINEMA ")
+                || (upper.hasPrefix("CINEM") && upper.contains("SCREEN"))
+                || upper.contains("% OFF")
+                || upper.hasPrefix("TICKETS")
+                || upper.hasPrefix("THANK YOU") {
+                return false
+            }
+            // "Cinema 3" is a hall, not a title.
+            if t.range(of: #"(?i)^Cinema\s+\d+$"#, options: .regularExpression) != nil {
+                return false
+            }
+            if upper == "SHOWING" || upper == "SESSION" || upper.hasPrefix("TICKETS") {
                 return false
             }
             return t.count >= 4
@@ -985,8 +1065,25 @@ enum MovieTicketPDFRecognitionService {
             if t.range(of: #"(?i)^Screen\s+\d+$"#, options: .regularExpression) != nil {
                 return true
             }
-            return t.count >= 2
+            if t.range(of: #"(?i)^Cinema\s+\d+$"#, options: .regularExpression) != nil {
+                return true
+            }
+            // Promo / ticket-type lines are not halls.
+            let upper = t.uppercased()
+            if upper.contains("%") || upper.contains("OFF") || upper.contains("TICKET")
+                || upper.contains("ADULT") || upper.contains("CHILD") {
+                return false
+            }
+            return t.count >= 2 && t.count <= 40
         case .ticketType, .seatArea:
+            if kind == .ticketType {
+                // Reject mid-word fragments like "ies".
+                if t.count < 4 { return false }
+                if t.range(of: #"(?i)^(Adult|Child|Senior|Student|Concession|Member|Family)"#, options: .regularExpression) != nil {
+                    return true
+                }
+                if t.contains("%") { return false }
+            }
             return t.count >= 2
         case .startTime, .endTime, .timeRange:
             return containsClockTime(t)
@@ -1099,19 +1196,60 @@ enum MovieTicketPDFRecognitionService {
             // Manual box-select wins over page-wide auto-detect (user may target
             // Transaction Number 477560 instead of booking code WJKMTX9).
             // Auto-detect is used for sidebar "自动识别" regions (isPageWideAuto).
-            let auto = MovieTicketPDFFieldRecognizer.autoDetect(fieldKind: kind, from: url)
+            // Time fields must honor「同时识别日期」— plain autoDetect always returns clock-only.
+            let wantDateWithTime = (kind == .timeRange || kind == .startTime)
+                && region.recognizesDateWithTime
+            let auto = wantDateWithTime
+                ? MovieTicketPDFFieldRecognizer.autoDetect(
+                    fieldKind: kind, from: url, includeDateWithTime: true
+                )
+                : MovieTicketPDFFieldRecognizer.autoDetect(fieldKind: kind, from: url)
+            // Hall / ticket type: if user mapped a page string (e.g. IMAX Sydney → IMAX 1,
+            // 1x Cinebuzz - IMAX → CBIMAX), prefer that hit over generic auto when both appear.
+            let mappingPageHit: String? = {
+                guard (kind == .hall || kind == .ticketType), !region.valueMappings.isEmpty,
+                      let doc = PDFDocument(url: url),
+                      let page = doc.page(at: region.pageIndex),
+                      let full = page.string
+                else { return nil }
+                let rules = region.valueMappings
+                    .map { $0.match.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .sorted { $0.count > $1.count }
+                for match in rules {
+                    if let range = full.range(of: match, options: [.caseInsensitive, .diacriticInsensitive]) {
+                        return String(full[range])
+                    }
+                }
+                return nil
+            }()
             let rectText = (try? extractText(from: url, region: region)) ?? ""
             let preferRect = !region.isPageWideAuto && region.showsCanvasBox
+            let rectPlausible = !rectText.isEmpty && isPlausibleFieldValue(rectText, for: kind)
             let chosen: String
-            if preferRect, !rectText.isEmpty {
-                // extractText already applied mappings (+ affixes for non-datetime).
+            if let hit = mappingPageHit, !hit.isEmpty {
+                let mapped = applyValueMappings(hit, mappings: region.valueMappings)
+                chosen = applyPrintAffixes(mapped, region: region)
+            } else if preferRect, rectPlausible {
+                // Manual box wins only when the text looks like the field.
+                chosen = rectText
+            } else if preferRect, !rectText.isEmpty, let auto, !auto.value.isEmpty {
+                // Stale box on a different PDF — fall back to page-wide auto.
+                let mapped = applyValueMappings(auto.value, mappings: region.valueMappings)
+                chosen = isDateTimeFieldKind(kind)
+                    ? mapped
+                    : applyPrintAffixes(mapped, region: region)
+            } else if wantDateWithTime, !rectText.isEmpty, hasCalendarDate(rectText),
+                      !(auto.map { hasCalendarDate($0.value) } ?? false) {
+                // Page-wide auto: extractText already has date+time; clock-only auto loses.
                 chosen = rectText
             } else if let auto, !auto.value.isEmpty {
                 let mapped = applyValueMappings(auto.value, mappings: region.valueMappings)
                 chosen = isDateTimeFieldKind(kind)
                     ? mapped
                     : applyPrintAffixes(mapped, region: region)
-            } else if !rectText.isEmpty {
+            } else if !rectText.isEmpty, isPlausibleFieldValue(rectText, for: kind) {
+                // Keep rect only when it still looks like this field (never keep Cinema 3 as title).
                 chosen = rectText
             } else {
                 continue
@@ -1171,10 +1309,47 @@ enum MovieTicketPDFRecognitionService {
         let timeRaw = fields[.startTime] ?? fields[.timeRange]
         if let v = timeRaw, let date = parseFlexibleDateTime(v) {
             draft.showStartTime = date
-            // Only overwrite showDate from the time string when no dedicated date field hit.
-            if fields[.showDate] == nil, hasCalendarDate(v) {
+            // Write showDate from the time string only when the time region opted in,
+            // and no dedicated date field already hit.
+            let timeRegion = rule?.regions.first {
+                $0.fieldKind == .timeRange || $0.fieldKind == .startTime
+            }
+            if timeRegion?.recognizesDateWithTime == true,
+               fields[.showDate] == nil,
+               hasCalendarDate(v) {
                 draft.showDate = Calendar.current.startOfDay(for: date)
             }
+        }
+
+        // End time from PDF (Ends at / Until) → adjust duration so showEndTime matches.
+        if let v = fields[.endTime], !v.isEmpty {
+            applyRecognizedEndTime(v, to: &draft)
+        }
+    }
+
+    /// Set `movieDurationMinutes` so `showEndTime` matches a recognized clock (same show date).
+    private static func applyRecognizedEndTime(_ raw: String, to draft: inout MovieTicketDraft) {
+        let clock = clockOnly(from: raw) ?? firstClockOnlyMatch(in: raw).map(normalizeClockToken)
+        guard let clock, let partial = parseFlexibleDateTime(clock) else { return }
+        let cal = Calendar.current
+        let start = draft.combinedStart
+        var endParts = cal.dateComponents([.year, .month, .day], from: draft.showDate)
+        let t = cal.dateComponents([.hour, .minute], from: partial)
+        endParts.hour = t.hour
+        endParts.minute = t.minute
+        endParts.second = 0
+        guard var end = cal.date(from: endParts) else { return }
+        if end <= start {
+            end = cal.date(byAdding: .day, value: 1, to: end) ?? end
+        }
+        let mins = cal.dateComponents([.minute], from: start, to: end).minute ?? 0
+        guard mins > 0, mins < 24 * 60 else { return }
+        let ad = max(0, draft.adDurationMinutes)
+        if mins > ad {
+            draft.movieDurationMinutes = mins - ad
+        } else {
+            draft.adDurationMinutes = 0
+            draft.movieDurationMinutes = mins
         }
     }
 
@@ -1183,6 +1358,14 @@ enum MovieTicketPDFRecognitionService {
         let formats = [
             "EEEE d MMMM yyyy",
             "EEEE d MMMM",
+            // US/Dendy: "Thursday, July 9"
+            "EEEE, MMMM d yyyy",
+            "EEEE, MMMM d",
+            "EEEE MMMM d yyyy",
+            "EEEE MMMM d",
+            "MMMM d, yyyy",
+            "MMMM d yyyy",
+            "MMMM d",
             "EEEE d MMM yyyy",
             "EEEE d MMM",
             "EEE d MMM yyyy",
@@ -1241,6 +1424,9 @@ enum MovieTicketPDFRecognitionService {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let patterns = [
             #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+\#(monthPattern)"#,
+            // US / Dendy: "Thursday, July 9"
+            #"(?i)\#(weekdayPattern),?\s+\#(monthPattern)\s+\d{1,2}"#,
+            #"(?i)\#(monthPattern)\s+\d{1,2},?\s+\d{4}"#,
             #"(?i)\d{1,2}\s+\#(monthPattern)(?:\s+\d{4})?"#,
             #"\d{1,2}/\d{1,2}/\d{2,4}"#
         ]
@@ -1269,7 +1455,12 @@ enum MovieTicketPDFRecognitionService {
 
     private static func firstDateOnlyMatch(in text: String) -> String? {
         let patterns = [
+            // AU/IMAX: "Saturday 7 March" / "Saturday 7 March 2026"
             #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+\#(monthPattern)(?:\s+\d{4})?"#,
+            // US/Dendy: "Thursday, July 9" / "Thursday, July 9, 2026"
+            #"(?i)\#(weekdayPattern),?\s+\#(monthPattern)\s+\d{1,2}(?:,?\s+\d{4})?"#,
+            // "July 9, 2026" / "9 July 2026"
+            #"(?i)\#(monthPattern)\s+\d{1,2},?\s+\d{4}"#,
             #"(?i)\d{1,2}\s+\#(monthPattern)\s+\d{4}"#
         ]
         return firstRegexMatch(in: text, patterns: patterns)
@@ -1302,6 +1493,8 @@ enum MovieTicketPDFRecognitionService {
             #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+\#(monthPattern),?\s+\d{1,2}:\d{2}\s*[AP]M"#,
             #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
             #"(?i)\#(weekdayPattern)\s+[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
+            // Dendy: "Thursday, July 9 Stratford, 6:00 pm"
+            #"(?i)\#(weekdayPattern),?\s+\#(monthPattern)\s+\d{1,2}(?:\s+[A-Za-z]+)?,?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
             #"(?i)\d{1,2}\s+\#(monthPattern)\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
             #"(?i)\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#
         ]

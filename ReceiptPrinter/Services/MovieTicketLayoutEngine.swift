@@ -123,7 +123,7 @@ enum MovieTicketLayoutEngine {
     ) -> String {
         switch kind {
         case .movieTitle:
-            return draft.movieTitle
+            return draft.printedMovieTitle
         case .startTime:
             return element.timeFormat.format(draft.combinedStart)
         case .endTime:

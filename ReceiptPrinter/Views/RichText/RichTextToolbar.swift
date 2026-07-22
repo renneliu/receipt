@@ -16,8 +16,8 @@ struct RichTextToolbar: View {
     var body: some View {
         Group {
             HStack {
-                Text("字号")
-                Picker("字号", selection: $fontSize) {
+                Text(L10n.ui("字号"))
+                Picker(L10n.ui("字号"), selection: $fontSize) {
                     ForEach(Self.fontSizeOptions, id: \.self) { size in
                         Text("\(Int(size))").tag(size)
                     }
@@ -30,22 +30,22 @@ struct RichTextToolbar: View {
             }
 
             HStack(spacing: 12) {
-                Text("样式")
+                Text(L10n.ui("样式"))
                 Spacer()
                 Button { controller.toggleBold() } label: { Image(systemName: "bold") }
                     .buttonStyle(.borderless)
-                    .help("粗体")
+                    .help(L10n.ui("粗体"))
                 Button { controller.toggleItalic() } label: { Image(systemName: "italic") }
                     .buttonStyle(.borderless)
-                    .help("斜体")
+                    .help(L10n.ui("斜体"))
                 Button { controller.toggleUnderline() } label: { Image(systemName: "underline") }
                     .buttonStyle(.borderless)
-                    .help("下划线")
+                    .help(L10n.ui("下划线"))
             }
 
             HStack {
-                Text("对齐")
-                Picker("对齐", selection: $alignment) {
+                Text(L10n.ui("对齐"))
+                Picker(L10n.ui("对齐"), selection: $alignment) {
                     Image(systemName: "text.alignleft").tag(NSTextAlignment.left)
                     Image(systemName: "text.aligncenter").tag(NSTextAlignment.center)
                     Image(systemName: "text.alignright").tag(NSTextAlignment.right)
@@ -58,16 +58,16 @@ struct RichTextToolbar: View {
                 }
             }
 
-            Menu("分割线") {
-                Button("直线") {
+            Menu(L10n.ui("分割线")) {
+                Button(L10n.ui("直线")) {
                     controller.insertDivider(style: .solid, columns: columnsPerLine)
                 }
-                Button("虚线") {
+                Button(L10n.ui("虚线")) {
                     controller.insertDivider(style: .dashed, columns: columnsPerLine)
                 }
             }
 
-            Button("清除格式") { controller.clearFormatting() }
+            Button(L10n.ui("清除格式")) { controller.clearFormatting() }
         }
     }
 }

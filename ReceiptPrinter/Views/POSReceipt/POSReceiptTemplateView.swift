@@ -7,7 +7,7 @@ struct POSReceiptTemplateView: View {
     @EnvironmentObject private var session: POSReceiptSession
 
     @State private var selectedElementId: UUID?
-    @State private var newName = "新POS模板"
+    @State private var newName = L10n.ui("新POS模板")
     @State private var excelStatus = ""
     @State private var previewPayload: PreviewPayload?
     @State private var liveCanvasImage: NSImage?
@@ -43,7 +43,7 @@ struct POSReceiptTemplateView: View {
                 inspectorColumn
                     .frame(minWidth: 240, idealWidth: 280, maxWidth: 320)
             } else {
-                ContentUnavailableView("选择或新建模板", systemImage: "doc.badge.plus")
+                ContentUnavailableView(L10n.ui("选择或新建模板"), systemImage: "doc.badge.plus")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -62,15 +62,15 @@ struct POSReceiptTemplateView: View {
             scheduleLiveCanvasRefresh()
         }
         .onAppear { scheduleLiveCanvasRefresh() }
-        .alert("重命名模板", isPresented: Binding(
+        .alert(L10n.ui("重命名模板"), isPresented: Binding(
             get: { renameTarget != nil },
             set: { if !$0 { renameTarget = nil } }
         )) {
-            TextField("名称", text: $renameText)
-            Button("取消", role: .cancel) { renameTarget = nil }
-            Button("确定") { commitRename() }
+            TextField(L10n.ui("名称"), text: $renameText)
+            Button(L10n.ui("取消"), role: .cancel) { renameTarget = nil }
+            Button(L10n.ui("确定")) { commitRename() }
         } message: {
-            Text("输入新的模板名称")
+            Text(L10n.ui("输入新的模板名称"))
         }
     }
 
@@ -78,13 +78,13 @@ struct POSReceiptTemplateView: View {
 
     private var libraryColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("模板").font(.headline)
+            Text(L10n.ui("模板")).font(.headline)
             HStack {
-                TextField("名称", text: $newName)
+                TextField(L10n.ui("名称"), text: $newName)
                     .textFieldStyle(.roundedBorder)
-                Button("新建") {
+                Button(L10n.ui("新建")) {
                     let name = newName.trimmingCharacters(in: .whitespaces)
-                    session.createTemplate(named: name.isEmpty ? "新POS模板" : name)
+                    session.createTemplate(named: name.isEmpty ? L10n.ui("新POS模板") : name)
                 }
             }
             List(selection: Binding(
@@ -100,40 +100,40 @@ struct POSReceiptTemplateView: View {
                         VStack(alignment: .leading) {
                             Text(t.name)
                             if session.settings.activeTemplateId == t.id {
-                                Text("使用中").font(.caption2).foregroundStyle(.tint)
+                                Text(L10n.ui("使用中")).font(.caption2).foregroundStyle(.tint)
                             }
                         }
                         Spacer()
                     }
                     .tag(t.id)
                     .contextMenu {
-                        Button("重命名") {
+                        Button(L10n.ui("重命名")) {
                             renameTarget = t
                             renameText = t.name
                         }
-                        Button("复制") {
+                        Button(L10n.ui("复制")) {
                             _ = session.duplicateTemplate(t)
                             selectedElementId = nil
                             excelStatus = "已复制为「\(session.editingTemplate?.name ?? "")」"
                         }
-                        Button("设为当前使用") { session.selectTemplate(t.id) }
-                        Button("删除", role: .destructive) { session.deleteTemplate(t) }
+                        Button(L10n.ui("设为当前使用")) { session.selectTemplate(t.id) }
+                        Button(L10n.ui("删除"), role: .destructive) { session.deleteTemplate(t) }
                     }
                 }
             }
 
             if session.editingTemplate != nil {
-                Button("设为当前使用") {
+                Button(L10n.ui("设为当前使用")) {
                     if let id = session.editingTemplate?.id {
                         session.selectTemplate(id)
                     }
                 }
                 .disabled(session.settings.activeTemplateId == session.editingTemplate?.id)
-                Button("保存模板") { session.persistEditingTemplate() }
+                Button(L10n.ui("保存模板")) { session.persistEditingTemplate() }
                     .keyboardShortcut("s", modifiers: .command)
-                Button("预览打印效果") { previewTemplate() }
+                Button(L10n.ui("预览打印效果")) { previewTemplate() }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
-                Text("使用示例条目预览成票效果")
+                Text(L10n.ui("使用示例条目预览成票效果"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -146,35 +146,35 @@ struct POSReceiptTemplateView: View {
 
     private var excelSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Excel（本模板）").font(.headline)
+            Text(L10n.ui("Excel（本模板）")).font(.headline)
             if let t = session.editingTemplate {
-                Text(t.excelDisplayName ?? "未绑定")
+                Text(t.excelDisplayName ?? L10n.ui("未绑定"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
 
                 HStack {
-                    Button("上传/更换") { pickExcel() }
-                    Button("更新") { refreshExcel() }
+                    Button(L10n.ui("上传/更换")) { pickExcel() }
+                    Button(L10n.ui("更新")) { refreshExcel() }
                         .disabled(t.excelBookmarkData == nil)
-                    Button("清除") { clearExcel() }
+                    Button(L10n.ui("清除")) { clearExcel() }
                         .disabled(t.excelBookmarkData == nil)
                 }
 
                 if !t.excelCachedHeaders.isEmpty {
-                    columnPicker("编号列", selection: Binding(
+                    columnPicker(L10n.ui("编号列"), selection: Binding(
                         get: { session.editingTemplate?.excelColumnMap.codeHeader },
                         set: { session.editingTemplate?.excelColumnMap.codeHeader = $0 }
                     ), headers: t.excelCachedHeaders)
-                    columnPicker("项目列", selection: Binding(
+                    columnPicker(L10n.ui("项目列"), selection: Binding(
                         get: { session.editingTemplate?.excelColumnMap.nameHeader },
                         set: { session.editingTemplate?.excelColumnMap.nameHeader = $0 }
                     ), headers: t.excelCachedHeaders)
-                    columnPicker("数量列", selection: Binding(
+                    columnPicker(L10n.ui("数量列"), selection: Binding(
                         get: { session.editingTemplate?.excelColumnMap.quantityHeader },
                         set: { session.editingTemplate?.excelColumnMap.quantityHeader = $0 }
                     ), headers: t.excelCachedHeaders)
-                    columnPicker("金额列", selection: Binding(
+                    columnPicker(L10n.ui("金额列"), selection: Binding(
                         get: { session.editingTemplate?.excelColumnMap.amountHeader },
                         set: { session.editingTemplate?.excelColumnMap.amountHeader = $0 }
                     ), headers: t.excelCachedHeaders)
@@ -187,7 +187,7 @@ struct POSReceiptTemplateView: View {
                     Text(excelStatus).font(.caption2).foregroundStyle(.secondary)
                 }
             } else {
-                Text("先选择模板").font(.caption).foregroundStyle(.secondary)
+                Text(L10n.ui("先选择模板")).font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -197,7 +197,7 @@ struct POSReceiptTemplateView: View {
             get: { selection.wrappedValue ?? "" },
             set: { selection.wrappedValue = $0.isEmpty ? nil : $0 }
         )) {
-            Text("（未映射）").tag("")
+            Text(L10n.ui("（未映射）")).tag("")
             ForEach(headers, id: \.self) { h in
                 Text(h).tag(h)
             }
@@ -228,34 +228,34 @@ struct POSReceiptTemplateView: View {
     private var toolBar: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Button("背景图") { pickBackground() }
+                Button(L10n.ui("背景图")) { pickBackground() }
                 Button("Logo") { pickLogo() }
-                Button("文字框") { addTextBox() }
-                Button("日期") { addDate() }
-                Button("时间") { addTime() }
-                Button("自动编号") { addAutoNumber() }
+                Button(L10n.ui("文字框")) { addTextBox() }
+                Button(L10n.ui("日期")) { addDate() }
+                Button(L10n.ui("时间")) { addTime() }
+                Button(L10n.ui("自动编号")) { addAutoNumber() }
             }
             HStack(spacing: 8) {
-                Button("项目位") { addField(.name) }
-                Button("添加横线") { addDivider(dashed: false) }
-                Button("添加虚线") { addDivider(dashed: true) }
+                Button(L10n.ui("项目位")) { addField(.name) }
+                Button(L10n.ui("添加横线")) { addDivider(dashed: false) }
+                Button(L10n.ui("添加虚线")) { addDivider(dashed: true) }
             }
             HStack(spacing: 8) {
-                Button("数量小计") { addField(.quantitySubtotal) }
-                Button("金额小计") { addField(.amountSubtotal) }
-                Button("附加费") { addField(.surcharge) }
-                Button("金额合计") { addField(.amountTotal) }
-                Button("总计") { addField(.itemCount) }
+                Button(L10n.ui("数量小计")) { addField(.quantitySubtotal) }
+                Button(L10n.ui("金额小计")) { addField(.amountSubtotal) }
+                Button(L10n.ui("附加费")) { addField(.surcharge) }
+                Button(L10n.ui("金额合计")) { addField(.amountTotal) }
+                Button(L10n.ui("总计")) { addField(.itemCount) }
             }
             HStack(spacing: 8) {
                 if let t = session.editingTemplate {
-                    Toggle("参考线网格", isOn: Binding(
+                    Toggle(L10n.ui("参考线网格"), isOn: Binding(
                         get: { session.editingTemplate?.gridEnabled ?? t.gridEnabled },
                         set: { session.editingTemplate?.gridEnabled = $0 }
                     ))
                 }
                 Spacer()
-                Button("预览") { previewTemplate() }
+                Button(L10n.ui("预览")) { previewTemplate() }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
             }
         }
@@ -412,7 +412,7 @@ struct POSReceiptTemplateView: View {
                     frame: binding,
                     isSelected: selected,
                     title: "Logo",
-                    previewText: "无图",
+                    previewText: L10n.ui("无图"),
                     fontSize: 12,
                     paperSize: paper,
                     gridEnabled: gridOn,
@@ -469,19 +469,19 @@ struct POSReceiptTemplateView: View {
         let custom = el.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !custom.isEmpty { return custom }
         switch el.kind {
-        case .textBox: return "文字"
-        case .fieldPlaceholder: return el.fieldKind?.displayName ?? "字段"
-        case .date: return "日期"
-        case .time: return "时间"
-        case .autoNumber: return el.autoNumberAsBarcode ? "编号条码" : "自动编号"
+        case .textBox: return L10n.ui("文字")
+        case .fieldPlaceholder: return el.fieldKind?.displayName ?? L10n.ui("字段")
+        case .date: return L10n.ui("日期")
+        case .time: return L10n.ui("时间")
+        case .autoNumber: return el.autoNumberAsBarcode ? L10n.ui("编号条码") : L10n.ui("自动编号")
         case .logo: return "Logo"
-        case .divider: return el.isDashed ? "虚线" : "横线"
+        case .divider: return el.isDashed ? L10n.ui("虚线") : L10n.ui("横线")
         }
     }
 
     private func elementPreview(_ el: POSReceiptElement) -> String {
         switch el.kind {
-        case .textBox: return el.content.isEmpty ? "文字" : el.content
+        case .textBox: return el.content.isEmpty ? L10n.ui("文字") : el.content
         case .fieldPlaceholder:
             switch el.fieldKind {
             case .quantitySubtotal: return "1"
@@ -492,7 +492,7 @@ struct POSReceiptTemplateView: View {
             case .amountTotal: return "1.00"
             case .itemCount: return "1"
             case .code: return "1"
-            case .name: return "示例"
+            case .name: return L10n.ui("示例")
             case .quantity: return "1"
             case .amount: return "1.00"
             case .none: return "?"
@@ -525,23 +525,23 @@ struct POSReceiptTemplateView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 if let t = session.editingTemplate {
-                    Text("模板属性").font(.headline)
+                    Text(L10n.ui("模板属性")).font(.headline)
 
-                    Toggle("启用编号", isOn: Binding(
+                    Toggle(L10n.ui("启用编号"), isOn: Binding(
                         get: { session.editingTemplate?.enableCode ?? t.enableCode },
                         set: { session.editingTemplate?.enableCode = $0; syncToggles() }
                     ))
-                    Toggle("启用数量", isOn: Binding(
+                    Toggle(L10n.ui("启用数量"), isOn: Binding(
                         get: { session.editingTemplate?.enableQuantity ?? t.enableQuantity },
                         set: { session.editingTemplate?.enableQuantity = $0; syncToggles() }
                     ))
-                    Toggle("启用金额", isOn: Binding(
+                    Toggle(L10n.ui("启用金额"), isOn: Binding(
                         get: { session.editingTemplate?.enableAmount ?? t.enableAmount },
                         set: { session.editingTemplate?.enableAmount = $0; syncToggles() }
                     ))
 
                     if showsSurchargeDefaultControl {
-                        labeled("附加费默认值") {
+                        labeled(L10n.ui("附加费默认值")) {
                             TextField("0", text: Binding(
                                 get: { session.editingTemplate?.defaultSurcharge ?? t.defaultSurcharge },
                                 set: { session.editingTemplate?.defaultSurcharge = $0 }
@@ -551,7 +551,7 @@ struct POSReceiptTemplateView: View {
                     }
 
                     if session.backgroundImage != nil {
-                        labeled("背景缩放 %") {
+                        labeled(L10n.ui("背景缩放 %")) {
                             Slider(value: Binding(
                                 get: { session.editingTemplate?.backgroundScalePercent ?? t.backgroundScalePercent },
                                 set: { session.editingTemplate?.backgroundScalePercent = $0 }
@@ -559,7 +559,7 @@ struct POSReceiptTemplateView: View {
                         }
                     }
 
-                    labeled("画布高度") {
+                    labeled(L10n.ui("画布高度")) {
                         Slider(value: Binding(
                             get: { session.editingTemplate?.canvasHeight ?? t.canvasHeight },
                             set: { session.editingTemplate?.canvasHeight = $0 }
@@ -571,7 +571,7 @@ struct POSReceiptTemplateView: View {
                        session.editingTemplate?.elements.contains(where: { $0.id == id }) == true {
                         elementInspector(elementId: id)
                     } else {
-                        Text("从画布或下方列表选中元素以编辑属性").foregroundStyle(.secondary).font(.caption)
+                        Text(L10n.ui("从画布或下方列表选中元素以编辑属性")).foregroundStyle(.secondary).font(.caption)
                     }
 
                     Divider()
@@ -584,11 +584,11 @@ struct POSReceiptTemplateView: View {
 
     private var elementListSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("元素列表").font(.headline)
+            Text(L10n.ui("元素列表")).font(.headline)
             let elements = (session.editingTemplate?.elements ?? [])
                 .sorted(by: { $0.zIndex < $1.zIndex })
             if elements.isEmpty {
-                Text("暂无元素").font(.caption).foregroundStyle(.secondary)
+                Text(L10n.ui("暂无元素")).font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(elements) { el in
                     Button {
@@ -637,7 +637,7 @@ struct POSReceiptTemplateView: View {
         guard var t = session.editingTemplate,
               let source = t.elements.first(where: { $0.id == id }) else { return }
         if source.kind == .fieldPlaceholder, source.fieldKind == .name {
-            excelStatus = "项目名称占位符不可复制"
+            excelStatus = L10n.ui("项目名称占位符不可复制")
             return
         }
         if source.kind == .fieldPlaceholder, let kind = source.fieldKind, kind.isSummaryField,
@@ -675,10 +675,10 @@ struct POSReceiptTemplateView: View {
     @ViewBuilder
     private func elementInspector(elementId: UUID) -> some View {
         if let el = session.editingTemplate?.elements.first(where: { $0.id == elementId }) {
-            Text("元素：\(elementTitle(el))").font(.headline)
+            Text("\(L10n.ui("元素："))\(elementTitle(el))").font(.headline)
 
-            labeled("显示名称") {
-                TextField("可选，便于列表识别", text: Binding(
+            labeled(L10n.ui("显示名称")) {
+                TextField(L10n.ui("可选，便于列表识别"), text: Binding(
                     get: { elementValue(id: elementId, \.displayName, default: "") },
                     set: { newValue in updateElement(id: elementId) { $0.displayName = newValue } }
                 ))
@@ -686,21 +686,21 @@ struct POSReceiptTemplateView: View {
             }
 
             HStack {
-                Button("带样式复制") {
+                Button(L10n.ui("带样式复制")) {
                     duplicateElementWithStyle(id: elementId)
                 }
-                .help("复制为新元素，保留字号/粗体/对齐/尺寸等样式")
+                .help(L10n.ui("复制为新元素，保留字号/粗体/对齐/尺寸等样式"))
             }
 
             Toggle(isOn: Binding(
                 get: { elementValue(id: elementId, \.isLocked, default: false) },
                 set: { newValue in updateElement(id: elementId) { $0.isLocked = newValue } }
             )) {
-                Label(el.isLocked ? "已锁定位置" : "锁定位置", systemImage: el.isLocked ? "lock.fill" : "lock.open")
+                Label(el.isLocked ? L10n.ui("已锁定位置") : L10n.ui("锁定位置"), systemImage: el.isLocked ? "lock.fill" : "lock.open")
             }
 
             if el.allowsTicketSection {
-                labeled("区域") {
+                labeled(L10n.ui("区域")) {
                     Picker("", selection: Binding(
                         get: { elementValue(id: elementId, \.ticketSection, default: .header) },
                         set: { newValue in updateElement(id: elementId) { $0.ticketSection = newValue } }
@@ -712,12 +712,12 @@ struct POSReceiptTemplateView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                 }
-                Text("条目增多时：头部保持原位，尾部随列表下移")
+                Text(L10n.ui("条目增多时：头部保持原位，尾部随列表下移"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
-            labeled("位置与大小") {
+            labeled(L10n.ui("位置与大小")) {
                 let locked = el.isLocked
                 let paper = session.editingTemplate?.paperSize ?? CGSize(width: 302, height: 480)
                 HStack(spacing: 8) {
@@ -742,7 +742,7 @@ struct POSReceiptTemplateView: View {
                 }
                 HStack(spacing: 8) {
                     numericField(
-                        el.fieldKind == .name ? "宽（换行）" : "宽",
+                        el.fieldKind == .name ? L10n.ui("宽（换行）") : L10n.ui("宽"),
                         value: el.frame.width,
                         range: 36...max(36, paper.width),
                         step: 4
@@ -750,7 +750,7 @@ struct POSReceiptTemplateView: View {
                         applyNameOrElementWidth(id: elementId, width: max(36, w), isName: el.fieldKind == .name)
                     }
                     numericField(
-                        "高",
+                        L10n.ui("高"),
                         value: el.frame.height,
                         range: 22...800,
                         step: 1
@@ -759,31 +759,31 @@ struct POSReceiptTemplateView: View {
                     }
                 }
                 if el.fieldKind == .name {
-                    Text("加宽「项目」会压缩数量/金额列；总宽不超过纸面。拖右下角或改「宽」即可。")
+                    Text(L10n.ui("加宽「项目」会压缩数量/金额列；总宽不超过纸面。拖右下角或改「宽」即可。"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                Text(locked ? "已锁定：不可拖动或改 X/Y" : "单位：点（与预览纸面一致）；箭头可微调")
+                Text(locked ? L10n.ui("已锁定：不可拖动或改 X/Y") : L10n.ui("单位：点（与预览纸面一致）；箭头可微调"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
             if el.kind != .divider && el.kind != .logo {
-                labeled("大小") {
+                labeled(L10n.ui("大小")) {
                     fontSizeCombo(elementId: elementId, current: el.fontSize)
                 }
-                Toggle("粗体", isOn: Binding(
+                Toggle(L10n.ui("粗体"), isOn: Binding(
                     get: { elementValue(id: elementId, \.isBold, default: false) },
                     set: { newValue in updateElement(id: elementId) { $0.isBold = newValue } }
                 ))
-                labeled("对齐") {
+                labeled(L10n.ui("对齐")) {
                     Picker("", selection: Binding(
                         get: { elementValue(id: elementId, \.alignment, default: 0) },
                         set: { newValue in updateElement(id: elementId) { $0.alignment = newValue } }
                     )) {
-                        Text("左对齐").tag(0)
-                        Text("居中").tag(1)
-                        Text("右对齐").tag(2)
+                        Text(L10n.ui("左对齐")).tag(0)
+                        Text(L10n.ui("居中")).tag(1)
+                        Text(L10n.ui("右对齐")).tag(2)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
@@ -791,7 +791,7 @@ struct POSReceiptTemplateView: View {
             }
 
             if el.kind == .logo {
-                labeled("缩放 %") {
+                labeled(L10n.ui("缩放 %")) {
                     HStack(spacing: 8) {
                         TextField(
                             "",
@@ -817,24 +817,24 @@ struct POSReceiptTemplateView: View {
                         )
                         .labelsHidden()
                     }
-                    Text("相对导入时基准尺寸缩放，中心点保持不动")
+                    Text(L10n.ui("相对导入时基准尺寸缩放，中心点保持不动"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
 
             if el.kind == .divider {
-                Toggle("虚线", isOn: Binding(
+                Toggle(L10n.ui("虚线"), isOn: Binding(
                     get: { elementValue(id: elementId, \.isDashed, default: false) },
                     set: { newValue in updateElement(id: elementId) { $0.isDashed = newValue } }
                 ))
-                Text("调整「宽」可改变横线打印长度")
+                Text(L10n.ui("调整「宽」可改变横线打印长度"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
             if el.kind == .textBox {
-                TextField("文字内容", text: Binding(
+                TextField(L10n.ui("文字内容"), text: Binding(
                     get: { elementValue(id: elementId, \.content, default: "") },
                     set: { newValue in updateElement(id: elementId) { $0.content = newValue } }
                 ))
@@ -842,7 +842,7 @@ struct POSReceiptTemplateView: View {
             }
 
             if el.kind == .date {
-                Picker("日期格式", selection: Binding(
+                Picker(L10n.ui("日期格式"), selection: Binding(
                     get: { elementValue(id: elementId, \.dateFormat, default: .ymdDash) },
                     set: { newValue in updateElement(id: elementId) { $0.dateFormat = newValue } }
                 )) {
@@ -853,20 +853,20 @@ struct POSReceiptTemplateView: View {
             }
 
             if el.kind == .autoNumber {
-                TextField("起始编号", text: Binding(
+                TextField(L10n.ui("起始编号"), text: Binding(
                     get: { elementValue(id: elementId, \.autoNumberStart, default: "01") },
                     set: { newValue in updateElement(id: elementId) { $0.autoNumberStart = newValue } }
                 ))
                 .textFieldStyle(.roundedBorder)
-                Toggle("转换为条码", isOn: Binding(
+                Toggle(L10n.ui("转换为条码"), isOn: Binding(
                     get: { elementValue(id: elementId, \.autoNumberAsBarcode, default: false) },
                     set: { newValue in updateElement(id: elementId) { $0.autoNumberAsBarcode = newValue } }
                 ))
             }
 
-            Button("删除元素", role: .destructive) {
+            Button(L10n.ui("删除元素"), role: .destructive) {
                 if el.kind == .fieldPlaceholder, el.fieldKind == .name {
-                    excelStatus = "项目名称占位符不可删除"
+                    excelStatus = L10n.ui("项目名称占位符不可删除")
                     return
                 }
                 let idToDelete = el.id
@@ -956,7 +956,7 @@ struct POSReceiptTemplateView: View {
             .frame(maxWidth: .infinity)
 
             TextField(
-                "大小",
+                L10n.ui("大小"),
                 text: Binding(
                     get: { String(Int(current.rounded())) },
                     set: { text in
@@ -1060,7 +1060,7 @@ struct POSReceiptTemplateView: View {
         [
             POSLineItem(
                 code: template.enableCode ? "1" : "",
-                name: "示例",
+                name: L10n.ui("示例"),
                 quantity: template.enableQuantity ? "1" : "",
                 amount: template.enableAmount ? "1.00" : ""
             )
@@ -1080,7 +1080,7 @@ struct POSReceiptTemplateView: View {
             ticketAutoNumber: autoNumber
         )
         previewPayload = PreviewPayload(image: result.previewImage)
-        excelStatus = "已生成打印预览（示例数据）"
+        excelStatus = L10n.ui("已生成打印预览（示例数据）")
     }
 
     private func syncToggles() {
@@ -1121,7 +1121,7 @@ struct POSReceiptTemplateView: View {
             kind: .textBox,
             frame: SequencePlaceholderFrame(x: 12, y: 20, width: 160, height: 28),
             zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1,
-            content: "文本"
+            content: L10n.ui("文本")
         )
         t.elements.append(el)
         session.editingTemplate = t
@@ -1169,7 +1169,7 @@ struct POSReceiptTemplateView: View {
     private func addAutoNumber() {
         guard var t = session.editingTemplate else { return }
         if t.elements.contains(where: { $0.kind == .autoNumber }) {
-            excelStatus = "已存在自动编号"
+            excelStatus = L10n.ui("已存在自动编号")
             return
         }
         let el = POSReceiptElement(
@@ -1286,7 +1286,7 @@ struct POSReceiptTemplateView: View {
         session.editingTemplate?.excelCachedHeaders = []
         session.editingTemplate?.excelColumnMap = POSExcelColumnMap()
         session.excelRowCount = nil
-        excelStatus = "已清除 Excel"
+        excelStatus = L10n.ui("已清除 Excel")
         if let t = session.editingTemplate {
             session.store.saveMeta(t)
             session.reloadTemplates()

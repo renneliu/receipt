@@ -16,7 +16,7 @@ struct PrintDiagnosticView: View {
             detailColumn
                 .frame(minWidth: 420)
         }
-        .navigationTitle("打印诊断")
+        .navigationTitle(L10n.ui("打印诊断"))
         .onAppear { appState.reloadDiagnostics() }
         .sheet(item: $comparison) { report in
             ComparisonReportView(report: report)
@@ -38,11 +38,11 @@ struct PrintDiagnosticView: View {
             .padding(8)
 
             if compareSelection.count == 2 {
-                Button("对比选中的两个作业") { runComparison() }
+                Button(L10n.ui("对比选中的两个作业")) { runComparison() }
                     .buttonStyle(.borderedProminent)
                     .padding(.bottom, 6)
             } else {
-                Text("勾选一个「正常」和一个「乱码」作业进行对比")
+                Text(L10n.ui("勾选一个「正常」和一个「乱码」作业进行对比"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 6)
@@ -111,7 +111,7 @@ struct PrintDiagnosticView: View {
                 Image(systemName: "stethoscope")
                     .font(.largeTitle)
                     .foregroundStyle(.secondary)
-                Text("选择一个打印作业查看诊断详情")
+                Text(L10n.ui("选择一个打印作业查看诊断详情"))
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -144,60 +144,60 @@ private struct DiagnosticDetailView: View {
                 }
 
                 HStack(spacing: 8) {
-                    Button("标记正常") { mark(.successful) }
-                    Button("标记乱码") { mark(.garbled) }
-                    Button("标记失败") { mark(.failed) }
+                    Button(L10n.ui("标记正常")) { mark(.successful) }
+                    Button(L10n.ui("标记乱码")) { mark(.garbled) }
+                    Button(L10n.ui("标记失败")) { mark(.failed) }
                     Spacer()
                 }
                 HStack(spacing: 8) {
-                    Button("打开诊断文件夹") { openFolder() }
-                    Button("导出诊断包") { exportPackage() }
-                    Button(role: .destructive) { appState.deleteDiagnostic(id: record.id) } label: { Text("删除") }
+                    Button(L10n.ui("打开诊断文件夹")) { openFolder() }
+                    Button(L10n.ui("导出诊断包")) { exportPackage() }
+                    Button(role: .destructive) { appState.deleteDiagnostic(id: record.id) } label: { Text(L10n.ui("删除")) }
                 }
 
                 Divider()
-                group("阶段哈希 (SHA-256)") {
-                    kv("内容 source", record.sourceSHA256)
-                    kv("图像 image", record.imageSHA256)
-                    kv("光栅 raster", record.rasterSHA256)
-                    kv("载荷 payload", record.payloadSHA256)
-                    kv("落盘 disk", record.diskSHA256)
+                group(L10n.ui("阶段哈希 (SHA-256)")) {
+                    kv(L10n.ui("内容 source"), record.sourceSHA256)
+                    kv(L10n.ui("图像 image"), record.imageSHA256)
+                    kv(L10n.ui("光栅 raster"), record.rasterSHA256)
+                    kv(L10n.ui("载荷 payload"), record.payloadSHA256)
+                    kv(L10n.ui("落盘 disk"), record.diskSHA256)
                 }
-                group("渲染") {
-                    kv("模式", record.renderMode.displayName)
-                    kv("用原生文本", String(record.usedNativeText))
-                    kv("用光栅", String(record.usedRaster))
-                    kv("图像像素", "\(record.imagePixelWidth) × \(record.imagePixelHeight)")
+                group(L10n.ui("渲染")) {
+                    kv(L10n.ui("模式"), record.renderMode.displayName)
+                    kv(L10n.ui("用原生文本"), String(record.usedNativeText))
+                    kv(L10n.ui("用光栅"), String(record.usedRaster))
+                    kv(L10n.ui("图像像素"), "\(record.imagePixelWidth) × \(record.imagePixelHeight)")
                 }
-                group("光栅 / GS v 0 头") {
-                    kv("每行字节 widthBytes", String(record.rasterWidthBytes))
-                    kv("高度 height", String(record.rasterHeight))
-                    kv("raster 字节数", String(record.rasterBytes))
+                group(L10n.ui("光栅 / GS v 0 头")) {
+                    kv(L10n.ui("每行字节 widthBytes"), String(record.rasterWidthBytes))
+                    kv(L10n.ui("高度 height"), String(record.rasterHeight))
+                    kv(L10n.ui("raster 字节数"), String(record.rasterBytes))
                     kv("xL/xH/yL/yH", "\(record.headerXL)/\(record.headerXH)/\(record.headerYL)/\(record.headerYH)")
-                    kv("期望字节数", String(record.expectedRasterBytes))
-                    kv("头有效", String(record.headerValid))
+                    kv(L10n.ui("期望字节数"), String(record.expectedRasterBytes))
+                    kv(L10n.ui("头有效"), String(record.headerValid))
                 }
-                group("载荷 / 传输") {
-                    kv("载荷字节", String(record.payloadBytes))
-                    kv("落盘字节", String(record.diskBytes))
-                    kv("补齐字节", String(record.padBytes))
-                    kv("写调用次数", String(record.writeCallCount))
-                    kv("完整性校验通过", String(record.payloadIntegrityOK))
-                    kv("lp 退出码", String(record.lpExitCode))
-                    kv("写入耗时(秒)", String(format: "%.3f", record.writeDurationSeconds))
-                    kv("并发观测值", String(record.observedConcurrency))
-                    kv("清队列", String(record.didClearQueue))
-                    kv("作业期间状态轮询", String(record.statusPollingPausedDuringJob))
-                    if let err = record.transportError { kv("传输错误", err) }
+                group(L10n.ui("载荷 / 传输")) {
+                    kv(L10n.ui("载荷字节"), String(record.payloadBytes))
+                    kv(L10n.ui("落盘字节"), String(record.diskBytes))
+                    kv(L10n.ui("补齐字节"), String(record.padBytes))
+                    kv(L10n.ui("写调用次数"), String(record.writeCallCount))
+                    kv(L10n.ui("完整性校验通过"), String(record.payloadIntegrityOK))
+                    kv(L10n.ui("lp 退出码"), String(record.lpExitCode))
+                    kv(L10n.ui("写入耗时(秒)"), String(format: "%.3f", record.writeDurationSeconds))
+                    kv(L10n.ui("并发观测值"), String(record.observedConcurrency))
+                    kv(L10n.ui("清队列"), String(record.didClearQueue))
+                    kv(L10n.ui("作业期间状态轮询"), String(record.statusPollingPausedDuringJob))
+                    if let err = record.transportError { kv(L10n.ui("传输错误"), err) }
                 }
-                group("打印机") {
-                    kv("名称", record.printerName)
-                    kv("连接", record.connectionType)
+                group(L10n.ui("打印机")) {
+                    kv(L10n.ui("名称"), record.printerName)
+                    kv(L10n.ui("连接"), record.connectionType)
                     kv("DPI", String(record.dpi))
-                    kv("可打印宽度(点)", String(record.printableWidthDots))
+                    kv(L10n.ui("可打印宽度(点)"), String(record.printableWidthDots))
                 }
                 if !record.sourceTextPreview.isEmpty {
-                    group("内容预览") {
+                    group(L10n.ui("内容预览")) {
                         Text(record.sourceTextPreview)
                             .font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled)
@@ -254,16 +254,16 @@ private struct ComparisonReportView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("对比报告").font(.title3).bold()
+                Text(L10n.ui("对比报告")).font(.title3).bold()
                 Spacer()
-                Button("关闭") { dismiss() }
+                Button(L10n.ui("关闭")) { dismiss() }
             }
             .padding()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("结论").font(.headline)
+                        Text(L10n.ui("结论")).font(.headline)
                         Text(report.classification)
                             .font(.body)
                             .padding(8)

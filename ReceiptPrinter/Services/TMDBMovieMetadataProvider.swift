@@ -6,6 +6,8 @@ struct MovieSearchResult: Identifiable, Codable, Equatable {
     var originalTitle: String?
     var year: String
     var runtimeMinutes: Int
+    /// AU-preferred classification (e.g. `M`, `PG`, `MA15+`).
+    var certification: String?
     var posterURL: String?
 }
 
@@ -25,8 +27,26 @@ struct TMDBMovieMetadataProvider: MovieMetadataService {
 
     func search(title: String) async throws -> [MovieSearchResult] {
         guard !apiKey.isEmpty else { throw TMDBError.missingAPIKey }
-        let query = title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? title
-        let url = URL(string: "https://api.themoviedb.org/3/search/movie?api_key=\(apiKey)&query=\(query)&language=zh-CN")!
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        // Prefer zh-CN; if empty, retry en-US (English titles often miss under zh-CN query).
+        var results = try await searchOnce(query: trimmed, language: "zh-CN")
+        if results.isEmpty {
+            results = try await searchOnce(query: trimmed, language: "en-US")
+        }
+        return results
+    }
+
+    private func searchOnce(query: String, language: String) async throws -> [MovieSearchResult] {
+        var components = URLComponents(string: "https://api.themoviedb.org/3/search/movie")!
+        components.queryItems = [
+            URLQueryItem(name: "api_key", value: apiKey),
+            URLQueryItem(name: "query", value: query),
+            URLQueryItem(name: "language", value: language),
+            URLQueryItem(name: "include_adult", value: "false")
+        ]
+        guard let url = components.url else { throw TMDBError.requestFailed }
         let (data, response) = try await URLSession.shared.data(from: url)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw TMDBError.requestFailed
@@ -34,30 +54,86 @@ struct TMDBMovieMetadataProvider: MovieMetadataService {
         let decoded = try JSONDecoder().decode(TMDBSearchResponse.self, from: data)
         var results: [MovieSearchResult] = []
         for item in decoded.results.prefix(12) {
-            let runtime = try await runtime(for: item.id) ?? item.runtime ?? 0
-            cache.store(movieID: item.id, runtime: runtime)
+            let details = try await movieDetails(for: item.id)
+            let runtime = details.runtime ?? item.runtime ?? 0
+            if runtime > 0 {
+                cache.store(movieID: item.id, runtime: runtime)
+            }
             results.append(MovieSearchResult(
                 id: item.id,
                 title: item.title,
                 originalTitle: item.originalTitle,
                 year: yearString(from: item.releaseDate),
                 runtimeMinutes: runtime,
+                certification: details.certification,
                 posterURL: posterPath(item.posterPath)
             ))
         }
-        return results.filter { $0.runtimeMinutes > 0 }
+        // Keep zero-runtime rows so the user can still pick a title; sheet shows "— 分钟".
+        return results
     }
 
     func runtime(for movieID: Int) async throws -> Int? {
         if let cached = cache.runtime(for: movieID) { return cached }
-        guard !apiKey.isEmpty else { throw TMDBError.missingAPIKey }
-        let url = URL(string: "https://api.themoviedb.org/3/movie/\(movieID)?api_key=\(apiKey)&language=zh-CN")!
-        let (data, response) = try await URLSession.shared.data(from: url)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
-        let detail = try JSONDecoder().decode(TMDBMovieDetail.self, from: data)
-        if let runtime = detail.runtime, runtime > 0 {
+        let details = try await movieDetails(for: movieID)
+        if let runtime = details.runtime, runtime > 0 {
             cache.store(movieID: movieID, runtime: runtime)
             return runtime
+        }
+        return nil
+    }
+
+    func certification(for movieID: Int) async throws -> String? {
+        try await movieDetails(for: movieID).certification
+    }
+
+    private struct MovieDetails {
+        var runtime: Int?
+        var certification: String?
+    }
+
+    private func movieDetails(for movieID: Int) async throws -> MovieDetails {
+        guard !apiKey.isEmpty else { throw TMDBError.missingAPIKey }
+        var components = URLComponents(string: "https://api.themoviedb.org/3/movie/\(movieID)")!
+        components.queryItems = [
+            URLQueryItem(name: "api_key", value: apiKey),
+            URLQueryItem(name: "language", value: "zh-CN"),
+            URLQueryItem(name: "append_to_response", value: "release_dates")
+        ]
+        guard let url = components.url else { throw TMDBError.requestFailed }
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            return MovieDetails(runtime: nil, certification: nil)
+        }
+        let detail = try JSONDecoder().decode(TMDBMovieDetail.self, from: data)
+        return MovieDetails(
+            runtime: detail.runtime,
+            certification: Self.preferredCertification(from: detail.releaseDates)
+        )
+    }
+
+    /// Prefer AU cinema ratings (M / PG / MA15+…), then NZ / GB / US.
+    static func preferredCertification(from payload: TMDBReleaseDatesPayload?) -> String? {
+        guard let countries = payload?.results, !countries.isEmpty else { return nil }
+        let preferred = ["AU", "NZ", "GB", "US"]
+        for code in preferred {
+            if let cert = firstNonEmptyCertification(in: countries.first { $0.iso3166 == code }) {
+                return cert
+            }
+        }
+        for country in countries {
+            if let cert = firstNonEmptyCertification(in: country) {
+                return cert
+            }
+        }
+        return nil
+    }
+
+    private static func firstNonEmptyCertification(in country: TMDBReleaseCountry?) -> String? {
+        guard let country else { return nil }
+        for entry in country.releaseDates {
+            let c = entry.certification.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !c.isEmpty { return c }
         }
         return nil
     }
@@ -107,6 +183,30 @@ private struct TMDBSearchItem: Decodable {
 
 private struct TMDBMovieDetail: Decodable {
     let runtime: Int?
+    let releaseDates: TMDBReleaseDatesPayload?
+
+    enum CodingKeys: String, CodingKey {
+        case runtime
+        case releaseDates = "release_dates"
+    }
+}
+
+struct TMDBReleaseDatesPayload: Decodable {
+    let results: [TMDBReleaseCountry]
+}
+
+struct TMDBReleaseCountry: Decodable {
+    let iso3166: String
+    let releaseDates: [TMDBReleaseDateEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case iso3166 = "iso_3166_1"
+        case releaseDates = "release_dates"
+    }
+}
+
+struct TMDBReleaseDateEntry: Decodable {
+    let certification: String
 }
 
 final class MovieRuntimeCache {

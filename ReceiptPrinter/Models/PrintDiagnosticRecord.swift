@@ -11,10 +11,10 @@ enum PrintResultLabel: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .unknown: return "未标记"
-        case .successful: return "打印正常"
-        case .garbled: return "打印乱码"
-        case .failed: return "打印失败"
+        case .unknown: return L10n.ui("未标记")
+        case .successful: return L10n.ui("打印正常")
+        case .garbled: return L10n.ui("打印乱码")
+        case .failed: return L10n.ui("打印失败")
         }
     }
 }
@@ -26,9 +26,9 @@ enum PrintRenderMode: String, Codable {
 
     var displayName: String {
         switch self {
-        case .raster: return "位图光栅 (raster)"
-        case .nativeText: return "原生文本 (native text)"
-        case .mixed: return "混合 (mixed)"
+        case .raster: return L10n.ui("位图光栅 (raster)")
+        case .nativeText: return L10n.ui("原生文本 (native text)")
+        case .mixed: return L10n.ui("混合 (mixed)")
         }
     }
 }

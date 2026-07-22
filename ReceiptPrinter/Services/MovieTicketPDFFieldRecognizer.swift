@@ -11,6 +11,26 @@ enum MovieTicketPDFFieldRecognizer {
         var extractKeyword: String
     }
 
+    /// Run page-text detectors without a PDF (unit tests + diagnostics).
+    static func detectFromPageText(_ fieldKind: MovieTicketFieldKind, text: String) -> String? {
+        let full = text
+        switch fieldKind {
+        case .movieTitle: return detectMovieTitle(in: full)?.value
+        case .hall:
+            return firstRegex(in: full, #"(?i)\bScreen\s+\d+\b"#)
+                ?? firstRegex(in: full, #"(?i)\bIMAX\s+Sydney\b"#)
+                ?? firstRegex(in: full, #"(?i)\bCinema\s+\d+\b"#)
+        case .seatArea: return detectSeat(in: full)?.value
+        case .ticketType: return detectTicketType(in: full)?.value
+        case .showDate: return MovieTicketPDFRecognitionService.dateOnly(from: full)
+        case .endTime: return detectEndTime(in: full)?.value
+        case .startTime, .timeRange:
+            return MovieTicketPDFRecognitionService.clockOnly(from: full)
+        default:
+            return nil
+        }
+    }
+
     /// Attempt page-wide feature detection for a field. Nil = ask user to box-select.
     static func autoDetect(
         fieldKind: MovieTicketFieldKind,
@@ -38,11 +58,11 @@ enum MovieTicketPDFFieldRecognizer {
             // Barcode / QR print content comes from the same booking serial.
             return detectSerial(in: full)
         case .startTime, .timeRange:
-            return detectStartTime(in: full, page: page)
+            return detectStartTime(in: full, page: page, includeDate: false)
         case .showDate:
             return detectShowDate(in: full, page: page)
         case .endTime:
-            return nil
+            return detectEndTime(in: full)
         }
     }
 
@@ -69,8 +89,23 @@ enum MovieTicketPDFFieldRecognizer {
             valueMappings: previous?.valueMappings ?? [],
             printPrefix: previous?.printPrefix ?? "",
             printSuffix: previous?.printSuffix ?? "",
-            isPageWideAuto: true
+            isPageWideAuto: true,
+            recognizeDate: previous?.recognizeDate
         )
+    }
+
+    /// Auto-detect with optional date for time fields (respects「同时识别日期」).
+    static func autoDetect(
+        fieldKind: MovieTicketFieldKind,
+        from url: URL,
+        includeDateWithTime: Bool
+    ) -> Hit? {
+        guard fieldKind == .startTime || fieldKind == .timeRange else {
+            return autoDetect(fieldKind: fieldKind, from: url)
+        }
+        guard let doc = PDFDocument(url: url), let page = doc.page(at: 0) else { return nil }
+        let full = page.string ?? ""
+        return detectStartTime(in: full, page: page, includeDate: includeDateWithTime)
     }
 
     // MARK: - Field detectors
@@ -93,6 +128,42 @@ enum MovieTicketPDFFieldRecognizer {
             }
         }
 
+        // Web ticket: title near the SHOWING heading (PDF text order is often jumbled).
+        if let showingHit = titleNearShowingLabel(in: full) {
+            return showingHit
+        }
+
+        // Event / Dendy: title is the line under TICKETS (before the session date line).
+        if let re = try? NSRegularExpression(
+            pattern: #"(?im)^TICKETS\s*\n([^\n]{2,80})\n"#
+        ),
+           let match = re.firstMatch(
+            in: full,
+            range: NSRange(location: 0, length: (full as NSString).length)
+           ),
+           match.numberOfRanges > 1,
+           let r = Range(match.range(at: 1), in: full) {
+            let title = String(full[r]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if isPlausibleTitle(title) {
+                return Hit(value: title, keywords: ["TICKETS"], extractKind: .entire, extractKeyword: "")
+            }
+        }
+
+        // Line immediately above a weekday session line (skip labels like SHOWING).
+        if let re = try? NSRegularExpression(
+            pattern: #"(?m)^([^\n]{2,80})\n(?=(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b)"#
+        ) {
+            let ns = full as NSString
+            let matches = re.matches(in: full, range: NSRange(location: 0, length: ns.length))
+            for match in matches where match.numberOfRanges > 1 {
+                guard let r = Range(match.range(at: 1), in: full) else { continue }
+                let title = String(full[r]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if isPlausibleTitle(title) {
+                    return Hit(value: title, keywords: [], extractKind: .entire, extractKeyword: "")
+                }
+            }
+        }
+
         let anchors = ["YOUR TICKET TO", "YOUR TICKET", "TICKET TO"]
         for anchor in anchors {
             if let range = full.range(of: anchor, options: .caseInsensitive) {
@@ -112,6 +183,78 @@ enum MovieTicketPDFFieldRecognizer {
         return nil
     }
 
+    /// Prefer a plausible title near SHOWING (above first, then below before the session clock).
+    private static func titleNearShowingLabel(in full: String) -> Hit? {
+        let lower = full.lowercased()
+        guard let showing = lower.range(of: "showing") else { return nil }
+        let before = String(full[..<showing.lowerBound])
+        let after = String(full[showing.upperBound...])
+
+        let beforeLines = before
+            .components(separatedBy: CharacterSet.newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let afterLines = after
+            .components(separatedBy: CharacterSet.newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        var candidates: [(line: String, score: Int)] = []
+
+        // Closest lines above SHOWING score higher.
+        for (offset, line) in beforeLines.reversed().prefix(16).enumerated() {
+            guard isPlausibleTitle(line) else { continue }
+            candidates.append((line, 70 - offset + titleQualityBonus(line)))
+        }
+        // Lines under SHOWING until we hit schedule / cinema / seat chrome.
+        // Event web PDFs often put the real title here (chrome sits above SHOWING).
+        for (offset, line) in afterLines.prefix(10).enumerated() {
+            if looksLikeSessionOrVenueLine(line) { break }
+            guard isPlausibleTitle(line) else { continue }
+            candidates.append((line, 110 - offset + titleQualityBonus(line)))
+        }
+
+        guard let best = candidates.max(by: { $0.score < $1.score }) else { return nil }
+        return Hit(
+            value: best.line,
+            keywords: ["SHOWING"],
+            extractKind: .entire,
+            extractKeyword: ""
+        )
+    }
+
+    private static func looksLikeSessionOrVenueLine(_ line: String) -> Bool {
+        if MovieTicketPDFRecognitionService.dateOnly(from: line) != nil { return true }
+        if MovieTicketPDFRecognitionService.clockOnly(from: line) != nil { return true }
+        if line.range(of: #"(?i)\bCinema\s+\d+\b"#, options: .regularExpression) != nil { return true }
+        if line.range(of: #"(?i)\bScreen\s+\d+\b"#, options: .regularExpression) != nil { return true }
+        if line.range(of: #"(?i)\bRow\s+[A-Z]\s+Seat\b"#, options: .regularExpression) != nil { return true }
+        if line.range(of: #"(?i)^X\s*\d+\b"#, options: .regularExpression) != nil { return true }
+        if line.range(of: #"(?i)Ends?\s+at\b"#, options: .regularExpression) != nil { return true }
+        return false
+    }
+
+    /// Boost real film titles; demote generic UI phrases that slipped past the label list.
+    private static func titleQualityBonus(_ line: String) -> Int {
+        var score = 0
+        let words = line.split(whereSeparator: { $0.isWhitespace })
+        if words.count >= 2 { score += 8 }
+        if words.count >= 3 { score += 10 }
+        if line.range(
+            of: #"^(The|A|An)\s+"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            score += 20
+        }
+        if line.count >= 12 { score += 4 }
+        if line.count <= 4 { score -= 20 }
+        // Single generic two-word UI labels stay weak even if not blacklisted yet.
+        if words.count == 2, line.allSatisfy({ $0.isLetter || $0.isWhitespace || $0 == "," }) {
+            score -= 5
+        }
+        return score
+    }
+
     private static func looksLikeEmailSubjectTitle(_ s: String) -> Bool {
         s.range(of: #"\bat\s+\w+"#, options: [.regularExpression, .caseInsensitive]) != nil
     }
@@ -128,9 +271,15 @@ enum MovieTicketPDFFieldRecognizer {
         if let m = firstRegex(in: full, #"(?i)\bScreen\s+\d+\b"#) {
             return Hit(value: m, keywords: ["Screen"], extractKind: .entire, extractKeyword: "")
         }
-        // Venue line used as hall when no Screen N (IMAX Sydney tickets).
+        // IMAX venue line before generic "Cinema N" — Event emails often contain both
+        // (venue + unrelated Cinema digit noise). Prefer the explicit IMAX hall.
         if let m = firstRegex(in: full, #"(?i)\bIMAX\s+Sydney\b"#) {
-            return Hit(value: m, keywords: ["IMAX"], extractKind: .entire, extractKeyword: "")
+            return Hit(value: m, keywords: ["IMAX Sydney"], extractKind: .entire, extractKeyword: "")
+        }
+        // Event / Dendy: "X 1 Cinema 3 Row G Seat 7"
+        if let m = firstRegex(in: full, #"(?i)\bCinema\s+\d+\b"#) {
+            let cleaned = m.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            return Hit(value: cleaned, keywords: ["Cinema"], extractKind: .entire, extractKeyword: "")
         }
         return nil
     }
@@ -138,6 +287,21 @@ enum MovieTicketPDFFieldRecognizer {
     private static func detectSeat(in full: String) -> Hit? {
         if full.range(of: #"(?i)\bunallocated\b"#, options: .regularExpression) != nil {
             return Hit(value: "Unallocated", keywords: ["Seats"], extractKind: .entire, extractKeyword: "")
+        }
+        // Event / Dendy: "Row G Seat 7"
+        if let m = firstRegex(in: full, #"(?i)\bRow\s+([A-Z])\s+Seat\s+(\d{1,2})\b"#) {
+            if let re = try? NSRegularExpression(pattern: #"(?i)\bRow\s+([A-Z])\s+Seat\s+(\d{1,2})\b"#),
+               let match = re.firstMatch(
+                in: full,
+                range: NSRange(location: 0, length: (full as NSString).length)
+               ),
+               match.numberOfRanges > 2,
+               let r1 = Range(match.range(at: 1), in: full),
+               let r2 = Range(match.range(at: 2), in: full) {
+                let seat = "\(full[r1])\(full[r2])"
+                return Hit(value: seat, keywords: ["Seat", "Row"], extractKind: .entire, extractKeyword: "")
+            }
+            _ = m
         }
         if let range = full.range(of: "Seats", options: .caseInsensitive) {
             let after = String(full[range.upperBound...])
@@ -158,19 +322,43 @@ enum MovieTicketPDFFieldRecognizer {
     }
 
     private static func detectTicketType(in full: String) -> Hit? {
-        guard let re = try? NSRegularExpression(pattern: #"(?i)\d+x\s+[^\n]{3,60}"#),
-              let match = re.firstMatch(
-                in: full,
-                range: NSRange(location: 0, length: (full as NSString).length)
-              ),
-              let r = Range(match.range, in: full)
-        else { return nil }
-        let value = String(full[r]).trimmingCharacters(in: .whitespacesAndNewlines)
-        return Hit(value: value, keywords: [], extractKind: .entire, extractKeyword: "")
+        // Event / IMAX: "1x Cinebuzz - IMAX" — prefer before Member/Adult prose matches.
+        if let nx = firstRegex(in: full, #"(?i)\d+x\s+[^\n]{3,60}"#) {
+            let trimmed = nx.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.count >= 4 {
+                return Hit(value: trimmed, keywords: [], extractKind: .entire, extractKeyword: "")
+            }
+        }
+        // Named ticket categories (Adult Event, Child, …) — same line only.
+        if let m = firstRegex(
+            in: full,
+            #"(?i)\b((?:Adult|Child|Senior|Student|Concession|Member|Family)(?:[ \t]+\w+){0,3})\b"#
+        ) {
+            let trimmed = m.trimmingCharacters(in: .whitespacesAndNewlines)
+            if isPlausibleNamedTicketType(trimmed) {
+                return Hit(value: trimmed, keywords: [], extractKind: .entire, extractKeyword: "")
+            }
+        }
+        return nil
+    }
+
+    /// Reject instructional copy like "member as you exit" while keeping "Adult Event".
+    private static func isPlausibleNamedTicketType(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 4 else { return false }
+        let upper = trimmed.uppercased()
+        if upper.contains("CINEMA") { return false }
+        let lower = trimmed.lowercased()
+        if lower.contains(" as you ") || lower.contains(" please ") || lower.contains(" click ") {
+            return false
+        }
+        if lower.hasSuffix(" exit") || lower.contains(" thank ") { return false }
+        return true
     }
 
     private static func detectPrice(page: PDFPage, full: String) -> Hit? {
-        if let total = MovieTicketPDFRecognitionService.pageTotalCurrency(from: page) {
+        if let total = MovieTicketPDFRecognitionService.pageTotalCurrency(from: page)
+            ?? MovieTicketPDFRecognitionService.totalCurrency(fromPageText: full) {
             return Hit(
                 value: total,
                 keywords: ["Total"],
@@ -178,9 +366,10 @@ enum MovieTicketPDFFieldRecognizer {
                 extractKeyword: "Total"
             )
         }
-        if let m = firstRegex(in: full, #"(?i)Total(?:\s+cost)?\s*:?\s*\$?\s*(\d+\.\d{2})"#) {
+        // Whole dollars (Orpheum `Total 29`) and classic `$N.NN`.
+        if let m = firstRegex(in: full, #"(?i)Total(?:\s+cost)?\s*:?\s*(\$?\d+(?:\.\d{1,2})?)"#) {
             return Hit(
-                value: m.contains("$") ? m : "$\(m)",
+                value: m,
                 keywords: ["Total"],
                 extractKind: .currency,
                 extractKeyword: "Total"
@@ -240,7 +429,17 @@ enum MovieTicketPDFFieldRecognizer {
         return Hit(value: best, keywords: [], extractKind: .entire, extractKeyword: "")
     }
 
-    private static func detectStartTime(in full: String, page: PDFPage) -> Hit? {
+    private static func detectStartTime(in full: String, page: PDFPage, includeDate: Bool) -> Hit? {
+        if includeDate,
+           let session = MovieTicketPDFRecognitionService.pageSessionDateTime(from: page),
+           !session.isEmpty {
+            return Hit(
+                value: session,
+                keywords: ["Time", "SESSION DATE"],
+                extractKind: .entire,
+                extractKeyword: ""
+            )
+        }
         if let session = MovieTicketPDFRecognitionService.pageSessionDateTime(from: page),
            let clock = MovieTicketPDFRecognitionService.clockOnly(from: session)
             ?? MovieTicketPDFRecognitionService.clockOnly(from: full) {
@@ -275,6 +474,38 @@ enum MovieTicketPDFFieldRecognizer {
         return nil
     }
 
+    private static func detectEndTime(in full: String) -> Hit? {
+        // Dendy / Event: "Ends at 8:52 pm" or "(Ends at 8:52 pm)"
+        if let clock = firstRegex(
+            in: full,
+            #"(?i)Ends?\s+at\s+(\d{1,2}:\d{2}\s*[AP]M)"#
+        ) {
+            let normalized = MovieTicketPDFRecognitionService.clockOnly(from: clock)
+                ?? clock.trimmingCharacters(in: .whitespacesAndNewlines)
+            return Hit(
+                value: normalized,
+                keywords: ["Ends at", "Ends"],
+                extractKind: .entire,
+                extractKeyword: "Ends at"
+            )
+        }
+        // Orpheum-style "Until 10:36 pm"
+        if let clock = firstRegex(
+            in: full,
+            #"(?i)Until\s+(\d{1,2}:\d{2}\s*[AP]M)"#
+        ) {
+            let normalized = MovieTicketPDFRecognitionService.clockOnly(from: clock)
+                ?? clock.trimmingCharacters(in: .whitespacesAndNewlines)
+            return Hit(
+                value: normalized,
+                keywords: ["Until"],
+                extractKind: .entire,
+                extractKeyword: "Until"
+            )
+        }
+        return nil
+    }
+
     // MARK: - Helpers
 
     private static func firstMeaningfulLine(_ text: String) -> String {
@@ -293,6 +524,41 @@ enum MovieTicketPDFFieldRecognizer {
         if upper.hasPrefix("SEAT") || upper.hasPrefix("SCREEN") || upper.contains("CINEMA NUMBER") {
             return false
         }
+        if t.range(of: #"(?i)^Cinema\s+\d+$"#, options: .regularExpression) != nil {
+            return false
+        }
+        let labels: Set<String> = [
+            "SHOWING", "SESSION", "SESSION DATE", "SESSION TIME", "TICKETS", "ORDERS",
+            "HOME", "LOGOUT", "TAX INVOICE", "INVOICE", "ORDER", "ORDERS",
+            "ACCOUNT OVERVIEW", "ACCOUNT", "OVERVIEW", "MY ACCOUNT", "MY TICKETS",
+            "ORDER HISTORY", "ORDER DETAILS", "PAYMENT", "CHECKOUT", "CART",
+            "SIGN IN", "SIGN OUT", "LOG IN", "LOG OUT", "PROFILE", "SETTINGS",
+            "HELP", "SUPPORT", "MEMBERSHIP", "GIFT CARDS", "LOCATIONS",
+            "CURRENT UPCOMING", "CURRENT", "UPCOMING"
+        ]
+        if labels.contains(upper) || upper.hasPrefix("THANK YOU") || upper.contains("% OFF") {
+            return false
+        }
+        // Strip leading emoji / symbols before greeting checks ("👋 Hi, XIAOYU").
+        let letterStart = String(t.drop(while: { !$0.isLetter && !$0.isNumber }))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let letterUpper = letterStart.uppercased()
+        // Web chrome / account greeting / nav.
+        if letterUpper.hasPrefix("HI,") || letterUpper.hasPrefix("HI ")
+            || upper.contains("LOGOUT") || upper.contains("TAX INVOICE")
+            || upper.hasPrefix("X 1 ") || upper.contains("OVERVIEW")
+            || upper.contains("ACCOUNT") || upper.hasPrefix("ORDER ")
+            || upper.hasSuffix(" OVERVIEW") || upper.contains("MEMBERSHIP")
+            || upper.contains("VIEW & MANAGE") || upper.contains("VIEW AND MANAGE")
+            || upper.contains("CURRENT UPCOMING") || upper.hasPrefix("CURRENT ")
+            || t.contains("👋") {
+            return false
+        }
+        // Must contain at least one letter (reject icon-only / digit-only runs).
+        guard t.contains(where: \.isLetter) else { return false }
+        // Reject lines that are mostly emoji / symbols.
+        let letterCount = t.filter(\.isLetter).count
+        if letterCount < 3 { return false }
         return true
     }
 

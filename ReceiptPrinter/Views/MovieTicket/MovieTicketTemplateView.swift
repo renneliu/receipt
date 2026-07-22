@@ -91,34 +91,34 @@ struct MovieTicketTemplateView: View {
             printPreviewSheet
         }
         .confirmationDialog(
-            "恢复此模板的出厂布局？当前画布将被替换（可用撤销找回）。",
+            L10n.ui("恢复此模板的出厂布局？当前画布将被替换（可用撤销找回）。"),
             isPresented: $confirmFactoryReset,
             titleVisibility: .visible
         ) {
-            Button("恢复默认布局", role: .destructive) { resetToFactoryLayout() }
-            Button("取消", role: .cancel) {}
+            Button(L10n.ui("恢复默认布局"), role: .destructive) { resetToFactoryLayout() }
+            Button(L10n.ui("取消"), role: .cancel) {}
         }
         .confirmationDialog(
             deleteTemplateMessage,
             isPresented: $confirmDeleteTemplate,
             titleVisibility: .visible
         ) {
-            Button("删除模板", role: .destructive) { performDeleteTemplate() }
-            Button("取消", role: .cancel) {}
+            Button(L10n.ui("删除模板"), role: .destructive) { performDeleteTemplate() }
+            Button(L10n.ui("取消"), role: .cancel) {}
         }
         .confirmationDialog(
-            "模板有未保存的更改，是否保存？",
+            L10n.ui("模板有未保存的更改，是否保存？"),
             isPresented: $showUnsavedDialog,
             titleVisibility: .visible
         ) {
-            Button("保存") {
+            Button(L10n.ui("保存")) {
                 session.saveEditingTemplate()
                 status = session.message
                 let action = pendingLeaveAction
                 pendingLeaveAction = nil
                 action?()
             }
-            Button("不保存", role: .destructive) {
+            Button(L10n.ui("不保存"), role: .destructive) {
                 session.discardEditingChanges()
                 undoStack = []
                 clearSelection()
@@ -126,7 +126,7 @@ struct MovieTicketTemplateView: View {
                 pendingLeaveAction = nil
                 action?()
             }
-            Button("取消", role: .cancel) {
+            Button(L10n.ui("取消"), role: .cancel) {
                 pendingLeaveAction = nil
             }
         }
@@ -139,8 +139,8 @@ struct MovieTicketTemplateView: View {
             templateChrome
             toolBar
             Text(session.editingTemplate?.usesIMAXSydneyLayout == true
-                 ? "IMAX：Y 控制行序；票型+票价同行，左右位置跟画布 X。列表 ⌘/⇧ 多选。"
-                 : "列表支持 ⌘加减选 / ⇧连选；多选后可用方向键微调；拖拽可批量移动。")
+                 ? L10n.ui("IMAX：Y 控制行序；票型+票价同行，左右位置跟画布 X。列表 ⌘/⇧ 多选。")
+                 : L10n.ui("列表支持 ⌘加减选 / ⇧连选；多选后可用方向键微调；拖拽可批量移动。"))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             if selectedElementIds.count > 1 {
@@ -166,7 +166,7 @@ struct MovieTicketTemplateView: View {
     private var templateChrome: some View {
         HStack {
             if let t = session.editingTemplate {
-                TextField("模板名称", text: Binding(
+                TextField(L10n.ui("模板名称"), text: Binding(
                     get: { t.name },
                     set: { newValue in
                         var copy = t
@@ -178,15 +178,15 @@ struct MovieTicketTemplateView: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 220)
             }
-            Button("新建模板") {
+            Button(L10n.ui("新建模板")) {
                 requestLeaveEditing {
                     session.createTemplate()
                     undoStack = []
                     clearSelection()
-                    status = "已新建空白模板（请从工具栏添加字段）"
+                    status = L10n.ui("已新建空白模板（请从工具栏添加字段）")
                 }
             }
-            Button("复制模板") {
+            Button(L10n.ui("复制模板")) {
                 if let copied = session.duplicateTemplate() {
                     undoStack = []
                     clearSelection()
@@ -194,22 +194,22 @@ struct MovieTicketTemplateView: View {
                 }
             }
             .disabled(session.editingTemplate == nil)
-            .help("复制当前模板，名称形如 原名(1)")
-            Button("保存") {
+            .help(L10n.ui("复制当前模板，名称形如 原名(1)"))
+            Button(L10n.ui("保存")) {
                 session.saveEditingTemplate()
-                status = session.message.isEmpty ? "模板已保存" : session.message
+                status = session.message.isEmpty ? L10n.ui("模板已保存") : session.message
             }
-            Button("撤销") { performUndo() }
+            Button(L10n.ui("撤销")) { performUndo() }
                 .disabled(undoStack.isEmpty)
-                .help("撤回上一步画布或属性修改")
-            Button("默认布局") { confirmFactoryReset = true }
+                .help(L10n.ui("撤回上一步画布或属性修改"))
+            Button(L10n.ui("默认布局")) { confirmFactoryReset = true }
                 .disabled(session.editingTemplate == nil)
-                .help("恢复为应用生成的原始布局")
-            Button("删除模板", role: .destructive) {
+                .help(L10n.ui("恢复为应用生成的原始布局"))
+            Button(L10n.ui("删除模板"), role: .destructive) {
                 confirmDeleteTemplate = true
             }
             .disabled(session.editingTemplate == nil)
-            .help("删除当前模板（需确认）")
+            .help(L10n.ui("删除当前模板（需确认）"))
             Spacer()
             Picker(
                 "选用 (\(session.templates.count))",
@@ -242,9 +242,9 @@ struct MovieTicketTemplateView: View {
     private var toolBar: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Button("文字框") { addTextBox() }
-                Button("当前日期") { addCurrentDate() }
-                Button("当前时间") { addCurrentTime() }
+                Button(L10n.ui("文字框")) { addTextBox() }
+                Button(L10n.ui("当前日期")) { addCurrentDate() }
+                Button(L10n.ui("当前时间")) { addCurrentTime() }
                 ForEach([MovieTicketFieldKind.movieTitle, .showDate, .startTime, .endTime, .timeRange], id: \.self) { k in
                     Button(k.displayName) { addField(k) }
                 }
@@ -255,21 +255,21 @@ struct MovieTicketTemplateView: View {
                 }
             }
             HStack {
-                Toggle("参考网格", isOn: Binding(
+                Toggle(L10n.ui("参考网格"), isOn: Binding(
                     get: { session.editingTemplate?.gridEnabled ?? true },
                     set: { v in
                         session.editingTemplate?.gridEnabled = v
                         session.markEditingDirty()
                     }
                 ))
-                Button("背景图") { pickBackground() }
-                Button("清除背景") { session.setBackground(nil) }
+                Button(L10n.ui("背景图")) { pickBackground() }
+                Button(L10n.ui("清除背景")) { session.setBackground(nil) }
                 Button("Logo") { pickLogo() }
-                Button("对齐打印尺寸") {
+                Button(L10n.ui("对齐打印尺寸")) {
                     syncPlaceholderSizesToPrint(recordUndo: true)
-                    status = "已按打印字高对齐占位框"
+                    status = L10n.ui("已按打印字高对齐占位框")
                 }
-                Button("打印预览") { openPrintPreview() }
+                Button(L10n.ui("打印预览")) { openPrintPreview() }
                 Spacer(minLength: 8)
                 zoomControls
             }
@@ -279,14 +279,14 @@ struct MovieTicketTemplateView: View {
 
     private var zoomControls: some View {
         HStack(spacing: 4) {
-            Text("视图").font(.caption).foregroundStyle(.secondary)
+            Text(L10n.ui("视图")).font(.caption).foregroundStyle(.secondary)
             Button {
                 setZoom(displayScale - Self.zoomStep)
             } label: {
                 Image(systemName: "minus.magnifyingglass")
             }
             .disabled(displayScale <= Self.zoomMin + 0.001)
-            .help("缩小")
+            .help(L10n.ui("缩小"))
 
             Text("\(Int((displayScale * 100).rounded()))%")
                 .font(.caption.monospacedDigit())
@@ -298,13 +298,13 @@ struct MovieTicketTemplateView: View {
                 Image(systemName: "plus.magnifyingglass")
             }
             .disabled(displayScale >= Self.zoomMax - 0.001)
-            .help("放大")
+            .help(L10n.ui("放大"))
 
             Button("50%") { setZoom(0.5) }
             Button("100%") { setZoom(1) }
             Button("200%") { setZoom(2) }
-            Button("适应") { fitZoomToVisible() }
-                .help("按当前可视区域大致适配纸宽")
+            Button(L10n.ui("适应")) { fitZoomToVisible() }
+                .help(L10n.ui("按当前可视区域大致适配纸宽"))
         }
     }
 
@@ -349,13 +349,13 @@ struct MovieTicketTemplateView: View {
     private var printPreviewSheet: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("打印预览").font(.headline)
+                Text(L10n.ui("打印预览")).font(.headline)
                 Spacer()
-                Button("刷新") { regeneratePrintPreview() }
-                Button("关闭") { showPrintPreview = false }
+                Button(L10n.ui("刷新")) { regeneratePrintPreview() }
+                Button(L10n.ui("关闭")) { showPrintPreview = false }
                     .keyboardShortcut(.cancelAction)
             }
-            Text("按 ESC/POS 内置 Font A + 放大倍率模拟的真实打印序列（与发往打印机的指令一致）。左侧画布仅为占位符。")
+            Text(L10n.ui("按 ESC/POS 内置 Font A + 放大倍率模拟的真实打印序列（与发往打印机的指令一致）。左侧画布仅为占位符。"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             ScrollView([.vertical, .horizontal]) {
@@ -368,7 +368,7 @@ struct MovieTicketTemplateView: View {
                         .border(Color.secondary.opacity(0.35))
                         .padding(8)
                 } else {
-                    ProgressView("生成预览…")
+                    ProgressView(L10n.ui("生成预览…"))
                         .frame(maxWidth: .infinity, minHeight: 200)
                 }
             }
@@ -528,7 +528,7 @@ struct MovieTicketTemplateView: View {
                           session.editingTemplate?.elements.contains(where: { $0.id == id }) == true {
                     elementInspector(elementId: id)
                 } else {
-                    Text("从画布或下方列表选中元素以编辑属性；⌘点击可多选")
+                    Text(L10n.ui("从画布或下方列表选中元素以编辑属性；⌘点击可多选"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -543,9 +543,9 @@ struct MovieTicketTemplateView: View {
 
     private var templateProps: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("模板属性").font(.headline)
+            Text(L10n.ui("模板属性")).font(.headline)
             if session.editingTemplate != nil {
-                labeled("画布高度") {
+                labeled(L10n.ui("画布高度")) {
                     Slider(
                         value: Binding(
                             get: { Double(session.editingTemplate?.canvasHeight ?? 560) },
@@ -558,7 +558,7 @@ struct MovieTicketTemplateView: View {
                         step: 20
                     )
                 }
-                labeled("无特定座位文案") {
+                labeled(L10n.ui("无特定座位文案")) {
                     TextField("General Admission", text: Binding(
                         get: { session.editingTemplate?.unallocatedSeatLabel ?? "" },
                         set: {
@@ -568,10 +568,10 @@ struct MovieTicketTemplateView: View {
                     ))
                     .textFieldStyle(.roundedBorder)
                 }
-                labeled("切纸前走纸") {
+                labeled(L10n.ui("切纸前走纸")) {
                     HStack(spacing: 8) {
                         Stepper(
-                            "\(session.editingTemplate?.resolvedFeedLinesBeforeCut(config: appState.settings.printerConfig) ?? 0) 行",
+                            "\(session.editingTemplate?.resolvedFeedLinesBeforeCut(config: appState.settings.printerConfig) ?? 0) \(L10n.ui("行"))",
                             value: Binding(
                                 get: {
                                     session.editingTemplate?.resolvedFeedLinesBeforeCut(
@@ -588,7 +588,7 @@ struct MovieTicketTemplateView: View {
                         )
                     }
                 }
-                Text("打印结束后再走纸再切刀；数值越小票尾越短，过小可能裁到内容。")
+                Text(L10n.ui("打印结束后再走纸再切刀；数值越小票尾越短，过小可能裁到内容。"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -597,12 +597,12 @@ struct MovieTicketTemplateView: View {
 
     private var multiSelectInspector: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("已选中 \(selectedElementIds.count) 个元素").font(.headline)
-            Text("列表：⌘加减选 · ⇧连选；画布拖拽可批量移动。")
+            Text("\(L10n.ui("已选中")) \(selectedElementIds.count)\(L10n.ui("个元素"))").font(.headline)
+            Text(L10n.ui("列表：⌘加减选 · ⇧连选；画布拖拽可批量移动。"))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             selectionNudgeControls
-            Button("删除选中", role: .destructive) {
+            Button(L10n.ui("删除选中"), role: .destructive) {
                 deleteSelectedElements()
             }
         }
@@ -615,7 +615,7 @@ struct MovieTicketTemplateView: View {
                 .font(.caption.weight(.semibold))
             selectionNudgeControls
             Spacer(minLength: 0)
-            Button("清除选中") { clearSelection() }
+            Button(L10n.ui("清除选中")) { clearSelection() }
                 .font(.caption)
         }
         .padding(.horizontal, 8)
@@ -626,7 +626,7 @@ struct MovieTicketTemplateView: View {
 
     private var selectionNudgeControls: some View {
         HStack(spacing: 6) {
-            Text("微调").font(.caption2).foregroundStyle(.secondary)
+            Text(L10n.ui("微调")).font(.caption2).foregroundStyle(.secondary)
             Picker("", selection: $nudgeStep) {
                 Text("1pt").tag(CGFloat(1))
                 Text("5pt").tag(CGFloat(5))
@@ -652,18 +652,18 @@ struct MovieTicketTemplateView: View {
                 .frame(width: 22, height: 22)
         }
         .buttonStyle(.bordered)
-        .help("移动选中元素")
+        .help(L10n.ui("移动选中元素"))
     }
 
     private var elementListSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("元素列表").font(.headline)
-            Text("⌘点击加减选 · ⇧点击连选")
+            Text(L10n.ui("元素列表")).font(.headline)
+            Text(L10n.ui("⌘点击加减选 · ⇧点击连选"))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             let elements = (session.editingTemplate?.elements ?? []).sorted(by: { $0.zIndex < $1.zIndex })
             if elements.isEmpty {
-                Text("暂无元素").font(.caption).foregroundStyle(.secondary)
+                Text(L10n.ui("暂无元素")).font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(elements) { el in
                     Button {
@@ -691,15 +691,15 @@ struct MovieTicketTemplateView: View {
         }
         return AnyView(
             VStack(alignment: .leading, spacing: 10) {
-                Text("元素：\(elementTitle(el))").font(.headline)
-                labeled("显示名称") {
-                    TextField("可选", text: Binding(
+                Text("\(L10n.ui("元素："))\(elementTitle(el))").font(.headline)
+                labeled(L10n.ui("显示名称")) {
+                    TextField(L10n.ui("可选"), text: Binding(
                         get: { elementValue(id: elementId, \.displayName, default: "") },
                         set: { v in updateElement(id: elementId) { $0.displayName = v } }
                     ))
                     .textFieldStyle(.roundedBorder)
                 }
-                Toggle("锁定位置", isOn: Binding(
+                Toggle(L10n.ui("锁定位置"), isOn: Binding(
                     get: { elementValue(id: elementId, \.isLocked, default: false) },
                     set: { v in updateElement(id: elementId) { $0.isLocked = v } }
                 ))
@@ -723,12 +723,12 @@ struct MovieTicketTemplateView: View {
                         }
                     }
                 }
-                Text("元素可重叠放置；重叠时打印不再插入额外空行，便于压缩行距。")
+                Text(L10n.ui("元素可重叠放置；重叠时打印不再插入额外空行，便于压缩行距。"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
                 if el.kind == .logo {
-                    labeled("缩放 %") {
+                    labeled(L10n.ui("缩放 %")) {
                         HStack(spacing: 8) {
                             TextField(
                                 "",
@@ -754,34 +754,34 @@ struct MovieTicketTemplateView: View {
                             )
                             .labelsHidden()
                         }
-                        Text("相对导入时基准尺寸缩放，中心点保持不动；彩色图导入时自动转黑白")
+                        Text(L10n.ui("相对导入时基准尺寸缩放，中心点保持不动；彩色图导入时自动转黑白"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                 } else {
                     HStack {
-                        labeled("宽") {
+                        labeled(L10n.ui("宽")) {
                             NumericField(value: Double(el.frame.width), range: 36...2000) { v in
                                 updateElement(id: elementId) { $0.frame.width = CGFloat(v) }
                             }
                             .frame(width: 64)
                         }
-                        labeled("高") {
+                        labeled(L10n.ui("高")) {
                             NumericField(value: Double(el.frame.height), range: 12...2000) { v in
                                 updateElement(id: elementId) { $0.frame.height = CGFloat(v) }
                             }
                             .frame(width: 64)
                         }
                     }
-                    Text("宽高可独立调整（非等比例）")
+                    Text(L10n.ui("宽高可独立调整（非等比例）"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
 
                     let isBarcodeOrQR = el.fieldKind == .barcode || el.fieldKind == .qrCode
                     if isBarcodeOrQR {
                         Text(el.fieldKind == .barcode
-                             ? "条码高度由上方「高」控制，会随保存保留；与文字 1×/2×/3× 无关。"
-                             : "二维码尺寸由宽高控制。")
+                             ? L10n.ui("条码高度由上方「高」控制，会随保存保留；与文字 1×/2×/3× 无关。")
+                             : L10n.ui("二维码尺寸由宽高控制。"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     } else {
@@ -791,7 +791,7 @@ struct MovieTicketTemplateView: View {
                         )
                         let paperW = session.editingTemplate?.paperSize.width ?? 302
                         let dots = appState.settings.printerConfig.dotsPerLine
-                        labeled("打印宽") {
+                        labeled(L10n.ui("打印宽")) {
                             Picker("", selection: Binding(
                                 get: { printScale.width },
                                 set: { level in
@@ -816,7 +816,7 @@ struct MovieTicketTemplateView: View {
                             .pickerStyle(.segmented)
                             .labelsHidden()
                         }
-                        labeled("打印高") {
+                        labeled(L10n.ui("打印高")) {
                             Picker("", selection: Binding(
                                 get: { printScale.height },
                                 set: { level in
@@ -834,48 +834,48 @@ struct MovieTicketTemplateView: View {
                             .pickerStyle(.segmented)
                             .labelsHidden()
                         }
-                        Text("内置字体仅 1×/2×/3×；占位框高=打印字高；当前 \(printScale.width)×\(printScale.height)")
+                        Text("\(L10n.ui("内置字体仅 1×/2×/3×；占位框高=打印字高；当前")) \(printScale.width)×\(printScale.height)")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                     if !isBarcodeOrQR {
-                        Toggle("粗体", isOn: Binding(
+                        Toggle(L10n.ui("粗体"), isOn: Binding(
                             get: { elementValue(id: elementId, \.isBold, default: false) },
                             set: { v in updateElement(id: elementId) { $0.isBold = v } }
                         ))
                     }
-                    labeled("对齐") {
+                    labeled(L10n.ui("对齐")) {
                         Picker("", selection: Binding(
                             get: { elementValue(id: elementId, \.alignment, default: 0) },
                             set: { v in updateElement(id: elementId) { $0.alignment = v } }
                         )) {
-                            Text("左对齐").tag(0)
-                            Text("居中").tag(1)
-                            Text("右对齐").tag(2)
+                            Text(L10n.ui("左对齐")).tag(0)
+                            Text(L10n.ui("居中")).tag(1)
+                            Text(L10n.ui("右对齐")).tag(2)
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
                     }
                     if el.kind == .textBox || el.kind == .fieldPlaceholder || el.kind == .currentDate || el.kind == .currentTime {
-                        Toggle("反色 Invert", isOn: Binding(
+                        Toggle(L10n.ui("反色 Invert"), isOn: Binding(
                             get: { elementValue(id: elementId, \.isInverted, default: false) },
                             set: { v in updateElement(id: elementId) { $0.isInverted = v } }
                         ))
                     }
                     if el.fieldKind == .movieTitle {
-                        Toggle("片名限制单行（超出隐藏）", isOn: Binding(
+                        Toggle(L10n.ui("片名限制单行（超出隐藏）"), isOn: Binding(
                             get: {
                                 session.editingTemplate?.elements
                                     .first(where: { $0.id == elementId })?.singleLineClip != false
                             },
                             set: { v in updateElement(id: elementId) { $0.singleLineClip = v } }
                         ))
-                        Text("开启后，片名只显示一行，超出元素框的部分不打印")
+                        Text(L10n.ui("开启后，片名只显示一行，超出元素框的部分不打印"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                     if el.fieldKind == .hall {
-                        Picker("影厅显示", selection: Binding(
+                        Picker(L10n.ui("影厅显示"), selection: Binding(
                             get: {
                                 session.editingTemplate?.elements
                                     .first(where: { $0.id == elementId })?.hallDisplayMode
@@ -890,7 +890,7 @@ struct MovieTicketTemplateView: View {
                         if (session.editingTemplate?.elements
                             .first(where: { $0.id == elementId })?.hallDisplayMode
                             ?? .cinemaNumber) == .customPrefix {
-                            TextField("数字前缀（如 Screen 或 C）", text: Binding(
+                            TextField(L10n.ui("数字前缀（如 Screen 或 C）"), text: Binding(
                                 get: {
                                     session.editingTemplate?.elements
                                         .first(where: { $0.id == elementId })?.hallNumberPrefix ?? ""
@@ -913,14 +913,14 @@ struct MovieTicketTemplateView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     }
                     if el.kind == .textBox {
-                        TextField("文字内容", text: Binding(
+                        TextField(L10n.ui("文字内容"), text: Binding(
                             get: { elementValue(id: elementId, \.content, default: "") },
                             set: { v in updateElement(id: elementId) { $0.content = v } }
                         ))
                         .textFieldStyle(.roundedBorder)
                     }
                     if el.kind == .currentDate || el.fieldKind == .showDate {
-                        Picker("日期格式", selection: Binding(
+                        Picker(L10n.ui("日期格式"), selection: Binding(
                             get: { elementValue(id: elementId, \.dateFormat, default: .eeeMMMd) },
                             set: { v in updateElement(id: elementId) { $0.dateFormat = v } }
                         )) {
@@ -928,7 +928,7 @@ struct MovieTicketTemplateView: View {
                         }
                     }
                     if el.kind == .currentTime || el.fieldKind == .startTime || el.fieldKind == .endTime {
-                        Picker("时间格式", selection: Binding(
+                        Picker(L10n.ui("时间格式"), selection: Binding(
                             get: { elementValue(id: elementId, \.timeFormat, default: .hmma) },
                             set: { v in updateElement(id: elementId) { $0.timeFormat = v } }
                         )) {
@@ -936,26 +936,26 @@ struct MovieTicketTemplateView: View {
                         }
                     }
                     if el.fieldKind == .timeRange {
-                        Picker("开始格式", selection: Binding(
+                        Picker(L10n.ui("开始格式"), selection: Binding(
                             get: { elementValue(id: elementId, \.rangeStartFormat, default: .hmma) },
                             set: { v in updateElement(id: elementId) { $0.rangeStartFormat = v } }
                         )) {
                             ForEach(MovieTicketTimeFormat.allCases) { Text($0.displayName).tag($0) }
                         }
-                        Picker("结束格式", selection: Binding(
+                        Picker(L10n.ui("结束格式"), selection: Binding(
                             get: { elementValue(id: elementId, \.rangeEndFormat, default: .hmma) },
                             set: { v in updateElement(id: elementId) { $0.rangeEndFormat = v } }
                         )) {
                             ForEach(MovieTicketTimeFormat.allCases) { Text($0.displayName).tag($0) }
                         }
-                        TextField("连接词", text: Binding(
+                        TextField(L10n.ui("连接词"), text: Binding(
                             get: { elementValue(id: elementId, \.rangeConnector, default: " - ") },
                             set: { v in updateElement(id: elementId) { $0.rangeConnector = v } }
                         ))
                         .textFieldStyle(.roundedBorder)
                     }
                 }
-                Button("删除元素", role: .destructive) {
+                Button(L10n.ui("删除元素"), role: .destructive) {
                     pushUndoSnapshot()
                     removeFromSelection(elementId)
                     guard var t = session.editingTemplate else { return }
@@ -974,13 +974,13 @@ struct MovieTicketTemplateView: View {
 
     private var pdfRulesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("PDF 识别规则").font(.headline)
-            Text("每个模板只能链接一条规则。框选为相对坐标，可识别不同页面尺寸；跨尺寸请优先用「识别关键词」。")
+            Text(L10n.ui("PDF 识别规则")).font(.headline)
+            Text(L10n.ui("每个模板只能链接一条规则。框选为相对坐标，可识别不同页面尺寸；跨尺寸请优先用「识别关键词」。"))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
-            Button("新建规则") {
-                var rule = MovieTicketPDFRule(name: "新规则")
+            Button(L10n.ui("新建规则")) {
+                var rule = MovieTicketPDFRule(name: L10n.ui("新规则"))
                 if let tid = session.editingTemplate?.id {
                     rule.linkedTemplateId = tid
                 }
@@ -989,7 +989,7 @@ struct MovieTicketTemplateView: View {
                 if let tid = session.editingTemplate?.id {
                     session.linkRule(rule.id, to: tid)
                 }
-                status = "已新建并链接规则"
+                status = L10n.ui("已新建并链接规则")
             }
 
             ForEach(session.pdfRules) { rule in
@@ -1001,18 +1001,18 @@ struct MovieTicketTemplateView: View {
                     .buttonStyle(.plain)
                     Spacer()
                     if session.editingTemplate?.pdfRuleId == rule.id {
-                        Text("已链接")
+                        Text(L10n.ui("已链接"))
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.green)
-                        Button("取消链接") {
+                        Button(L10n.ui("取消链接")) {
                             if let tid = session.editingTemplate?.id {
                                 session.unlinkRule(from: tid)
-                                status = "已取消链接"
+                                status = L10n.ui("已取消链接")
                             }
                         }
                         .controlSize(.small)
                     } else {
-                        Button("链接到当前模板") {
+                        Button(L10n.ui("链接到当前模板")) {
                             if let tid = session.editingTemplate?.id {
                                 session.linkRule(rule.id, to: tid)
                                 status = "已链接规则「\(rule.name)」（原链接已替换）"
@@ -1020,7 +1020,7 @@ struct MovieTicketTemplateView: View {
                         }
                         .controlSize(.small)
                     }
-                    Button("删", role: .destructive) {
+                    Button(L10n.ui("删"), role: .destructive) {
                         session.deletePDFRule(rule.id)
                         if editingRule?.id == rule.id {
                             editingRule = nil
@@ -1034,12 +1034,12 @@ struct MovieTicketTemplateView: View {
             if let rule = editingRule {
                 Divider()
                 Text("编辑：\(rule.name)").font(.subheadline.weight(.semibold))
-                TextField("规则名称", text: Binding(
+                TextField(L10n.ui("规则名称"), text: Binding(
                     get: { editingRule?.name ?? "" },
                     set: { editingRule?.name = $0 }
                 ))
                 .textFieldStyle(.roundedBorder)
-                TextField("检测关键字（逗号分隔，如 ritz）", text: Binding(
+                TextField(L10n.ui("检测关键字（逗号分隔，如 ritz）"), text: Binding(
                     get: { (editingRule?.detectorKeywords ?? []).joined(separator: ", ") },
                     set: { raw in
                         editingRule?.detectorKeywords = raw
@@ -1050,17 +1050,17 @@ struct MovieTicketTemplateView: View {
                 ))
                 .textFieldStyle(.roundedBorder)
                 HStack {
-                    Button("上传样板 PDF") { pickSamplePDF() }
-                    Button("保存规则") {
+                    Button(L10n.ui("上传样板 PDF")) { pickSamplePDF() }
+                    Button(L10n.ui("保存规则")) {
                         if let r = editingRule {
                             session.savePDFRule(r)
-                            status = "规则已保存"
+                            status = L10n.ui("规则已保存")
                         }
                     }
                 }
 
                 if pdfPageImage != nil {
-                    Text("已映射 \(editingRule?.regions.count ?? 0) 个区域")
+                    Text("\(L10n.ui("已映射")) \(editingRule?.regions.count ?? 0) \(L10n.ui("个区域"))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     ForEach(editingRule?.regions ?? []) { region in
@@ -1080,30 +1080,30 @@ struct MovieTicketTemplateView: View {
                                     .foregroundStyle(.purple)
                             }
                             Spacer()
-                            Button("改") {
+                            Button(L10n.ui("改")) {
                                 openPDFRegionEditor()
                             }
                             .controlSize(.small)
-                            .help("在 PDF 区域编辑器中修改此映射")
-                            Button("删", role: .destructive) {
+                            .help(L10n.ui("在 PDF 区域编辑器中修改此映射"))
+                            Button(L10n.ui("删"), role: .destructive) {
                                 editingRule?.regions.removeAll { $0.id == region.id }
                             }
                             .controlSize(.small)
                         }
                         .font(.caption)
                     }
-            Button("打开 PDF 区域编辑器…") {
+            Button(L10n.ui("打开 PDF 区域编辑器…")) {
                 openPDFRegionEditor()
             }
             .buttonStyle(.borderedProminent)
-                    Button("测试识别…") { testRecognition() }
+                    Button(L10n.ui("测试识别…")) { testRecognition() }
                     if !testResults.isEmpty {
                         ForEach(testResults, id: \.self) { line in
                             Text(line).font(.caption2).foregroundStyle(.secondary)
                         }
                     }
                 } else {
-                    Text("请先上传样板 PDF，再打开区域编辑器框选。")
+                    Text(L10n.ui("请先上传样板 PDF，再打开区域编辑器框选。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1147,8 +1147,8 @@ struct MovieTicketTemplateView: View {
             )
         } else {
             VStack(spacing: 12) {
-                Text("无法打开 PDF 预览")
-                Button("返回模板") { closePDFRegionEditor() }
+                Text(L10n.ui("无法打开 PDF 预览"))
+                Button(L10n.ui("返回模板")) { closePDFRegionEditor() }
             }
             .padding()
         }
@@ -1168,7 +1168,7 @@ struct MovieTicketTemplateView: View {
     private var deleteTemplateMessage: String {
         let name = session.editingTemplate?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if name.isEmpty {
-            return "确定删除当前模板？此操作不可撤销。"
+            return L10n.ui("确定删除当前模板？此操作不可撤销。")
         }
         return "确定删除模板「\(name)」？此操作不可撤销。"
     }
@@ -1179,19 +1179,19 @@ struct MovieTicketTemplateView: View {
         session.deleteTemplate(id)
         undoStack = []
         clearSelection()
-        status = name.isEmpty ? "已删除模板" : "已删除模板「\(name)」"
+        status = name.isEmpty ? L10n.ui("已删除模板") : "已删除模板「\(name)」"
     }
 
     private func hallDisplayHelp(_ mode: MovieTicketHallDisplayMode) -> String {
         switch mode {
         case .cinemaNumber:
-            return "默认：从识别值提取数字，打印为 Cinema 1（如 Screen 2 → Cinema 2）"
+            return L10n.ui("默认：从识别值提取数字，打印为 Cinema 1（如 Screen 2 → Cinema 2）")
         case .numberOnly:
-            return "只打印数字部分（如 Screen 2 → 2）"
+            return L10n.ui("只打印数字部分（如 Screen 2 → 2）")
         case .customPrefix:
-            return "数字前加自定义文字（如填 Screen 则打印 Screen 2）"
+            return L10n.ui("数字前加自定义文字（如填 Screen 则打印 Screen 2）")
         case .asRecognized:
-            return "直接使用主页/PDF 识别填入的原文（含规则映射与前后缀）"
+            return L10n.ui("直接使用主页/PDF 识别填入的原文（含规则映射与前后缀）")
         }
     }
 
@@ -1206,10 +1206,10 @@ struct MovieTicketTemplateView: View {
         let custom = el.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !custom.isEmpty { return custom }
         switch el.kind {
-        case .textBox: return "文字"
-        case .fieldPlaceholder: return el.fieldKind?.displayName ?? "字段"
-        case .currentDate: return "当前日期"
-        case .currentTime: return "当前时间"
+        case .textBox: return L10n.ui("文字")
+        case .fieldPlaceholder: return el.fieldKind?.displayName ?? L10n.ui("字段")
+        case .currentDate: return L10n.ui("当前日期")
+        case .currentTime: return L10n.ui("当前时间")
         case .logo: return "Logo"
         }
     }
@@ -1461,7 +1461,7 @@ struct MovieTicketTemplateView: View {
            prev.elements.contains(where: { $0.id == last }) == false {
             lastSelectedId = selectedElementIds.first
         }
-        status = "已撤销"
+        status = L10n.ui("已撤销")
     }
 
     private func resetToFactoryLayout() {
@@ -1491,7 +1491,7 @@ struct MovieTicketTemplateView: View {
         session.editingTemplate = next
         session.markEditingDirty()
         clearSelection()
-        status = "已恢复默认布局（可用撤销找回上一版）"
+        status = L10n.ui("已恢复默认布局（可用撤销找回上一版）")
     }
 
     private func addField(_ kind: MovieTicketFieldKind) {
@@ -1530,7 +1530,7 @@ struct MovieTicketTemplateView: View {
             kind: .textBox,
             frame: SequencePlaceholderFrame(x: 12, y: 20, width: 160, height: 28),
             zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1,
-            content: "文本"
+            content: L10n.ui("文本")
         )
         t.elements.append(el)
         session.editingTemplate = t
@@ -1674,7 +1674,7 @@ struct MovieTicketTemplateView: View {
             loadSamplePDF(for: editingRule!)
             editingRule?.recordSamplePageSize(pdfPageSize)
             session.savePDFRule(editingRule!)
-            status = "已上传样板 PDF（相对框选可应用于其它页面尺寸）"
+            status = L10n.ui("已上传样板 PDF（相对框选可应用于其它页面尺寸）")
             openPDFRegionEditor()
         }
     }
@@ -1711,7 +1711,7 @@ struct MovieTicketTemplateView: View {
         guard result == .OK, let url = panel.url else { return }
         let fields = MovieTicketPDFRecognitionService.extractAllFields(from: url, rule: rule)
         if fields.isEmpty {
-            testResults = ["未抽到文本。请确认是文字型 PDF，且框选区域正确。"]
+            testResults = [L10n.ui("未抽到文本。请确认是文字型 PDF，且框选区域正确。")]
         } else {
             testResults = fields.map { "\($0.key.displayName): \($0.value)" }
         }

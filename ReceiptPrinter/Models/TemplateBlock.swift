@@ -7,14 +7,14 @@ enum BlockType: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .text: return "文本"
-        case .line: return "分隔线"
-        case .spacer: return "空白"
-        case .image: return "图片"
-        case .barcode: return "条码"
-        case .qr: return "二维码"
-        case .table: return "表格"
-        case .row: return "左右行"
+        case .text: return L10n.ui("文本")
+        case .line: return L10n.ui("分隔线")
+        case .spacer: return L10n.ui("空白")
+        case .image: return L10n.ui("图片")
+        case .barcode: return L10n.ui("条码")
+        case .qr: return L10n.ui("二维码")
+        case .table: return L10n.ui("表格")
+        case .row: return L10n.ui("左右行")
         }
     }
 }
@@ -25,9 +25,9 @@ enum TextAlign: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .left: return "左对齐"
-        case .center: return "居中"
-        case .right: return "右对齐"
+        case .left: return L10n.ui("左对齐")
+        case .center: return L10n.ui("居中")
+        case .right: return L10n.ui("右对齐")
         }
     }
 }
@@ -38,11 +38,11 @@ enum TextSize: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .normal: return "标准"
-        case .tall: return "加高"
-        case .taller: return "加高×3"
-        case .double: return "双倍大小"
-        case .doubleTall: return "双宽×加高×3"
+        case .normal: return L10n.ui("标准")
+        case .tall: return L10n.ui("加高")
+        case .taller: return L10n.ui("加高×3")
+        case .double: return L10n.ui("双倍大小")
+        case .doubleTall: return L10n.ui("双宽×加高×3")
         }
     }
 }

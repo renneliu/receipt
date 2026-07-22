@@ -51,15 +51,15 @@ enum POSFieldKind: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .code: return "编号"
-        case .name: return "项目名称"
-        case .quantity: return "数量"
-        case .amount: return "金额"
-        case .quantitySubtotal: return "数量小计"
-        case .amountSubtotal: return "金额小计"
-        case .surcharge: return "附加费"
-        case .amountTotal: return "金额合计"
-        case .itemCount: return "总计"
+        case .code: return L10n.ui("编号")
+        case .name: return L10n.ui("项目名称")
+        case .quantity: return L10n.ui("数量")
+        case .amount: return L10n.ui("金额")
+        case .quantitySubtotal: return L10n.ui("数量小计")
+        case .amountSubtotal: return L10n.ui("金额小计")
+        case .surcharge: return L10n.ui("附加费")
+        case .amountTotal: return L10n.ui("金额合计")
+        case .itemCount: return L10n.ui("总计")
         }
     }
 
@@ -90,7 +90,7 @@ enum POSDateFormatStyle: String, Codable, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .ymdDash: return "2026-07-15"
-        case .ymdCN: return "2026年7月15日"
+        case .ymdCN: return L10n.ui("2026年7月15日")
         case .mdYSlash: return "07/15/2026"
         case .dMyDot: return "15.07.2026"
         }
@@ -130,8 +130,8 @@ enum POSTicketSection: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .header: return "头部"
-        case .footer: return "尾部"
+        case .header: return L10n.ui("头部")
+        case .footer: return L10n.ui("尾部")
         }
     }
 }

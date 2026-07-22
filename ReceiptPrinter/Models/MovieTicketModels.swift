@@ -6,14 +6,53 @@ import CoreGraphics
 struct MovieTicketSettings: Codable, Equatable {
     var activeTemplateId: UUID?
     var lastPane: String = "main"
+    /// Ticket-face forms for content ratings (e.g. `MA 15+` → `MA15`).
+    var ratingPrintMappings: [MovieTicketRatingPrintMapping] = MovieTicketRatingPrintMapping.defaults
 
     private static let defaultsKey = "ReceiptPrinter.MovieTicketSettings"
 
+    enum CodingKeys: String, CodingKey {
+        case activeTemplateId, lastPane, ratingPrintMappings
+    }
+
+    init(
+        activeTemplateId: UUID? = nil,
+        lastPane: String = "main",
+        ratingPrintMappings: [MovieTicketRatingPrintMapping] = MovieTicketRatingPrintMapping.defaults
+    ) {
+        self.activeTemplateId = activeTemplateId
+        self.lastPane = lastPane
+        self.ratingPrintMappings = ratingPrintMappings
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        activeTemplateId = try c.decodeIfPresent(UUID.self, forKey: .activeTemplateId)
+        lastPane = try c.decodeIfPresent(String.self, forKey: .lastPane) ?? "main"
+        ratingPrintMappings = try c.decodeIfPresent(
+            [MovieTicketRatingPrintMapping].self,
+            forKey: .ratingPrintMappings
+        ) ?? MovieTicketRatingPrintMapping.defaults
+    }
+
     static func load() -> MovieTicketSettings {
         guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-              let decoded = try? JSONDecoder().decode(MovieTicketSettings.self, from: data) else {
+              var decoded = try? JSONDecoder().decode(MovieTicketSettings.self, from: data) else {
             return MovieTicketSettings()
         }
+        // Migrate old MA15+ → M shorthand so it stays distinct from M.
+        var changed = false
+        for i in decoded.ratingPrintMappings.indices {
+            let src = MovieTicketRatingPrintMapping.normalizedKey(decoded.ratingPrintMappings[i].source)
+            let dst = decoded.ratingPrintMappings[i].printAs
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .uppercased()
+            if (src == "MA15+" || src == "MA15") && dst == "M" {
+                decoded.ratingPrintMappings[i].printAs = "MA15"
+                changed = true
+            }
+        }
+        if changed { decoded.save() }
         return decoded
     }
 
@@ -24,10 +63,54 @@ struct MovieTicketSettings: Codable, Equatable {
     }
 }
 
+/// Maps a verified / TMDB rating to the short form printed on the stub.
+struct MovieTicketRatingPrintMapping: Codable, Equatable, Identifiable, Hashable {
+    var id: UUID = UUID()
+    /// Source rating as verified (e.g. `MA15+`, `MA 15+`).
+    var source: String
+    /// Printed form inside parentheses (e.g. `MA15`).
+    var printAs: String
+
+    static let defaults: [MovieTicketRatingPrintMapping] = [
+        .init(source: "MA15+", printAs: "MA15"),
+        .init(source: "MA 15+", printAs: "MA15"),
+        .init(source: "R18+", printAs: "R"),
+        .init(source: "R 18+", printAs: "R"),
+        .init(source: "X18+", printAs: "X"),
+        .init(source: "X 18+", printAs: "X")
+    ]
+
+    /// Normalize for lookup: uppercase, keep letters/digits/`+`.
+    static func normalizedKey(_ raw: String) -> String {
+        let upper = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return upper.filter { $0.isLetter || $0.isNumber || $0 == "+" }
+    }
+
+    static func printLabel(
+        for raw: String,
+        mappings: [MovieTicketRatingPrintMapping] = MovieTicketRatingPrintMapping.defaults
+    ) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let key = normalizedKey(trimmed)
+        for row in mappings {
+            if normalizedKey(row.source) == key {
+                let label = row.printAs.trimmingCharacters(in: .whitespacesAndNewlines)
+                return label.isEmpty ? trimmed : label
+            }
+        }
+        return trimmed
+    }
+}
+
 // MARK: - Draft (main page)
 
 struct MovieTicketDraft: Codable, Equatable {
     var movieTitle: String = ""
+    /// Classification / certificate from TMDB (e.g. `M`, `PG`, `MA15+`).
+    var contentRating: String = ""
+    /// When true, print `movieTitle (contentRating)` on the ticket.
+    var printContentRating: Bool = false
     var movieDurationMinutes: Int = 0
     var adDurationMinutes: Int = 15
     var seatModeUnallocated: Bool = true
@@ -37,6 +120,8 @@ struct MovieTicketDraft: Codable, Equatable {
     var seatAreas: [String] = [""]
     /// Base order / booking id **without** `/001` style ticket index suffix.
     var serialNumber: String = ""
+    /// Optional Dendy-style short code under the QR (`Code: #…`). Empty → derive from serial.
+    var bookingCode: String = ""
     /// How many physical tickets to print (each gets `/001` … `/00N`).
     var ticketCount: Int = 1
     var showDate: Date = Calendar.current.startOfDay(for: Date())
@@ -44,6 +129,22 @@ struct MovieTicketDraft: Codable, Equatable {
     var ticketType: String = ""
     var hall: String = ""
     var ticketPrice: String = ""
+
+    /// Title as printed on the stub (optionally appends mapped classification).
+    var printedMovieTitle: String {
+        printedMovieTitle(using: MovieTicketSettings.load().ratingPrintMappings)
+    }
+
+    func printedMovieTitle(using mappings: [MovieTicketRatingPrintMapping]) -> String {
+        let base = movieTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rating = MovieTicketRatingPrintMapping.printLabel(for: contentRating, mappings: mappings)
+        guard printContentRating, !base.isEmpty, !rating.isEmpty else { return base }
+        let suffix = "(\(rating))"
+        if base.hasSuffix(suffix) { return base }
+        // Case-insensitive already-present check, e.g. "THE ODYSSEY (M)"
+        if base.uppercased().hasSuffix(suffix.uppercased()) { return base }
+        return "\(base) \(suffix)"
+    }
 
     /// Strip a trailing `/digits` ticket index from a serial string.
     static func serialBase(from raw: String) -> String {
@@ -144,19 +245,23 @@ struct MovieTicketDraft: Codable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case movieTitle, movieDurationMinutes, adDurationMinutes
-        case seatModeUnallocated, seatArea, seatAreas, serialNumber, ticketCount
+        case movieTitle, contentRating, printContentRating
+        case movieDurationMinutes, adDurationMinutes
+        case seatModeUnallocated, seatArea, seatAreas, serialNumber, bookingCode, ticketCount
         case showDate, showStartTime, ticketType, hall, ticketPrice
     }
 
     init(
         movieTitle: String = "",
+        contentRating: String = "",
+        printContentRating: Bool = false,
         movieDurationMinutes: Int = 0,
         adDurationMinutes: Int = 15,
         seatModeUnallocated: Bool = true,
         seatArea: String = "",
         seatAreas: [String] = [""],
         serialNumber: String = "",
+        bookingCode: String = "",
         ticketCount: Int = 1,
         showDate: Date = Calendar.current.startOfDay(for: Date()),
         showStartTime: Date = Date(),
@@ -165,12 +270,15 @@ struct MovieTicketDraft: Codable, Equatable {
         ticketPrice: String = ""
     ) {
         self.movieTitle = movieTitle
+        self.contentRating = contentRating
+        self.printContentRating = printContentRating
         self.movieDurationMinutes = movieDurationMinutes
         self.adDurationMinutes = adDurationMinutes
         self.seatModeUnallocated = seatModeUnallocated
         self.seatArea = seatArea
         self.seatAreas = seatAreas.isEmpty ? [seatArea] : seatAreas
         self.serialNumber = Self.serialBase(from: serialNumber)
+        self.bookingCode = bookingCode.trimmingCharacters(in: .whitespacesAndNewlines)
         self.ticketCount = max(1, min(4, ticketCount))
         self.showDate = showDate
         self.showStartTime = showStartTime
@@ -183,6 +291,8 @@ struct MovieTicketDraft: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         movieTitle = try c.decodeIfPresent(String.self, forKey: .movieTitle) ?? ""
+        contentRating = try c.decodeIfPresent(String.self, forKey: .contentRating) ?? ""
+        printContentRating = try c.decodeIfPresent(Bool.self, forKey: .printContentRating) ?? false
         movieDurationMinutes = try c.decodeIfPresent(Int.self, forKey: .movieDurationMinutes) ?? 0
         adDurationMinutes = try c.decodeIfPresent(Int.self, forKey: .adDurationMinutes) ?? 15
         seatModeUnallocated = try c.decodeIfPresent(Bool.self, forKey: .seatModeUnallocated) ?? true
@@ -191,6 +301,8 @@ struct MovieTicketDraft: Codable, Equatable {
         serialNumber = Self.serialBase(
             from: try c.decodeIfPresent(String.self, forKey: .serialNumber) ?? ""
         )
+        bookingCode = (try c.decodeIfPresent(String.self, forKey: .bookingCode) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         ticketCount = max(1, min(4, try c.decodeIfPresent(Int.self, forKey: .ticketCount) ?? 1))
         showDate = try c.decodeIfPresent(Date.self, forKey: .showDate)
             ?? Calendar.current.startOfDay(for: Date())
@@ -258,6 +370,57 @@ struct MovieTicketDraft: Codable, Equatable {
         if let t0 = cal.date(from: time) { sample.showStartTime = t0 }
         return sample
     }
+
+    /// Reference draft matching the classic Hayden Orpheum ticket.
+    static func orpheumSample() -> MovieTicketDraft {
+        var sample = MovieTicketDraft(
+            movieTitle: "Dunkirk 70mm",
+            movieDurationMinutes: 117,
+            adDurationMinutes: 0,
+            seatModeUnallocated: true,
+            serialNumber: "DEBI 00687743/001",
+            ticketCount: 1,
+            ticketType: "Adult",
+            hall: "4",
+            ticketPrice: "28.00"
+        )
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        var day = DateComponents()
+        day.year = 2026; day.month = 6; day.day = 28
+        if let d = cal.date(from: day) { sample.showDate = d }
+        var time = DateComponents()
+        time.hour = 18; time.minute = 0
+        if let t0 = cal.date(from: time) { sample.showStartTime = t0 }
+        return sample
+    }
+
+    /// Reference draft matching the Dendy-style centered QR ticket.
+    static func dendySample() -> MovieTicketDraft {
+        var sample = MovieTicketDraft(
+            movieTitle: "The Testament of Ann Lee",
+            movieDurationMinutes: 157,
+            adDurationMinutes: 0,
+            seatModeUnallocated: false,
+            seatArea: "F7",
+            seatAreas: ["F7"],
+            serialNumber: "466713335",
+            bookingCode: "6924686",
+            ticketCount: 1,
+            ticketType: "Adult Event",
+            hall: "3",
+            ticketPrice: "0.00"
+        )
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        var day = DateComponents()
+        day.year = 2026; day.month = 2; day.day = 21
+        if let d = cal.date(from: day) { sample.showDate = d }
+        var time = DateComponents()
+        time.hour = 15; time.minute = 0
+        if let t0 = cal.date(from: time) { sample.showStartTime = t0 }
+        return sample
+    }
 }
 
 // MARK: - Hall display
@@ -277,10 +440,10 @@ enum MovieTicketHallDisplayMode: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .cinemaNumber: return "Cinema + 数字"
-        case .numberOnly: return "仅数字"
-        case .customPrefix: return "自定义前缀 + 数字"
-        case .asRecognized: return "识别原文"
+        case .cinemaNumber: return L10n.ui("Cinema + 数字")
+        case .numberOnly: return L10n.ui("仅数字")
+        case .customPrefix: return L10n.ui("自定义前缀 + 数字")
+        case .asRecognized: return L10n.ui("识别原文")
         }
     }
 }
@@ -306,18 +469,18 @@ enum MovieTicketFieldKind: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .movieTitle: return "影片名称"
-        case .startTime: return "开始时间"
-        case .endTime: return "结束时间"
-        case .timeRange: return "时间段"
-        case .showDate: return "日期"
-        case .seatArea: return "座位区"
-        case .ticketPrice: return "票价"
-        case .ticketType: return "票型"
-        case .serialNumber: return "流水号"
-        case .hall: return "影厅"
-        case .qrCode: return "二维码"
-        case .barcode: return "条码"
+        case .movieTitle: return L10n.ui("影片名称")
+        case .startTime: return L10n.ui("开始时间")
+        case .endTime: return L10n.ui("结束时间")
+        case .timeRange: return L10n.ui("时间段")
+        case .showDate: return L10n.ui("日期")
+        case .seatArea: return L10n.ui("座位区")
+        case .ticketPrice: return L10n.ui("票价")
+        case .ticketType: return L10n.ui("票型")
+        case .serialNumber: return L10n.ui("流水号")
+        case .hall: return L10n.ui("影厅")
+        case .qrCode: return L10n.ui("二维码")
+        case .barcode: return L10n.ui("条码")
         }
     }
 
@@ -333,18 +496,18 @@ enum MovieTicketFieldKind: String, Codable, CaseIterable, Identifiable {
     /// Short description shown in the PDF recognizer panel.
     var recognizerSummary: String {
         switch self {
-        case .movieTitle: return "搜索 PDF 中的影片名称；找不到再框选定位"
-        case .hall: return "搜索 PDF 中的影厅/Screen；找不到再框选定位"
-        case .seatArea: return "搜索座位；可设「无指定座位」跳过检索"
-        case .ticketType: return "搜索票型；支持关键词映射或默认票型"
-        case .ticketPrice: return "优先取 Total 后的金额；找不到再框选"
-        case .serialNumber: return "识别订票码/流水号；找不到再框选"
-        case .barcode: return "识别订票码，填入条码内容（与流水号同源）"
-        case .qrCode: return "识别订票码，填入二维码内容（与流水号同源）"
-        case .timeRange: return "识别开场时间（与开始时间共用逻辑）"
-        case .startTime: return "识别开场时间；找不到再框选定位"
-        case .showDate: return "识别场次日期；找不到再框选定位"
-        case .endTime: return "结束时间由片长/用户填写，不从 PDF 识别"
+        case .movieTitle: return L10n.ui("搜索 PDF 中的影片名称；找不到再框选定位")
+        case .hall: return L10n.ui("搜索 PDF 中的影厅/Screen；找不到再框选定位")
+        case .seatArea: return L10n.ui("搜索座位；可设「无指定座位」跳过检索")
+        case .ticketType: return L10n.ui("搜索票型；支持关键词映射或默认票型")
+        case .ticketPrice: return L10n.ui("优先取 Total 后的金额；找不到再框选")
+        case .serialNumber: return L10n.ui("识别订票码/流水号；找不到再框选")
+        case .barcode: return L10n.ui("识别订票码，填入条码内容（与流水号同源）")
+        case .qrCode: return L10n.ui("识别订票码，填入二维码内容（与流水号同源）")
+        case .timeRange: return L10n.ui("识别开场时间（与开始时间共用逻辑）；可勾选同时识别日期")
+        case .startTime: return L10n.ui("识别开场时间；可勾选同时识别日期；找不到再框选定位")
+        case .showDate: return L10n.ui("识别场次日期；找不到再框选定位")
+        case .endTime: return L10n.ui("结束时间由片长/用户填写，不从 PDF 识别")
         }
     }
 }
@@ -392,6 +555,10 @@ enum MovieTicketDateFormat: String, Codable, CaseIterable, Identifiable {
     case ymdDash = "yyyy-MM-dd"
     case mdYSlash = "MM/dd/yyyy"
     case eeeMMMd = "EEE MMM d, yyyy"
+    /// Calendar day without year: February 21
+    case MMMMd = "MMMM d"
+    /// Dendy session date with year: February 21, 2026
+    case MMMMdyyyy = "MMMM d, yyyy"
     case ymdCN = "yyyy年M月d日"
 
     var id: String { rawValue }
@@ -401,7 +568,9 @@ enum MovieTicketDateFormat: String, Codable, CaseIterable, Identifiable {
         case .ymdDash: return "2026-07-15"
         case .mdYSlash: return "07/15/2026"
         case .eeeMMMd: return "Wed Jul 15, 2026"
-        case .ymdCN: return "2026年7月15日"
+        case .MMMMd: return "February 21"
+        case .MMMMdyyyy: return "February 21, 2026"
+        case .ymdCN: return L10n.ui("2026年7月15日")
         }
     }
 
@@ -603,12 +772,25 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
 
     /// Locked Ritz dual-stub ESC/POS path (not canvas WYSIWYG).
     var usesRitzLayout: Bool {
-        if usesIMAXSydneyLayout { return false }
+        if usesIMAXSydneyLayout || usesOrpheumLayout || usesDendyLayout { return false }
         if layoutStyle == "ritz" { return true }
         let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if n.caseInsensitiveCompare("Ritz") == .orderedSame { return true }
         if n == "示例影票" { return true }
         return false
+    }
+
+    var usesOrpheumLayout: Bool {
+        if layoutStyle == "orpheum" { return true }
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return n.localizedCaseInsensitiveContains("orpheum")
+            || n.localizedCaseInsensitiveContains("hayden")
+    }
+
+    var usesDendyLayout: Bool {
+        if layoutStyle == "dendy" { return true }
+        return name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveContains("dendy")
     }
 
     /// Effective cut feed for this template (0…40).
@@ -633,6 +815,28 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
             t.backgroundScalePercent = meta.backgroundScalePercent
             t.feedLinesBeforeCut = meta.feedLinesBeforeCut
             return (t, made.logoElementId)
+        }
+        if meta.usesOrpheumLayout {
+            var t = makeOrpheum(name: meta.name)
+            t.id = meta.id
+            t.createdAt = meta.createdAt
+            t.pdfRuleId = meta.pdfRuleId
+            t.backgroundImageFilename = meta.backgroundImageFilename
+            t.backgroundScalePercent = meta.backgroundScalePercent
+            t.feedLinesBeforeCut = meta.feedLinesBeforeCut
+            t.unallocatedSeatLabel = meta.unallocatedSeatLabel.isEmpty ? t.unallocatedSeatLabel : meta.unallocatedSeatLabel
+            return (t, nil)
+        }
+        if meta.usesDendyLayout {
+            var t = makeDendy(name: meta.name)
+            t.id = meta.id
+            t.createdAt = meta.createdAt
+            t.pdfRuleId = meta.pdfRuleId
+            t.backgroundImageFilename = meta.backgroundImageFilename
+            t.backgroundScalePercent = meta.backgroundScalePercent
+            t.feedLinesBeforeCut = meta.feedLinesBeforeCut
+            t.unallocatedSeatLabel = meta.unallocatedSeatLabel.isEmpty ? t.unallocatedSeatLabel : meta.unallocatedSeatLabel
+            return (t, nil)
         }
         var t = makeRitz(name: meta.name)
         t.id = meta.id
@@ -689,6 +893,150 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
         // MARK: Bottom stub + barcode
         t.elements += ritzStubElements(yOffset: 172, zBase: &z, includeBarcode: true)
         t.canvasHeight = 450
+        return t
+    }
+
+    /// Hayden Orpheum dual-stub: venue + Cinema highlight, title, session, ADMIT / type·price.
+    static func makeOrpheum(name: String = "Orpheum") -> MovieTicketTemplate {
+        var t = MovieTicketTemplate(name: name)
+        t.layoutStyle = "orpheum"
+        t.unallocatedSeatLabel = "ADMIT"
+        t.canvasHeight = 430
+        t.gridSize = 20
+        t.feedLinesBeforeCut = 4
+        var z = 0
+        func nextZ() -> Int {
+            z += 1
+            return z
+        }
+
+        t.elements += orpheumStubElements(yOffset: 4, zBase: &z, includeBarcode: false)
+        t.elements.append(
+            MovieTicketElement(
+                kind: .textBox,
+                frame: SequencePlaceholderFrame(x: 6, y: 156, width: 290, height: 12),
+                zIndex: nextZ(),
+                content: String(repeating: "-", count: 42),
+                fontSize: 10,
+                alignment: 1
+            )
+        )
+        t.elements += orpheumStubElements(yOffset: 172, zBase: &z, includeBarcode: true)
+        t.canvasHeight = 450
+        return t
+    }
+
+    /// Dendy Cinemas vertical QR ticket (title → cinema/seat → session → QR → codes).
+    /// Title + cinema/seat default to print scale 2×3 (between prior 3×3 and plain 2×2).
+    static func makeDendy(name: String = "Dendy") -> MovieTicketTemplate {
+        var t = MovieTicketTemplate(name: name)
+        t.layoutStyle = "dendy"
+        t.unallocatedSeatLabel = "GA"
+        t.canvasHeight = 560
+        t.gridSize = 20
+        t.feedLinesBeforeCut = 4
+        var z = 0
+        func nextZ() -> Int {
+            z += 1
+            return z
+        }
+        let left: CGFloat = 16
+        let width: CGFloat = 270
+        // Paper-point heights ≈ Font A cell × scale on 80mm (see MovieTicketPrintMetrics).
+        let h3: CGFloat = 38
+        let h2: CGFloat = 25
+        let h1: CGFloat = 13
+
+        t.elements = [
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: 16, width: width, height: h3 * 2),
+                zIndex: nextZ(),
+                fontSize: 14,
+                isBold: true,
+                alignment: 1,
+                fieldKind: .movieTitle,
+                singleLineClip: false
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: 100, width: 130, height: h3),
+                zIndex: nextZ(),
+                fontSize: 14,
+                alignment: 1,
+                fieldKind: .hall,
+                hallDisplayMode: .cinemaNumber
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 156, y: 100, width: 130, height: h3),
+                zIndex: nextZ(),
+                fontSize: 14,
+                alignment: 1,
+                fieldKind: .seatArea
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: 148, width: width, height: h2),
+                zIndex: nextZ(),
+                fontSize: 14,
+                alignment: 1,
+                fieldKind: .showDate,
+                dateFormat: .MMMMdyyyy
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: 178, width: width, height: h2),
+                zIndex: nextZ(),
+                fontSize: 14,
+                alignment: 1,
+                fieldKind: .startTime,
+                timeFormat: .hmma
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: 210, width: width, height: h1),
+                zIndex: nextZ(),
+                content: "Ends at ",
+                fontSize: 11,
+                alignment: 1,
+                fieldKind: .endTime,
+                timeFormat: .hmma
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 66, y: 240, width: 170, height: 170),
+                zIndex: nextZ(),
+                alignment: 1,
+                fieldKind: .qrCode
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: 422, width: width, height: h2),
+                zIndex: nextZ(),
+                content: "Code: #",
+                fontSize: 14,
+                alignment: 1,
+                fieldKind: .serialNumber
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: 456, width: width, height: h2),
+                zIndex: nextZ(),
+                fontSize: 11,
+                isBold: true,
+                alignment: 1,
+                fieldKind: .ticketType
+            ),
+            MovieTicketElement(
+                kind: .textBox,
+                frame: SequencePlaceholderFrame(x: left, y: 490, width: width, height: h1),
+                zIndex: nextZ(),
+                content: "Ticket #{serial}",
+                fontSize: 11,
+                alignment: 1
+            )
+        ]
         return t
     }
 
@@ -836,6 +1184,131 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
             )
         ])
         return (t, logoId)
+    }
+
+    /// One Orpheum ticket half (matches classic `OrpheumTicketRenderer` layout).
+    private static func orpheumStubElements(
+        yOffset: CGFloat,
+        zBase: inout Int,
+        includeBarcode: Bool
+    ) -> [MovieTicketElement] {
+        func z() -> Int {
+            zBase += 1
+            return zBase
+        }
+        let left: CGFloat = 8
+        let width: CGFloat = 286
+        var items: [MovieTicketElement] = [
+            // Venue left + hall number (inverted) right — same row as classic Orpheum.
+            MovieTicketElement(
+                kind: .textBox,
+                frame: SequencePlaceholderFrame(x: left, y: yOffset, width: 150, height: 28),
+                zIndex: z(),
+                content: "Orpheum",
+                fontSize: 16,
+                isBold: true,
+                alignment: 0
+            ),
+            MovieTicketElement(
+                kind: .textBox,
+                frame: SequencePlaceholderFrame(x: 170, y: yOffset + 6, width: 70, height: 18),
+                zIndex: z(),
+                content: "Cinema",
+                fontSize: 12,
+                alignment: 2
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 242, y: yOffset + 4, width: 52, height: 22),
+                zIndex: z(),
+                fontSize: 14,
+                isBold: true,
+                alignment: 1,
+                isInverted: true,
+                fieldKind: .hall,
+                hallDisplayMode: .numberOnly
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: yOffset + 34, width: width, height: 36),
+                zIndex: z(),
+                fontSize: 14,
+                isBold: true,
+                alignment: 1,
+                fieldKind: .movieTitle,
+                singleLineClip: true
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: yOffset + 74, width: width, height: 16),
+                zIndex: z(),
+                fontSize: 11,
+                alignment: 0,
+                fieldKind: .timeRange,
+                rangeStartFormat: .eeeMMMdhmma,
+                rangeEndFormat: .hmma,
+                rangeConnector: " Until "
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: left, y: yOffset + 96, width: 70, height: 14),
+                zIndex: z(),
+                fontSize: 11,
+                isBold: true,
+                alignment: 0,
+                fieldKind: .seatArea
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 150, y: yOffset + 96, width: 80, height: 14),
+                zIndex: z(),
+                fontSize: 11,
+                alignment: 2,
+                fieldKind: .ticketType
+            ),
+            MovieTicketElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 232, y: yOffset + 96, width: 62, height: 14),
+                zIndex: z(),
+                fontSize: 11,
+                alignment: 2,
+                fieldKind: .ticketPrice
+            )
+        ]
+
+        if includeBarcode {
+            items.append(
+                MovieTicketElement(
+                    kind: .fieldPlaceholder,
+                    frame: SequencePlaceholderFrame(x: left, y: yOffset + 116, width: width, height: 72),
+                    zIndex: z(),
+                    alignment: 1,
+                    fieldKind: .barcode
+                )
+            )
+            items.append(
+                MovieTicketElement(
+                    kind: .fieldPlaceholder,
+                    frame: SequencePlaceholderFrame(x: left, y: yOffset + 190, width: width, height: 12),
+                    zIndex: z(),
+                    fontSize: 9,
+                    alignment: 1,
+                    fieldKind: .serialNumber
+                )
+            )
+        } else {
+            items.append(
+                MovieTicketElement(
+                    kind: .fieldPlaceholder,
+                    frame: SequencePlaceholderFrame(x: left, y: yOffset + 116, width: width, height: 12),
+                    zIndex: z(),
+                    fontSize: 9,
+                    alignment: 1,
+                    fieldKind: .serialNumber
+                )
+            )
+        }
+        return items
     }
 
     /// One Ritz ticket half. Tight leading to match thermal print; title uses double-height stretch at render.
@@ -1018,8 +1491,8 @@ enum MovieTicketPDFCaptureMode: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .positionOnly: return "仅记住位置"
-        case .withKeywords: return "识别关键词"
+        case .positionOnly: return L10n.ui("仅记住位置")
+        case .withKeywords: return L10n.ui("识别关键词")
         }
     }
 }
@@ -1040,10 +1513,10 @@ enum MovieTicketPDFExtractKind: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .entire: return "全部文字"
-        case .afterKeyword: return "关键词之后"
-        case .currency: return "金额"
-        case .digits: return "数字"
+        case .entire: return L10n.ui("全部文字")
+        case .afterKeyword: return L10n.ui("关键词之后")
+        case .currency: return L10n.ui("金额")
+        case .digits: return L10n.ui("数字")
         }
     }
 }
@@ -1111,11 +1584,18 @@ struct MovieTicketPDFRegion: Codable, Identifiable, Equatable {
     var printSuffix: String = ""
     /// Auto-detect / page-wide rules: do not draw a rubber-band box on the PDF canvas.
     var isPageWideAuto: Bool = false
+    /// For `.timeRange` / `.startTime`: when true, keep calendar date in the extract and
+    /// write `draft.showDate` (unless a dedicated date region already hit).
+    /// `nil` / false = clock only (legacy default).
+    var recognizeDate: Bool? = nil
+
+    /// Effective flag for time fields (default off = clock-only).
+    var recognizesDateWithTime: Bool { recognizeDate == true }
 
     enum CodingKeys: String, CodingKey {
         case id, fieldKind, elementId, rect, pageIndex, captureMode, regionKeywords
         case extractKind, extractKeyword, extractSample, extractedHint, valueMappings
-        case printPrefix, printSuffix, isPageWideAuto
+        case printPrefix, printSuffix, isPageWideAuto, recognizeDate
     }
 
     init(
@@ -1133,7 +1613,8 @@ struct MovieTicketPDFRegion: Codable, Identifiable, Equatable {
         valueMappings: [MovieTicketPDFValueMapping] = [],
         printPrefix: String = "",
         printSuffix: String = "",
-        isPageWideAuto: Bool = false
+        isPageWideAuto: Bool = false,
+        recognizeDate: Bool? = nil
     ) {
         self.id = id
         self.fieldKind = fieldKind
@@ -1150,6 +1631,7 @@ struct MovieTicketPDFRegion: Codable, Identifiable, Equatable {
         self.printPrefix = printPrefix
         self.printSuffix = printSuffix
         self.isPageWideAuto = isPageWideAuto
+        self.recognizeDate = recognizeDate
     }
 
     init(from decoder: Decoder) throws {
@@ -1174,6 +1656,7 @@ struct MovieTicketPDFRegion: Codable, Identifiable, Equatable {
             // Legacy auto regions used a near-full-page rect.
             isPageWideAuto = rect.width >= 0.9 && rect.height >= 0.9
         }
+        recognizeDate = try c.decodeIfPresent(Bool.self, forKey: .recognizeDate)
     }
 
     /// Whether this region should draw/hit-test as a blue box on the sample PDF.
@@ -1278,7 +1761,7 @@ struct MovieTicketPrintHistoryRecord: Identifiable, Codable, Equatable {
 
     var summary: String {
         let title = draft.movieTitle.trimmingCharacters(in: .whitespaces)
-        if title.isEmpty { return "（无片名）" }
+        if title.isEmpty { return L10n.ui("（无片名）") }
         return title
     }
 }

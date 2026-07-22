@@ -78,10 +78,10 @@ struct POSReceiptMainView: View {
     private var formColumn: some View {
         VStack(alignment: .leading, spacing: 12) {
             Group {
-                Text("当前使用模板")
+                Text(L10n.ui("当前使用模板"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(template?.name ?? "（请先到「模板」页创建或选用）")
+                Text(template?.name ?? L10n.ui("（请先到「模板」页创建或选用）"))
                     .font(.title3.weight(.semibold))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
@@ -89,12 +89,12 @@ struct POSReceiptMainView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 if hasExcelBound {
                     HStack {
-                        Text(template?.excelDisplayName ?? "已绑定 Excel")
+                        Text(template?.excelDisplayName ?? L10n.ui("已绑定 Excel"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                         Spacer()
-                        Button(isRefreshingExcel ? "刷新中…" : "刷新已上传 Excel") {
+                        Button(isRefreshingExcel ? L10n.ui("刷新中…") : L10n.ui("刷新已上传 Excel")) {
                             Task { await refreshExcelTapped() }
                         }
                         .controlSize(.small)
@@ -111,8 +111,8 @@ struct POSReceiptMainView: View {
 
             if let t = template {
                 if t.enableCode {
-                    labeledField("编号") {
-                        TextField("英文或数字", text: Binding(
+                    labeledField(L10n.ui("编号")) {
+                        TextField(L10n.ui("英文或数字"), text: Binding(
                             get: { session.draftCode },
                             set: { session.draftCode = session.sanitizeCode($0) }
                         ))
@@ -122,16 +122,16 @@ struct POSReceiptMainView: View {
                     }
                 }
 
-                labeledField("项目名称") {
-                    TextField("必填", text: $session.draftName)
+                labeledField(L10n.ui("项目名称")) {
+                    TextField(L10n.ui("必填"), text: $session.draftName)
                         .textFieldStyle(.roundedBorder)
                         .focused($focusedField, equals: .name)
                         .onSubmit { handleNameSubmit() }
                 }
 
                 if t.enableQuantity {
-                    labeledField("数量") {
-                        TextField("数量", text: $session.draftQuantity)
+                    labeledField(L10n.ui("数量")) {
+                        TextField(L10n.ui("数量"), text: $session.draftQuantity)
                             .textFieldStyle(.roundedBorder)
                             .focused($focusedField, equals: .quantity)
                             .onSubmit { handleQuantitySubmit() }
@@ -139,8 +139,8 @@ struct POSReceiptMainView: View {
                 }
 
                 if t.enableAmount {
-                    labeledField("金额") {
-                        TextField("金额", text: $session.draftAmount)
+                    labeledField(L10n.ui("金额")) {
+                        TextField(L10n.ui("金额"), text: $session.draftAmount)
                             .textFieldStyle(.roundedBorder)
                             .focused($focusedField, equals: .amount)
                             .onSubmit { handleAmountSubmit() }
@@ -153,23 +153,23 @@ struct POSReceiptMainView: View {
                     || t.hasElement(field: .amountTotal)
                     || t.hasElement(field: .itemCount) {
                     Divider()
-                    Text("汇总").font(.headline)
+                    Text(L10n.ui("汇总")).font(.headline)
                     if t.hasElement(field: .quantitySubtotal) {
                         HStack {
-                            Text("数量小计")
+                            Text(L10n.ui("数量小计"))
                             Spacer()
                             Text(session.quantitySubtotalText).monospacedDigit()
                         }
                     }
                     if t.hasElement(field: .amountSubtotal) {
                         HStack {
-                            Text("金额小计")
+                            Text(L10n.ui("金额小计"))
                             Spacer()
                             Text(session.amountSubtotalText).monospacedDigit()
                         }
                     }
                     if t.hasElement(field: .surcharge) {
-                        labeledField("附加费") {
+                        labeledField(L10n.ui("附加费")) {
                             TextField("0.00", text: Binding(
                                 get: { session.surcharge },
                                 set: { session.setSurchargeManually($0) }
@@ -185,7 +185,7 @@ struct POSReceiptMainView: View {
                     }
                     if t.hasElement(field: .amountTotal) {
                         HStack {
-                            Text("金额合计").fontWeight(.semibold)
+                            Text(L10n.ui("金额合计")).fontWeight(.semibold)
                             Spacer()
                             Text(session.amountTotalText)
                                 .fontWeight(.semibold)
@@ -194,7 +194,7 @@ struct POSReceiptMainView: View {
                     }
                     if t.hasElement(field: .itemCount) {
                         HStack {
-                            Text("总计")
+                            Text(L10n.ui("总计"))
                             Spacer()
                             Text(session.itemCountText).monospacedDigit()
                         }
@@ -209,14 +209,14 @@ struct POSReceiptMainView: View {
             }
 
             HStack {
-                Button("预览") { previewTicket() }
+                Button(L10n.ui("预览")) { previewTicket() }
                     .disabled(template == nil || session.lineItems.isEmpty || isPrinting)
-                Button(isPrinting ? "打印中…" : "打印 (⌘↩)") {
+                Button(isPrinting ? L10n.ui("打印中…") : L10n.ui("打印 (⌘↩)")) {
                     Task { await printTicket() }
                 }
                 .disabled(template == nil || session.lineItems.isEmpty || isPrinting)
                 .keyboardShortcut(.return, modifiers: .command)
-                Button("打印记录") { showHistory = true }
+                Button(L10n.ui("打印记录")) { showHistory = true }
             }
         }
         .padding()
@@ -225,10 +225,10 @@ struct POSReceiptMainView: View {
 
     private var surchargePercentButtons: some View {
         let options: [(label: String, fraction: Double)] = [
-            ("小计 10%", 0.10),
-            ("小计 20%", 0.20),
-            ("小计 50%", 0.50),
-            ("小计 100%", 1.00)
+            (L10n.ui("小计 10%"), 0.10),
+            (L10n.ui("小计 20%"), 0.20),
+            (L10n.ui("小计 50%"), 0.50),
+            (L10n.ui("小计 100%"), 1.00)
         ]
         return HStack(spacing: 6) {
             ForEach(options, id: \.label) { option in
@@ -244,15 +244,15 @@ struct POSReceiptMainView: View {
     private var listColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("条目").font(.headline)
+                Text(L10n.ui("条目")).font(.headline)
                 if session.editingLineItemId != nil {
-                    Text("（编辑中）")
+                    Text(L10n.ui("（编辑中）"))
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
                 Spacer()
                 if session.editingLineItemId != nil {
-                    Button("完成编辑") {
+                    Button(L10n.ui("完成编辑")) {
                         commitEditToSelected()
                         session.endEditingLineItem()
                         session.clearDraft()
@@ -260,9 +260,9 @@ struct POSReceiptMainView: View {
                     }
                 }
                 if session.selectedItemId != nil {
-                    Button("删除选中") { deleteSelected() }
+                    Button(L10n.ui("删除选中")) { deleteSelected() }
                 }
-                Button("清空") {
+                Button(L10n.ui("清空")) {
                     session.lineItems = []
                     session.endEditingLineItem()
                     session.clearDraft()
@@ -277,9 +277,9 @@ struct POSReceiptMainView: View {
                     Image(systemName: "list.bullet")
                         .font(.title2)
                         .foregroundStyle(.secondary)
-                    Text("暂无条目")
+                    Text(L10n.ui("暂无条目"))
                         .font(.headline)
-                    Text("在左侧输入后回车添加")
+                    Text(L10n.ui("在左侧输入后回车添加"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -337,16 +337,20 @@ struct POSReceiptMainView: View {
     private var excelQuickPickSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Excel 快捷添加")
+                Text(L10n.ui("Excel 快捷添加"))
                     .font(.headline)
-                Button(isRefreshingExcel ? "刷新中…" : "刷新") {
+                Button(isRefreshingExcel ? L10n.ui("刷新中…") : L10n.ui("刷新")) {
                     Task { await refreshExcelTapped() }
                 }
                 .controlSize(.small)
                 .disabled(isRefreshingExcel)
                 Spacer()
                 if hasExcelCatalog {
-                    Text("第 \(session.excelCatalogPage + 1) / \(session.excelCatalogPageCount) 页")
+                    Text(
+                        L10n.current == .chinese
+                            ? "第 \(session.excelCatalogPage + 1) / \(session.excelCatalogPageCount) 页"
+                            : "Page \(session.excelCatalogPage + 1) / \(session.excelCatalogPageCount)"
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button {
@@ -381,7 +385,7 @@ struct POSReceiptMainView: View {
                     .padding(.vertical, 4)
                 }
             } else {
-                Text("暂无快捷项。请确认「项目名称」列已映射，或点「刷新已上传 Excel」。")
+                Text(L10n.ui("暂无快捷项。请确认「项目名称」列已映射，或点「刷新已上传 Excel」。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -581,7 +585,7 @@ struct POSReceiptMainView: View {
         session.endEditingLineItem()
         session.message = usedAutoCode && t.enableCode
             ? "已添加条目（编号 \(code)）"
-            : "已添加条目"
+            : L10n.ui("已添加条目")
         focusAfterLineAdded(template: t)
     }
 
@@ -596,7 +600,7 @@ struct POSReceiptMainView: View {
         if t.enableQuantity { item.quantity = session.draftQuantity }
         if t.enableAmount { item.amount = session.draftAmount }
         session.lineItems[idx] = item
-        session.message = "条目已更新"
+        session.message = L10n.ui("条目已更新")
     }
 
     private func deleteSelected() {
@@ -611,17 +615,17 @@ struct POSReceiptMainView: View {
     private var printHistorySheet: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("打印记录").font(.title2.weight(.semibold))
+                Text(L10n.ui("打印记录")).font(.title2.weight(.semibold))
                 Spacer()
-                Button("清理全部", role: .destructive) {
+                Button(L10n.ui("清理全部"), role: .destructive) {
                     session.clearPrintHistory()
                 }
                 .disabled(session.printHistory.isEmpty)
-                Button("关闭") { showHistory = false }
+                Button(L10n.ui("关闭")) { showHistory = false }
                     .keyboardShortcut(.cancelAction)
             }
             if session.printHistory.isEmpty {
-                ContentUnavailableView("暂无记录", systemImage: "clock", description: Text("成功打印后会自动保存在此"))
+                ContentUnavailableView(L10n.ui("暂无记录"), systemImage: "clock", description: Text(L10n.ui("成功打印后会自动保存在此")))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
@@ -641,20 +645,20 @@ struct POSReceiptMainView: View {
                             Text("合计 \(record.amountTotalText)")
                                 .font(.caption.monospacedDigit())
                             HStack {
-                                Button("载入条目") {
+                                Button(L10n.ui("载入条目")) {
                                     session.loadPrintHistory(record)
                                     showHistory = false
-                                    session.message = "已载入历史条目"
+                                    session.message = L10n.ui("已载入历史条目")
                                 }
-                                Button("重新打印") {
+                                Button(L10n.ui("重新打印")) {
                                     Task {
                                         showHistory = false
                                         await reprintHistory(record)
                                     }
                                 }
-                                Button("导出 PDF") { exportHistoryPDF(record) }
+                                Button(L10n.ui("导出 PDF")) { exportHistoryPDF(record) }
                                 Spacer()
-                                Button("删除", role: .destructive) {
+                                Button(L10n.ui("删除"), role: .destructive) {
                                     session.deletePrintHistory(id: record.id)
                                 }
                             }
@@ -689,7 +693,7 @@ struct POSReceiptMainView: View {
 
     private func reprintHistory(_ record: POSPrintHistoryRecord) async {
         guard template != nil else {
-            session.message = "请先选择模板"
+            session.message = L10n.ui("请先选择模板")
             return
         }
         session.loadPrintHistory(record)
@@ -698,11 +702,11 @@ struct POSReceiptMainView: View {
 
     private func printCurrentTicket(clearAfterSuccess: Bool) async {
         guard let t = template, !session.lineItems.isEmpty else {
-            session.message = "请先添加条目"
+            session.message = L10n.ui("请先添加条目")
             return
         }
         guard appState.settings.selectedPrinterName != nil else {
-            appState.lastError = "请先在设置中选择打印机"
+            appState.lastError = L10n.ui("请先在设置中选择打印机")
             return
         }
         isPrinting = true
@@ -746,7 +750,7 @@ struct POSReceiptMainView: View {
                     session.clearLineItemsForNextTicket(resetSurchargeFrom: t)
                     focusInitialField()
                 }
-                session.message = "已发送到打印机"
+                session.message = L10n.ui("已发送到打印机")
             } else {
                 session.message = "打印失败: \(record.transportError ?? "")"
             }
@@ -755,7 +759,7 @@ struct POSReceiptMainView: View {
 
     private func exportHistoryPDF(_ record: POSPrintHistoryRecord) {
         guard let image = NSImage(data: record.previewPNG) else {
-            session.message = "无法导出：预览图缺失"
+            session.message = L10n.ui("无法导出：预览图缺失")
             return
         }
         let panel = NSSavePanel()
@@ -764,7 +768,7 @@ struct POSReceiptMainView: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try Self.writePDF(image: image, to: url)
-            session.message = "已导出 PDF"
+            session.message = L10n.ui("已导出 PDF")
         } catch {
             session.message = "导出失败: \(error.localizedDescription)"
         }
@@ -774,14 +778,14 @@ struct POSReceiptMainView: View {
         // PDFKit handles bitmap→PDF orientation; manual CGContext + y-flip inverted the ticket.
         guard let page = PDFPage(image: image) else {
             throw NSError(domain: "POSPrintHistory", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "无法从预览图创建 PDF 页"
+                NSLocalizedDescriptionKey: L10n.ui("无法从预览图创建 PDF 页")
             ])
         }
         let doc = PDFDocument()
         doc.insert(page, at: 0)
         guard doc.write(to: url) else {
             throw NSError(domain: "POSPrintHistory", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "写入 PDF 失败"
+                NSLocalizedDescriptionKey: L10n.ui("写入 PDF 失败")
             ])
         }
     }

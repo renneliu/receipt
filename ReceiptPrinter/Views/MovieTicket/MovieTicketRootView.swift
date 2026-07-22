@@ -7,9 +7,15 @@ struct MovieTicketRootView: View {
     @State private var pendingPane: Pane?
 
     private enum Pane: String, CaseIterable, Identifiable {
-        case main = "主页面"
-        case template = "模板"
+        case main
+        case template
         var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .main: return L10n.ui("主页面")
+            case .template: return L10n.ui("模板")
+            }
+        }
     }
 
     var body: some View {
@@ -20,7 +26,7 @@ struct MovieTicketRootView: View {
                     set: { requestPaneChange($0) }
                 )) {
                     ForEach(Pane.allCases) { p in
-                        Text(p.rawValue).tag(p)
+                        Text(p.title).tag(p)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -29,10 +35,10 @@ struct MovieTicketRootView: View {
                 Spacer()
 
                 if let name = session.activeTemplate?.name {
-                    Text("当前模板：\(name)")
+                    Text("\(L10n.ui("当前模板："))\(name)")
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("未选择模板")
+                    Text(L10n.ui("未选择模板"))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -56,32 +62,32 @@ struct MovieTicketRootView: View {
             }
             .environmentObject(session)
         }
-        .navigationTitle("影票打印")
+        .navigationTitle(L10n.ui("影票打印"))
         .onAppear {
             pane = .main
             session.settings.lastPane = "main"
             session.settings.save()
         }
         .confirmationDialog(
-            "模板有未保存的更改，是否保存？",
+            L10n.ui("模板有未保存的更改，是否保存？"),
             isPresented: $showUnsavedDialog,
             titleVisibility: .visible
         ) {
-            Button("保存") {
+            Button(L10n.ui("保存")) {
                 session.saveEditingTemplate()
                 if let next = pendingPane {
                     pendingPane = nil
                     applyPaneChange(next)
                 }
             }
-            Button("不保存", role: .destructive) {
+            Button(L10n.ui("不保存"), role: .destructive) {
                 session.discardEditingChanges()
                 if let next = pendingPane {
                     pendingPane = nil
                     applyPaneChange(next)
                 }
             }
-            Button("取消", role: .cancel) {
+            Button(L10n.ui("取消"), role: .cancel) {
                 pendingPane = nil
             }
         }

@@ -4,5 +4,6 @@ dist/
 *.xcuserstate
 xcuserdata/
 .cursor/
+.tmp_restore/
 *.log
 .swiftpm/

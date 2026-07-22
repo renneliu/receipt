@@ -119,7 +119,7 @@ final class MovieTicketSession: ObservableObject {
         }
     }
 
-    func createTemplate(name: String = "新影票模板") {
+    func createTemplate(name: String = L10n.ui("新影票模板")) {
         let t = MovieTicketTemplate.makeBlank(name: name)
         store.saveMeta(t)
         reloadAll()
@@ -219,7 +219,7 @@ final class MovieTicketSession: ObservableObject {
             loadImages(for: saved)
         }
         markEditingClean()
-        message = "模板已保存"
+        message = L10n.ui("模板已保存")
     }
 
     func setBackground(_ image: NSImage?) {
@@ -332,7 +332,7 @@ final class MovieTicketSession: ObservableObject {
         if let tid = record.templateId {
             selectTemplate(tid)
         }
-        message = "已载入打印记录"
+        message = L10n.ui("已载入打印记录")
     }
 
     func deleteHistory(_ id: UUID) {

@@ -533,7 +533,7 @@ enum MovieTicketIMAXESCPOS {
         template: MovieTicketTemplate
     ) -> String {
         switch kind {
-        case .movieTitle: return draft.movieTitle
+        case .movieTitle: return draft.printedMovieTitle
         case .startTime: return element.timeFormat.format(draft.combinedStart)
         case .endTime:
             let body = element.timeFormat.format(draft.showEndTime)

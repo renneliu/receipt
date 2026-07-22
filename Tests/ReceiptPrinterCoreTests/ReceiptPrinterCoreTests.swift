@@ -809,6 +809,309 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         )
     }
 
+    /// Dendy / Event style: "Thursday, July 9 Stratford, 6:00 pm" — US month-day order.
+    func testShowDateRecognizesUSWeekdayMonthDay() {
+        let page = """
+        THANK YOU FOR YOUR ORDER!
+        TICKETS
+        The Dark Knight
+        Thursday, July 9 Stratford, 6:00 pm (Ends at 8:52 pm)
+        X 1 Cinema 3 Row G Seat 7
+        Adult Event
+        """
+        let date = MovieTicketPDFRecognitionService.dateOnly(from: page)
+        XCTAssertEqual(date, "Thursday, July 9")
+        XCTAssertNil(MovieTicketPDFRecognitionService.dateOnly(from: "The Dark Knight"))
+    }
+
+    func testEndTimeIsPDFExtractableAndAppliesDuration() {
+        XCTAssertTrue(MovieTicketFieldKind.endTime.isPDFExtractable)
+
+        var draft = MovieTicketDraft.blank(defaultAd: 0)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        var day = DateComponents()
+        day.year = 2026; day.month = 7; day.day = 9
+        if let d = cal.date(from: day) { draft.showDate = d }
+        var time = DateComponents()
+        time.hour = 18; time.minute = 0
+        if let t0 = cal.date(from: time) { draft.showStartTime = t0 }
+
+        MovieTicketPDFRecognitionService.apply(
+            fields: [.endTime: "Ends at 8:52 pm"],
+            to: &draft
+        )
+        let end = draft.showEndTime
+        XCTAssertEqual(cal.component(.hour, from: end), 20)
+        XCTAssertEqual(cal.component(.minute, from: end), 52)
+        XCTAssertEqual(draft.movieDurationMinutes, 172)
+    }
+
+    func testEventDendyPageTextDetectors() {
+        let page = """
+        THANK YOU FOR YOUR ORDER!
+        TICKETS
+        The Dark Knight
+        Thursday, July 9 Stratford, 6:00 pm (Ends at 8:52 pm)
+        X 1 Cinema 3 Row G Seat 7
+        Adult Event
+        Club 25% Off Ticket
+        """
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.movieTitle, text: page),
+            "The Dark Knight"
+        )
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.hall, text: page),
+            "Cinema 3"
+        )
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.seatArea, text: page),
+            "G7"
+        )
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.ticketType, text: page),
+            "Adult Event"
+        )
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.showDate, text: page),
+            "Thursday, July 9"
+        )
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.endTime, text: page),
+            "8:52 pm"
+        )
+    }
+
+    /// Web confirmation PDF: title sits above the SHOWING label (not SHOWING itself).
+    func testWebTicketTitleAboveShowingLabel() {
+        let page = """
+        Tax invoice Thank you for your order!
+        The Dark Knight
+        SHOWING
+        Wednesday, July 22, 2026 6:15 pm (Ends at 8:52 pm)
+        X 1 Cinema 3 Row H Seat 3
+        Adult Event
+        """
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.movieTitle, text: page),
+            "The Dark Knight"
+        )
+        XCTAssertNotEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.movieTitle, text: page),
+            "SHOWING"
+        )
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.hall, text: page),
+            "Cinema 3"
+        )
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.seatArea, text: page),
+            "H3"
+        )
+    }
+
+    /// Blank lines / chrome between title and SHOWING must not block detection.
+    func testWebTicketTitleWithGapsAboveShowing() {
+        let page = """
+        LOGOUT HOME Tax invoice Thank you for your order!
+        Orders
+        Hi, XIAOYU
+
+        The Dark Knight
+
+        SHOWING
+        July 22, 2026 6:15 pm
+        Cinema 3
+        """
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.movieTitle, text: page),
+            "The Dark Knight"
+        )
+    }
+
+    /// Nav label "Account Overview" must lose to the real title near SHOWING.
+    func testWebTicketRejectsAccountOverviewAsTitle() {
+        let page = """
+        Account Overview
+        Orders
+        Tax invoice Thank you for your order!
+
+        The Dark Knight
+        SHOWING
+        July 22, 2026 6:15 pm (Ends at 8:52 pm)
+        X 1 Cinema 3 Row H Seat 3
+        Adult Event
+        """
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.movieTitle, text: page),
+            "The Dark Knight"
+        )
+        XCTAssertFalse(
+            (MovieTicketPDFFieldRecognizer.detectFromPageText(.movieTitle, text: page) ?? "")
+                .localizedCaseInsensitiveContains("Account")
+        )
+    }
+
+    /// Some PDFs emit title after SHOWING before the clock line.
+    func testWebTicketTitleBelowShowingBeforeClock() {
+        let page = """
+        Account Overview
+        SHOWING
+        The Dark Knight
+        July 22, 2026 6:15 pm
+        Cinema 3
+        """
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.movieTitle, text: page),
+            "The Dark Knight"
+        )
+    }
+
+    /// Runtime evidence: "👋 Hi, XIAOYU" scored above "A Clockwork Orange" — must prefer the film.
+    func testWebTicketPrefersClockworkOrangeOverGreeting() {
+        let page = """
+        Current Upcoming
+        👋 Hi, XIAOYU
+        order!
+        SHOWING
+        A Clockwork Orange
+        View & manage membership
+        July 22, 2026 6:15 pm
+        Cinema 3
+        """
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.movieTitle, text: page),
+            "A Clockwork Orange"
+        )
+    }
+
+    func testOrpheumOrderSummaryTotalNotTax() {
+        // Orpheum Order Summary: integer Total, tax on the next line — must not return 2.64.
+        let page = """
+        Order Summary
+        28/09/2025 10:50:17 AM
+        1 x Bookingfee 2.5
+        1 x To Live To Live | C4 Orpheum 26.5
+        Total 29
+        Including Tax 2.64
+        """
+        XCTAssertEqual(
+            MovieTicketPDFRecognitionService.totalCurrency(fromPageText: page),
+            "29"
+        )
+
+        let withCents = """
+        Total (inc. GST) $45.00
+        GST $4.09
+        """
+        XCTAssertEqual(
+            MovieTicketPDFRecognitionService.totalCurrency(fromPageText: withCents),
+            "$45.00"
+        )
+    }
+
+    func testOrpheumTemplateLayoutAndCompose() {
+        let template = MovieTicketTemplate.makeOrpheum()
+        XCTAssertEqual(template.name, "Orpheum")
+        XCTAssertTrue(template.usesOrpheumLayout)
+        XCTAssertFalse(template.usesRitzLayout)
+        XCTAssertEqual(template.layoutStyle, "orpheum")
+        XCTAssertTrue(template.elements.contains { $0.fieldKind == .hall && $0.isInverted })
+        XCTAssertTrue(template.elements.contains { $0.fieldKind == .movieTitle })
+        XCTAssertTrue(template.elements.contains { $0.fieldKind == .barcode })
+        XCTAssertTrue(template.elements.contains {
+            $0.kind == .textBox && $0.content.localizedCaseInsensitiveContains("Orpheum")
+        })
+
+        let draft = MovieTicketDraft.orpheumSample().draftForTicket(at: 0)
+        let config = PrinterConfig()
+        let result = MovieTicketPrintComposer.compose(
+            template: template,
+            draft: draft,
+            backgroundImage: nil,
+            config: config
+        )
+        XCTAssertFalse(result.artifacts.payload.isEmpty)
+        XCTAssertGreaterThan(result.previewImage.size.width, 0)
+        XCTAssertTrue(result.artifacts.printerModelHint?.contains("Orpheum") == true)
+    }
+
+    func testDendyTemplateLayoutAndCompose() {
+        let template = MovieTicketTemplate.makeDendy()
+        XCTAssertEqual(template.name, "Dendy")
+        XCTAssertTrue(template.usesDendyLayout)
+        XCTAssertFalse(template.usesRitzLayout)
+        XCTAssertFalse(template.usesOrpheumLayout)
+        XCTAssertEqual(template.layoutStyle, "dendy")
+        XCTAssertTrue(template.elements.contains { $0.fieldKind == .movieTitle })
+        XCTAssertTrue(template.elements.contains { $0.fieldKind == .qrCode })
+        XCTAssertTrue(template.elements.contains { $0.fieldKind == .hall && $0.hallDisplayMode == .cinemaNumber })
+        XCTAssertTrue(template.elements.contains {
+            $0.fieldKind == .serialNumber && ($0.content.contains("Code") || $0.content.contains("#"))
+        })
+
+        let draft = MovieTicketDraft.dendySample().draftForTicket(at: 0)
+        XCTAssertEqual(draft.movieTitle, "The Testament of Ann Lee")
+        XCTAssertEqual(draft.bookingCode, "6924686")
+        let config = PrinterConfig()
+        let result = MovieTicketPrintComposer.compose(
+            template: template,
+            draft: draft,
+            backgroundImage: nil,
+            config: config
+        )
+        XCTAssertFalse(result.artifacts.payload.isEmpty)
+        XCTAssertGreaterThan(result.previewImage.size.height, 100)
+        XCTAssertTrue(result.artifacts.printerModelHint?.contains("Dendy") == true)
+
+        let payload = result.artifacts.payload
+        XCTAssertTrue(payload.contains(Data("Cinema 3".utf8)))
+        XCTAssertTrue(payload.contains(Data("Seat F7".utf8)))
+        XCTAssertTrue(payload.contains(Data("Adult Event".utf8)))
+        XCTAssertTrue(payload.contains(Data("Code: #6924686".utf8)))
+        XCTAssertTrue(payload.contains(Data("Ticket #466713335".utf8)))
+        XCTAssertTrue(payload.contains(Data("Ends at ".utf8)))
+
+        // Cinema/seat at stock 2×3 (GS ! 0x12) fits one line; title mirrors that.
+        let titleEl = template.elements.first { $0.fieldKind == .movieTitle }!
+        let hallEl = template.elements.first { $0.fieldKind == .hall }!
+        let titleScale = MovieTicketRitzESCPOS.printScale(
+            fontSize: titleEl.fontSize, boxHeight: titleEl.frame.height
+        )
+        let hallScale = MovieTicketRitzESCPOS.printScale(
+            fontSize: hallEl.fontSize, boxHeight: hallEl.frame.height
+        )
+        XCTAssertEqual(titleScale.width, 2)
+        XCTAssertEqual(titleScale.height, 3)
+        XCTAssertEqual(hallScale.width, 2)
+        XCTAssertEqual(hallScale.height, 3)
+        // GS ! n = ((w-1)<<4) | (h-1) → 2×3 = 0x12
+        XCTAssertTrue(payload.contains(Data([0x1D, 0x21, 0x12])))
+        XCTAssertFalse(payload.contains(Data([0x1D, 0x21, 0x22])))
+
+        // Session date includes year.
+        let year = Calendar.current.component(.year, from: draft.showDate)
+        XCTAssertTrue(payload.contains(Data(", \(year), ".utf8)) || payload.contains(Data("\(year),".utf8)))
+
+        var small = template
+        for kind: MovieTicketFieldKind in [.movieTitle, .hall, .seatArea] {
+            if let i = small.elements.firstIndex(where: { $0.fieldKind == kind }) {
+                small.elements[i].fontSize = 11
+                small.elements[i].frame.height = 13
+            }
+        }
+        let smallPayload = MovieTicketPrintComposer.compose(
+            template: small,
+            draft: draft,
+            backgroundImage: nil,
+            config: config
+        ).artifacts.payload
+        // 1×1 on title/cinema → no 3×3; code line may still emit 2×2.
+        XCTAssertTrue(smallPayload.contains(Data([0x1D, 0x21, 0x00])))
+        XCTAssertFalse(smallPayload.contains(Data([0x1D, 0x21, 0x22])))
+    }
+
     func testIMAXSydneyTemplateLayoutAndCompose() {
         let made = MovieTicketTemplate.makeIMAXSydney()
         let template = made.template
@@ -840,5 +1143,33 @@ final class ReceiptPrinterCoreTests: XCTestCase {
                 || payload.contains(Data(meta.utf8))
                 || payload.contains(Data("536011/001".utf8))
         )
+    }
+
+    func testPrintedMovieTitleAppendsRatingOnlyWhenToggleOn() {
+        var draft = MovieTicketDraft(movieTitle: "The Bride!", contentRating: "M")
+        XCTAssertEqual(draft.printedMovieTitle(using: []), "The Bride!")
+        draft.printContentRating = true
+        XCTAssertEqual(draft.printedMovieTitle(using: []), "The Bride! (M)")
+        // Avoid doubling if already present
+        draft.movieTitle = "The Bride! (M)"
+        XCTAssertEqual(draft.printedMovieTitle(using: []), "The Bride! (M)")
+    }
+
+    func testContentRatingPrintMappingShortensMA15() {
+        let mappings = MovieTicketRatingPrintMapping.defaults
+        XCTAssertEqual(MovieTicketRatingPrintMapping.printLabel(for: "MA 15+", mappings: mappings), "MA15")
+        XCTAssertEqual(MovieTicketRatingPrintMapping.printLabel(for: "ma15+", mappings: mappings), "MA15")
+        XCTAssertEqual(MovieTicketRatingPrintMapping.printLabel(for: "PG", mappings: mappings), "PG")
+        let draft = MovieTicketDraft(movieTitle: "The Bride!", contentRating: "MA 15+", printContentRating: true)
+        XCTAssertEqual(draft.printedMovieTitle(using: mappings), "The Bride! (MA15)")
+    }
+
+    func testTMDBPreferredCertificationPrefersAU() {
+        let payload = TMDBReleaseDatesPayload(results: [
+            TMDBReleaseCountry(iso3166: "US", releaseDates: [TMDBReleaseDateEntry(certification: "R")]),
+            TMDBReleaseCountry(iso3166: "AU", releaseDates: [TMDBReleaseDateEntry(certification: "M")]),
+            TMDBReleaseCountry(iso3166: "GB", releaseDates: [TMDBReleaseDateEntry(certification: "15")])
+        ])
+        XCTAssertEqual(TMDBMovieMetadataProvider.preferredCertification(from: payload), "M")
     }
 }

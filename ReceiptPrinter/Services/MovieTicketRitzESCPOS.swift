@@ -84,7 +84,7 @@ enum MovieTicketRitzESCPOS {
         return ResolvedTicket(
             cinema: cinemaName(from: template),
             hall: hallText,
-            title: draft.movieTitle.trimmingCharacters(in: .whitespacesAndNewlines),
+            title: draft.printedMovieTitle,
             startLine: startDateTime(draft: draft, template: template),
             endLine: endDateTime(draft: draft, template: template),
             seat: seatText(draft: draft, template: template),

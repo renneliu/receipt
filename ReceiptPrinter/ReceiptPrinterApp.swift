@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UserNotifications
 
@@ -11,6 +12,10 @@ struct ReceiptPrinterApp: App {
                 .environmentObject(appState)
                 .frame(minWidth: 1200, minHeight: 720)
                 .onAppear {
+                    if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
+                       let icon = NSImage(contentsOf: url) {
+                        NSApp.applicationIconImage = icon
+                    }
                     appState.bootstrap()
                 }
         }
@@ -34,6 +39,9 @@ final class AppState: ObservableObject {
     @Published var extractionSchemas: [EmailExtractionSchema] = []
     @Published var diagnosticRecords: [PrintDiagnosticRecord] = []
     @Published var isPrinting = false
+    /// Settings editor drafts report dirtiness so MainView can prompt on leave.
+    @Published var settingsHasUnsavedChanges = false
+    let settingsDraftStore = SettingsDraftStore()
 
     let printService = CUPSPrintService()
     let printController = PrintController()
@@ -78,9 +86,13 @@ final class AppState: ObservableObject {
         extractionSchemas = extractionSchemaStore.loadAll()
         diagnosticRecords = diagnosticStore.loadAll()
         notificationService.requestAuthorization()
-        if settings.gmailSyncEnabled && gmailAuth.isAuthenticated {
-            gmailSync.start(interval: settings.gmailSyncInterval)
+        L10n.current = settings.appLanguage
+        selectedSidebarItem = settings.defaultStartupPage
+        // Gmail sync removed from product UI — never auto-start.
+        if gmailSync.isRunning {
+            gmailSync.stop()
         }
+        settings.gmailSyncEnabled = false
     }
 
     func reloadTemplates() {
@@ -117,7 +129,7 @@ final class AppState: ObservableObject {
 
     func printTemplate(_ template: ReceiptTemplate, data: [String: String]) async {
         guard let printer = settings.selectedPrinterName, !printer.isEmpty else {
-            lastError = "请先在设置中选择打印机"
+            lastError = L10n.ui("请先在设置中选择打印机")
             return
         }
         let escpos = TemplateRenderer.renderESCPOS(template: template, data: data, config: settings.printerConfig)
@@ -143,7 +155,7 @@ final class AppState: ObservableObject {
     /// Off-main render + serialized single transmission, then publish the record on main.
     func runDiagnosticPrint(artifacts: PrintArtifacts, statusPollingWasActive: Bool) async -> PrintDiagnosticRecord? {
         guard let printer = settings.selectedPrinterName, !printer.isEmpty else {
-            lastError = "请先在设置中选择打印机"
+            lastError = L10n.ui("请先在设置中选择打印机")
             return nil
         }
         isPrinting = true
@@ -191,7 +203,7 @@ final class AppState: ObservableObject {
 
     func confirmPrint(order: PendingOrder) async {
         guard let template = templates.first(where: { $0.id == order.templateId }) else {
-            lastError = "找不到关联模板"
+            lastError = L10n.ui("找不到关联模板")
             return
         }
         let data = OrderPrintData.merged(for: order, templates: templates)
@@ -205,7 +217,7 @@ final class AppState: ObservableObject {
 
     func reprintOrder(order: PendingOrder) async {
         guard let template = templates.first(where: { $0.id == order.templateId }) else {
-            lastError = "找不到关联模板"
+            lastError = L10n.ui("找不到关联模板")
             return
         }
         let data = OrderPrintData.merged(for: order, templates: templates)
@@ -245,25 +257,66 @@ final class AppState: ObservableObject {
 }
 
 enum SidebarItem: String, CaseIterable, Identifiable {
-    case quickPrint = "快速打印"
-    case spreadsheetSequence = "Excel表格序列打印"
-    case posReceipt = "POS小票打印"
-    case templatePrint = "影票打印"
+    case quickPrint
+    case spreadsheetSequence
+    case posReceipt
+    case templatePrint
+    case pdfPrint
     /// Kept for deep-links / migration; hidden from sidebar.
-    case templates = "模板管理"
-    case designer = "模板设计"
-    case emailExtraction = "邮件抓取规则"
-    case orders = "订单收件箱"
-    case cinemaRules = "影院规则"
-    case gmail = "Gmail"
-    case diagnostics = "打印诊断"
-    case settings = "设置"
+    case templates
+    case designer
+    case emailExtraction
+    case orders
+    case cinemaRules
+    case gmail
+    case diagnostics
+    case settings
 
     var id: String { rawValue }
 
-    /// Sidebar entries (模板管理 / 模板设计 folded into 影票打印).
+    /// Sidebar entries (email/Gmail pipeline and template designer folded away).
     static var sidebarItems: [SidebarItem] {
-        allCases.filter { $0 != .templates && $0 != .designer }
+        allCases.filter {
+            switch $0 {
+            case .templates, .designer, .emailExtraction, .orders, .cinemaRules, .gmail:
+                return false
+            default:
+                return true
+            }
+        }
+    }
+
+    /// Pages offered as “default on launch” (exclude Settings).
+    static var startupPageChoices: [SidebarItem] {
+        sidebarItems.filter { $0 != .settings }
+    }
+
+    func title(_ language: AppLanguage) -> String {
+        L10n.t("nav.\(rawValue)", language)
+    }
+
+    static func fromPersisted(_ raw: String) -> SidebarItem {
+        if let item = SidebarItem(rawValue: raw) { return item }
+        return fromLegacyTitle(raw) ?? .quickPrint
+    }
+
+    static func fromLegacyTitle(_ title: String) -> SidebarItem? {
+        switch title {
+        case "快速打印": return .quickPrint
+        case "Excel表格序列打印": return .spreadsheetSequence
+        case "POS小票打印": return .posReceipt
+        case "影票打印": return .templatePrint
+        case "PDF打印": return .pdfPrint
+        case "模板管理": return .templates
+        case "模板设计": return .designer
+        case "邮件抓取规则": return .emailExtraction
+        case "订单收件箱": return .orders
+        case "影院规则": return .cinemaRules
+        case "Gmail": return .gmail
+        case "打印诊断": return .diagnostics
+        case "设置": return .settings
+        default: return nil
+        }
     }
 
     var icon: String {
@@ -272,6 +325,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .spreadsheetSequence: return "tablecells"
         case .posReceipt: return "cart"
         case .templatePrint: return "ticket"
+        case .pdfPrint: return "doc.viewfinder"
         case .templates: return "doc.text"
         case .designer: return "pencil.and.outline"
         case .emailExtraction: return "envelope.badge"

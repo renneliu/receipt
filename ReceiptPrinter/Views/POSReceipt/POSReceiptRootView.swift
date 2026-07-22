@@ -5,9 +5,15 @@ struct POSReceiptRootView: View {
     @State private var pane: Pane = .main
 
     private enum Pane: String, CaseIterable, Identifiable {
-        case main = "主页面"
-        case template = "模板"
+        case main
+        case template
         var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .main: return L10n.ui("主页面")
+            case .template: return L10n.ui("模板")
+            }
+        }
     }
 
     var body: some View {
@@ -15,7 +21,7 @@ struct POSReceiptRootView: View {
             HStack {
                 Picker("", selection: $pane) {
                     ForEach(Pane.allCases) { p in
-                        Text(p.rawValue).tag(p)
+                        Text(p.title).tag(p)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -24,10 +30,10 @@ struct POSReceiptRootView: View {
                 Spacer()
 
                 if let name = session.activeTemplate?.name {
-                    Text("当前模板：\(name)")
+                    Text("\(L10n.ui("当前模板："))\(name)")
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("未选择模板")
+                    Text(L10n.ui("未选择模板"))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -51,7 +57,7 @@ struct POSReceiptRootView: View {
             }
             .environmentObject(session)
         }
-        .navigationTitle("POS小票打印")
+        .navigationTitle(L10n.ui("POS小票打印"))
         .onAppear {
             // Always land on 主页面 when opening POS 小票.
             pane = .main
