@@ -4,6 +4,18 @@ macOS 热敏小票打印机软件：CUPS Raw 光栅打印、富文本快速打�
 
 详细改动记在 [CHANGELOG.md](CHANGELOG.md)。
 
+## 隐私政策（App Store）
+
+英文隐私政策页面：[`docs/privacy.html`](docs/privacy.html)
+
+发布到 GitHub Pages 后，在 App Store Connect 的 **Privacy Policy URL** 填：
+
+```text
+https://renneliu.github.io/receipt/privacy.html
+```
+
+启用方式：GitHub 仓库 **Settings → Pages → Build and deployment → Source** 选 **Deploy from a branch**，Branch 选 `main`，Folder 选 `/docs`，保存。几分钟后用浏览器打开上面的链接确认可访问，再提交审核。
+
 ## 系统要求
 
 - macOS 14+
@@ -18,12 +30,44 @@ chmod +x scripts/build-app.sh
 open dist/ReceiptPrinter.app
 ```
 
-调试构建：
+调试构建（本机日常使用，数据在 `~/Library/Application Support/ReceiptPrinter`）：
 
 ```bash
 ./scripts/build-debug-app.sh
 open dist/ReceiptPrinter.app
 ```
+
+App Store / 发布版（**独立 Bundle ID 与数据目录，不会改动本机正在用的数据**）：
+
+**上传 App Store Connect（推荐）** — 仓库内已有可 Archive 工程，与本地脚本共用同一份源码：
+
+```bash
+open ReceiptPrinterStore.xcodeproj
+# Signing & Capabilities → 选择你的 Team
+# Product → Archive → Distribute App → App Store Connect
+```
+
+若改过 `project.yml` / `VERSION`，可重新生成工程：
+
+```bash
+./scripts/generate-store-xcodeproj.sh
+```
+
+本地试跑商店逻辑（ad-hoc 签名，**不能**直接上传商店）：
+
+```bash
+./scripts/build-appstore.sh
+open dist/ReceiptPrinterStore.app
+```
+
+发布版特点：
+
+- Bundle ID：`com.receiptprinter.store`，编译条件：`APPSTORE`
+- 语言默认跟随系统（中文系统→中文，其它→英文）
+- 影票首次安装只种子「示例影票」，不自动装 IMAX / Orpheum / Dendy
+- 不种子旧「模板管理」示例库；POS 模板为空，由用户自建
+- 不含 Gmail Client Secret；Gmail 页只填 Client ID；TMDB Key 在设置中自填
+- 数据目录：`~/Library/Application Support/ReceiptPrinterStore`（与日常 `…/ReceiptPrinter` 隔离）
 
 运行单元测试：
 
@@ -97,9 +141,40 @@ swift test
 # 或 patch / major / build
 ```
 
-脚本会更新 `VERSION`、打包 `dist/ReceiptPrinter.app`、提交并打标签 `v*`。推送到 GitHub：
+脚本会：
+
+1. **备份用户数据**（模板、PDF 规则、设置 plist 等）到 `backups/`
+2. 更新 `VERSION`、打包 `dist/ReceiptPrinter.app`
+3. 再备份一份带新版本号的用户数据
+4. 提交并打标签 `v*`
+
+推送到 GitHub：
 
 ```bash
 git push origin main
 git push origin v1.1.0
 ```
+
+### 源代码 vs 用户配置
+
+| 内容 | 位置 | 版本方式 |
+|------|------|----------|
+| 应用源码 | Git 仓库 | `git tag v*` / `VERSION` |
+| 影票 / POS / 通用模板、PDF 规则、打印记录、Secrets | `~/Library/Application Support/ReceiptPrinter/` | `scripts/backup-userdata.sh` |
+| 打印机/语言等设置、当前模板选择 | `~/Library/Preferences/*.plist` | 一并打进 userdata 备份 |
+
+`backups/ReceiptPrinter-userdata-*.tar.gz` 已在 `.gitignore`，**不会进 Git**（可能含 OAuth / API Key）。请自行把 `backups/` 拷到外置盘或云盘。
+
+手动备份 / 恢复：
+
+```bash
+./scripts/backup-userdata.sh                 # 标准（不含体积很大的 PrintDiagnostics）
+./scripts/backup-userdata.sh --full          # 含打印诊断
+./scripts/backup-userdata.sh --label before-pos
+
+./scripts/restore-userdata.sh --latest
+# 或
+./scripts/restore-userdata.sh backups/ReceiptPrinter-userdata-….tar.gz
+```
+
+恢复前脚本会先再备份当前数据；恢复后请重启 App。

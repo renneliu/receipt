@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Privacy Policy — ReceiptPrinter</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --fg: #1a1a1a;
+      --muted: #555;
+      --bg: #fafafa;
+      --card: #fff;
+      --border: #e5e5e5;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #f2f2f2;
+        --muted: #aaa;
+        --bg: #121212;
+        --card: #1c1c1c;
+        --border: #333;
+      }
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.55;
+      color: var(--fg);
+      background: var(--bg);
+    }
+    main {
+      max-width: 42rem;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+      background: var(--card);
+      border-left: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+      min-height: 100vh;
+      box-sizing: border-box;
+    }
+    h1 { font-size: 1.75rem; margin: 0 0 0.35rem; }
+    h2 { font-size: 1.15rem; margin: 2rem 0 0.6rem; }
+    p, li { color: var(--fg); }
+    .meta { color: var(--muted); font-size: 0.95rem; margin-bottom: 1.5rem; }
+    ul { padding-left: 1.25rem; }
+    a { color: #0b57d0; }
+    @media (prefers-color-scheme: dark) {
+      a { color: #8ab4f8; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Privacy Policy</h1>
+    <p class="meta">
+      <strong>ReceiptPrinter</strong> (macOS)<br />
+      Effective date: July 25, 2026<br />
+      Last updated: July 25, 2026
+    </p>
+
+    <p>
+      This Privacy Policy describes how the ReceiptPrinter macOS application
+      (“<strong>App</strong>”, “we”, “us”) handles information when you use the App.
+      ReceiptPrinter is a local utility for designing and printing thermal receipts,
+      tickets, and related documents on your Mac.
+    </p>
+
+    <h2>1. Summary</h2>
+    <ul>
+      <li>We do <strong>not</strong> operate our own cloud backend that receives your receipt content.</li>
+      <li>Print jobs, templates, drafts, and settings are stored <strong>on your Mac</strong>.</li>
+      <li>Optional features may contact <strong>Google (Gmail)</strong> and/or <strong>TMDB</strong> using credentials you provide.</li>
+      <li>The App does <strong>not</strong> include advertising SDKs, analytics SDKs, or crash-reporting SDKs that phone home to us.</li>
+    </ul>
+
+    <h2>2. Information stored on your device</h2>
+    <p>Depending on how you use the App, it may store locally (typically under your user Library Application Support folder for the App):</p>
+    <ul>
+      <li>Receipt / ticket templates, logos, layouts, and drafts</li>
+      <li>Print history and diagnostic records you generate in the App</li>
+      <li>Printer-related preferences and other App settings</li>
+      <li>Imported files you choose (for example spreadsheets, PDFs, or images), when you open or save them</li>
+      <li>Optional secrets you enter (such as a Google OAuth Client ID / tokens, or a TMDB API key), stored in a restricted folder on your Mac with file permissions limited to your user account</li>
+    </ul>
+    <p>
+      These materials remain under your control on your computer. Uninstalling the App
+      or deleting the App’s Application Support data removes that local data
+      (subject to normal macOS backup copies you may have created).
+    </p>
+
+    <h2>3. Optional network features</h2>
+
+    <h3>3.1 Gmail (optional)</h3>
+    <p>
+      If you connect a Google account, the App uses OAuth to access Gmail with a
+      <strong>read-only</strong> scope (<code>gmail.readonly</code>) so it can help you
+      find and extract order / ticket information from your email according to rules you configure.
+    </p>
+    <ul>
+      <li>You supply your own Google OAuth Client ID (App Store build) and complete sign-in in your browser.</li>
+      <li>Access / refresh tokens are stored on your Mac for reconnecting.</li>
+      <li>Email content retrieved for this feature is processed on your device to fill templates; we do not operate a service that stores your mailbox.</li>
+      <li>Google’s handling of your account is governed by <a href="https://policies.google.com/privacy">Google’s Privacy Policy</a>.</li>
+    </ul>
+
+    <h3>3.2 TMDB (optional)</h3>
+    <p>
+      If you enter a TMDB API key in Settings, the App may send movie title search
+      queries to The Movie Database to look up runtime and related metadata.
+      Your API key is stored on your Mac. TMDB’s practices are described in
+      <a href="https://www.themoviedb.org/privacy-policy">TMDB’s Privacy Policy</a>.
+    </p>
+
+    <h3>3.3 Printing</h3>
+    <p>
+      Print data is sent to printers you select through macOS / CUPS on your local system
+      (or network printers you have already configured in macOS). The App requests
+      sandbox permission to print and to access files you explicitly select.
+    </p>
+
+    <h2>4. Information we do not collect</h2>
+    <p>The App developer does not collect through the App:</p>
+    <ul>
+      <li>Advertising identifiers or cross-app tracking profiles</li>
+      <li>Analytics or usage telemetry sent to our servers (we do not run such servers for the App)</li>
+      <li>Your receipt content uploaded to us for storage or marketing</li>
+    </ul>
+    <p>
+      If you contact us by email or GitHub, we will receive whatever information you
+      choose to include in that message.
+    </p>
+
+    <h2>5. Children’s privacy</h2>
+    <p>
+      The App is a business / productivity utility and is not directed at children under 13.
+      We do not knowingly collect personal information from children through the App.
+    </p>
+
+    <h2>6. Data retention and deletion</h2>
+    <p>
+      Local data remains until you delete it in the App, remove the App’s support files,
+      or erase your Mac. You can disconnect Gmail in the App to remove stored Gmail tokens
+      from the App’s local secrets storage. You can clear the TMDB API key in Settings.
+    </p>
+
+    <h2>7. Third-party services</h2>
+    <p>When optional integrations are enabled, data is exchanged only with:</p>
+    <ul>
+      <li>Google (Gmail API / OAuth), if you connect Gmail</li>
+      <li>TMDB (The Movie Database API), if you configure an API key</li>
+      <li>Apple (App Store / macOS system services such as printing and networking), as part of normal platform operation</li>
+    </ul>
+
+    <h2>8. Changes to this policy</h2>
+    <p>
+      We may update this Privacy Policy from time to time. The “Last updated” date at
+      the top will change when we do. Continued use of the App after an update means
+      you accept the revised policy.
+    </p>
+
+    <h2>9. Contact</h2>
+    <p>
+      Questions about this Privacy Policy or the App:
+    </p>
+    <ul>
+      <li>GitHub Issues: <a href="https://github.com/renneliu/receipt/issues">https://github.com/renneliu/receipt/issues</a></li>
+      <li>Repository: <a href="https://github.com/renneliu/receipt">https://github.com/renneliu/receipt</a></li>
+    </ul>
+  </main>
+</body>
+</html>
