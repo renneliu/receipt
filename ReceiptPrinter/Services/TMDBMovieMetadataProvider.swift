@@ -216,10 +216,7 @@ final class MovieRuntimeCache {
     private var cache: [String: Int] = [:]
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport.appendingPathComponent("ReceiptPrinter", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        fileURL = dir.appendingPathComponent("movie_runtime_cache.json")
+        fileURL = AppPaths.applicationSupportRoot.appendingPathComponent("movie_runtime_cache.json")
         load()
     }
 

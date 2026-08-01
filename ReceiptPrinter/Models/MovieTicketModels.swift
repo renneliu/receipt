@@ -486,11 +486,8 @@ enum MovieTicketFieldKind: String, Codable, CaseIterable, Identifiable {
 
     /// Fields that can be extracted from a PDF recognition rule.
     var isPDFExtractable: Bool {
-        switch self {
-        case .endTime: return false
-        // barcode / qrCode extract the booking serial that feeds those graphics.
-        default: return true
-        }
+        // endTime is extractable (Dendy/Event "Ends at …"); barcode/qr share serial extract.
+        true
     }
 
     /// Short description shown in the PDF recognizer panel.
@@ -507,7 +504,7 @@ enum MovieTicketFieldKind: String, Codable, CaseIterable, Identifiable {
         case .timeRange: return L10n.ui("识别开场时间（与开始时间共用逻辑）；可勾选同时识别日期")
         case .startTime: return L10n.ui("识别开场时间；可勾选同时识别日期；找不到再框选定位")
         case .showDate: return L10n.ui("识别场次日期；找不到再框选定位")
-        case .endTime: return L10n.ui("结束时间由片长/用户填写，不从 PDF 识别")
+        case .endTime: return L10n.ui("搜索 Ends at / Until 结束时间；找不到再框选定位")
         }
     }
 }

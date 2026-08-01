@@ -11,10 +11,8 @@ final class SequenceTemplateStore {
     private let draftDir: URL
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        root = appSupport.appendingPathComponent("ReceiptPrinter/SequenceTemplates", isDirectory: true)
-        draftDir = appSupport.appendingPathComponent("ReceiptPrinter", isDirectory: true)
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        root = AppPaths.subdirectory("SequenceTemplates")
+        draftDir = AppPaths.applicationSupportRoot
         try? FileManager.default.createDirectory(at: draftDir, withIntermediateDirectories: true)
     }
 
@@ -126,15 +124,31 @@ final class SequenceTemplateStore {
         }
 
         let bodyURL = dir.appendingPathComponent("body.rtfd", isDirectory: true)
-        try? FileManager.default.createDirectory(at: bodyURL, withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: bodyURL)
         let range = NSRange(location: 0, length: body.length)
-        if let data = try? body.data(
+        if let wrapper = try? body.fileWrapper(
             from: range,
             documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
         ) {
-            let temp = dir.appendingPathComponent("body.rtfd.tmp")
-            try? data.write(to: temp, options: .atomic)
-            _ = try? FileManager.default.replaceItemAt(bodyURL, withItemAt: temp)
+            try? wrapper.write(to: bodyURL, options: .atomic, originalContentsURL: nil)
+        } else if let data = try? body.data(
+            from: range,
+            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
+        ) {
+            try? data.write(to: bodyURL, options: .atomic)
+        }
+    }
+
+    func rename(id: UUID, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let metaURL = folder(for: id).appendingPathComponent("meta.json")
+        guard let data = try? Data(contentsOf: metaURL),
+              var doc = try? JSONDecoder().decode(SpreadsheetSequenceDocument.self, from: data) else { return }
+        doc.name = trimmed
+        doc.touch()
+        if let encoded = try? JSONEncoder().encode(doc) {
+            try? encoded.write(to: metaURL, options: .atomic)
         }
     }
 
@@ -205,8 +219,12 @@ final class SequenceTemplateStore {
         placeholders: [SequencePlaceholder],
         logos: [(item: SequenceLogoItem, image: NSImage)],
         backgroundImage: NSImage?,
-        backgroundScalePercent: Double = 100
+        backgroundScalePercent: Double = 100,
+        spreadsheet: SpreadsheetTable? = nil,
+        selectedRowIndex: Int = 0,
+        importInfo: String = ""
     ) {
+        let previous = loadDraftMeta()
         let hasBG = writePNG(backgroundImage, to: draftBackgroundURL)
         if !hasBG { try? FileManager.default.removeItem(at: draftBackgroundURL) }
 
@@ -232,14 +250,31 @@ final class SequenceTemplateStore {
             SequenceLogoItem.maxScalePercent,
             max(SequenceLogoItem.minScalePercent, backgroundScalePercent.rounded())
         )
+        let sheet = spreadsheet ?? previous.spreadsheet
         let meta = SequenceDraftMeta(
             placeholders: placeholders,
             logos: saved,
             hasBackground: hasBG,
             backgroundScalePercent: hasBG ? clampedBG : 100,
             logoFrame: nil,
-            hasLogo: !saved.isEmpty
+            hasLogo: !saved.isEmpty,
+            spreadsheet: sheet,
+            selectedRowIndex: spreadsheet != nil ? selectedRowIndex : previous.selectedRowIndex,
+            importInfo: spreadsheet != nil ? importInfo : previous.importInfo
         )
+        guard let data = try? JSONEncoder().encode(meta) else { return }
+        try? data.write(to: draftMetaURL, options: .atomic)
+    }
+
+    func saveDraftSpreadsheet(
+        _ spreadsheet: SpreadsheetTable?,
+        selectedRowIndex: Int,
+        importInfo: String
+    ) {
+        var meta = loadDraftMeta()
+        meta.spreadsheet = spreadsheet
+        meta.selectedRowIndex = selectedRowIndex
+        meta.importInfo = importInfo
         guard let data = try? JSONEncoder().encode(meta) else { return }
         try? data.write(to: draftMetaURL, options: .atomic)
     }
@@ -274,7 +309,6 @@ final class SequenceTemplateStore {
     }
 
     private func pngData(from image: NSImage) -> Data? {
-        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
-        return rep.representation(using: .png, properties: [:])
+        QuickPrintTemplateStore.pngData(from: image)
     }
 }

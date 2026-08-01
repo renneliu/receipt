@@ -3,7 +3,6 @@ import Foundation
 struct TemplateDataContext {
     var manual: [String: String] = [:]
     var settings: AppSettings = .load()
-    var gmailFields: [String: String] = [:]
     var movieFields: [String: String] = [:]
 }
 
@@ -13,10 +12,6 @@ enum PlaceholderResolutionService {
         var result = template.defaultData
         result.merge(context.manual) { _, new in new }
 
-        for (key, value) in context.gmailFields {
-            result[key] = value
-            result["gmail.\(key)"] = value
-        }
         for (key, value) in context.movieFields {
             result[key] = value
             result["movie.\(key)"] = value

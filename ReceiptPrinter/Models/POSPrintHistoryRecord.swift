@@ -27,12 +27,7 @@ struct POSPrintHistoryRecord: Identifiable, Codable, Equatable {
 
 enum POSPrintHistoryStore {
     private static var directory: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport
-            .appendingPathComponent("ReceiptPrinter", isDirectory: true)
-            .appendingPathComponent("POSPrintHistory", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        AppPaths.subdirectory("POSPrintHistory")
     }
 
     private static var indexURL: URL {

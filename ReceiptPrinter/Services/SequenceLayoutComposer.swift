@@ -19,11 +19,41 @@ enum SequenceLayoutComposer {
     ) -> Metrics {
         let size = RichTextPrintRenderer.textSize(forPointSize: fontSize)
         let cols = RichTextPrintRenderer.effectiveColumns(for: size, config: config)
+        return metrics(
+            config: config,
+            columns: cols,
+            lineHeightPointSize: fontSize,
+            paperWidthPoints: paperWidthPoints
+        )
+    }
+
+    /// POS native print: full paper columns (ignore GS ! width) so 18pt names are not
+    /// re-wrapped on a 24-col double-width grid (log: fittedLines=1 → gridWrapLines=2).
+    static func metricsForPOSPrint(
+        config: PrinterConfig,
+        paperWidthPoints: CGFloat,
+        lineHeight: CGFloat = AttributedTextView.defaultFontSize
+    ) -> Metrics {
+        metrics(
+            config: config,
+            columns: max(8, config.columnsPerLine),
+            lineHeightPointSize: lineHeight,
+            paperWidthPoints: paperWidthPoints
+        )
+    }
+
+    private static func metrics(
+        config: PrinterConfig,
+        columns: Int,
+        lineHeightPointSize: CGFloat,
+        paperWidthPoints: CGFloat
+    ) -> Metrics {
+        let cols = max(8, columns)
         let inset = AttributedTextView.editorInsetWidth
         let padding = AttributedTextView.editorLineFragmentPadding
         let contentWidth = max(1, paperWidthPoints - inset * 2 - padding * 2)
-        let unit = contentWidth / CGFloat(max(cols, 1))
-        let font = AttributedTextView.editorFont(ofSize: fontSize)
+        let unit = contentWidth / CGFloat(cols)
+        let font = AttributedTextView.editorFont(ofSize: lineHeightPointSize)
         // Match NSTextView monospaced line pitch (~pointSize); larger metrics mapped
         // boxes one row above labels (log: 姓名 frameY≈100 → row 2 while body label on line 3).
         let lineHeight = max(20, ceil(font.pointSize))
@@ -34,6 +64,23 @@ enum SequenceLayoutComposer {
             contentOriginX: inset + padding,
             contentOriginY: 12
         )
+    }
+
+    /// Columns that fit in `frame` at the printed `TextSize` for `fontSize`.
+    static func wrapColumns(
+        for frame: SequencePlaceholderFrame,
+        fontSize: CGFloat,
+        config: PrinterConfig,
+        paperWidthPoints: CGFloat
+    ) -> Int {
+        let size = RichTextPrintRenderer.textSize(forPointSize: fontSize)
+        let paperCols = RichTextPrintRenderer.effectiveColumns(for: size, config: config)
+        let inset = AttributedTextView.editorInsetWidth
+        let padding = AttributedTextView.editorLineFragmentPadding
+        let contentWidth = max(1, paperWidthPoints - inset * 2 - padding * 2)
+        let unit = contentWidth / CGFloat(paperCols)
+        let byFrame = max(1, Int(floor(frame.width / unit)))
+        return max(1, min(paperCols, byFrame))
     }
 
     static func gridRect(
@@ -115,10 +162,14 @@ enum SequenceLayoutComposer {
         overlays: [RichTextPrintRenderer.SequenceTextOverlay],
         config: PrinterConfig,
         fontSize: CGFloat,
-        paperWidthPoints: CGFloat
+        paperWidthPoints: CGFloat,
+        /// When true, wrap each overlay using its own fontSize → TextSize columns (POS).
+        wrapUsingOverlayFontSize: Bool = false,
+        /// Optional geometry metrics (POS uses full-width columns + 28pt line pitch).
+        geometry: Metrics? = nil
     ) -> NSAttributedString {
         guard !overlays.isEmpty else { return body }
-        let m = metrics(config: config, fontSize: fontSize, paperWidthPoints: paperWidthPoints)
+        let m = geometry ?? metrics(config: config, fontSize: fontSize, paperWidthPoints: paperWidthPoints)
         let layout = RichTextPrintRenderer.layoutLines(from: body, config: config)
         var rows: [String] = layout.compactMap { line in
             switch line {
@@ -132,16 +183,37 @@ enum SequenceLayoutComposer {
 
         for overlay in overlays where !overlay.text.isEmpty {
             let grid = gridRect(for: overlay.frame, metrics: m)
-            let needed = grid.row + grid.maxLines
+            let wrapCols: Int = {
+                if wrapUsingOverlayFontSize {
+                    return min(
+                        max(1, m.columns - grid.col),
+                        wrapColumns(
+                            for: overlay.frame,
+                            fontSize: overlay.fontSize,
+                            config: config,
+                            paperWidthPoints: paperWidthPoints
+                        )
+                    )
+                }
+                return grid.maxCols
+            }()
+            let wrapped = overlay.asRule
+                ? [overlay.text]
+                : ReceiptTextLayout.wrap(overlay.text, maxColumns: wrapCols, asciiAsDoubleWidth: false)
+            // Allow natural wrap growth; do not clip to the old double-width maxLines.
+            let lineCap = wrapUsingOverlayFontSize
+                ? max(grid.maxLines, wrapped.count)
+                : grid.maxLines
+            let needed = grid.row + max(1, min(lineCap, wrapped.count))
             while rows.count < needed { rows.append("") }
-            let wrapped = ReceiptTextLayout.wrap(overlay.text, maxColumns: grid.maxCols, asciiAsDoubleWidth: false)
-            let lines = Array(wrapped.prefix(grid.maxLines))
+            let lines = Array(wrapped.prefix(lineCap))
+            let paintCols = min(max(wrapCols, grid.maxCols), max(1, m.columns - grid.col))
             for (i, fragment) in lines.enumerated() {
                 let r = grid.row + i
                 rows[r] = paint(
                     into: rows[r],
                     startCol: grid.col,
-                    maxCols: grid.maxCols,
+                    maxCols: paintCols,
                     text: fragment,
                     totalColumns: m.columns
                 )
@@ -164,10 +236,11 @@ enum SequenceLayoutComposer {
         frames: [SequencePlaceholderFrame],
         config: PrinterConfig,
         fontSize: CGFloat,
-        paperWidthPoints: CGFloat
+        paperWidthPoints: CGFloat,
+        geometry: Metrics? = nil
     ) -> NSAttributedString {
         guard !frames.isEmpty else { return body }
-        let m = metrics(config: config, fontSize: fontSize, paperWidthPoints: paperWidthPoints)
+        let m = geometry ?? metrics(config: config, fontSize: fontSize, paperWidthPoints: paperWidthPoints)
         let layout = RichTextPrintRenderer.layoutLines(from: body, config: config)
         var rows: [String] = layout.compactMap { line in
             switch line {

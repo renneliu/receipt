@@ -22,32 +22,22 @@ struct AppSettings: Codable, Equatable {
     var selectedPrinterName: String?
     var printerConfig: PrinterConfig = .default80mm
     var hasCompletedSetup: Bool = false
-    var gmailClientID: String = ""
-    var gmailClientSecret: String = ""
-    var gmailRedirectURI: String = GmailOAuthConfig.defaultRedirectURI
-    var gmailSyncEnabled: Bool = false
-    var gmailSyncInterval: TimeInterval = 300
-    var gmailSearchQuery: String = ""
-    var gmailTimeRange: GmailTimeRange = .any
-    var gmailCustomStart: Date?
-    var gmailCustomEnd: Date?
-    var gmailFilter: GmailFilter = GmailFilter()
     /// Kept for movie-ticket end-time math; not shown in Settings UI.
     var defaultAdvertisingMinutes: Int = 15
     /// `SidebarItem.rawValue` (stable English id).
     var defaultStartupPageRaw: String = SidebarItem.quickPrint.rawValue
-    var appLanguageRaw: String = AppLanguage.chinese.rawValue
+    var appLanguageRaw: String = AppLanguage.installDefault.rawValue
+    /// When false, working drafts (quick / excel / POS cart) are cleared on quit and next launch.
+    var retainWorkingContentOnQuit: Bool = true
 
     private static let key = "ReceiptPrinter.AppSettings"
     private static let tmdbKeychainKey = "ReceiptPrinter.TMDBAPIKey"
 
     enum CodingKeys: String, CodingKey {
         case selectedPrinterName, printerConfig, hasCompletedSetup
-        case gmailClientID, gmailClientSecret, gmailRedirectURI
-        case gmailSyncEnabled, gmailSyncInterval, gmailSearchQuery
-        case gmailTimeRange, gmailCustomStart, gmailCustomEnd, gmailFilter
         case defaultAdvertisingMinutes
         case defaultStartupPageRaw, appLanguageRaw
+        case retainWorkingContentOnQuit
     }
 
     init() {}
@@ -57,26 +47,27 @@ struct AppSettings: Codable, Equatable {
         selectedPrinterName = try c.decodeIfPresent(String.self, forKey: .selectedPrinterName)
         printerConfig = try c.decodeIfPresent(PrinterConfig.self, forKey: .printerConfig) ?? .default80mm
         hasCompletedSetup = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedSetup) ?? false
-        gmailClientID = try c.decodeIfPresent(String.self, forKey: .gmailClientID) ?? ""
-        gmailClientSecret = try c.decodeIfPresent(String.self, forKey: .gmailClientSecret) ?? ""
-        gmailRedirectURI = try c.decodeIfPresent(String.self, forKey: .gmailRedirectURI)
-            ?? GmailOAuthConfig.defaultRedirectURI
-        gmailSyncEnabled = try c.decodeIfPresent(Bool.self, forKey: .gmailSyncEnabled) ?? false
-        gmailSyncInterval = try c.decodeIfPresent(TimeInterval.self, forKey: .gmailSyncInterval) ?? 300
-        gmailSearchQuery = try c.decodeIfPresent(String.self, forKey: .gmailSearchQuery) ?? ""
-        gmailTimeRange = try c.decodeIfPresent(GmailTimeRange.self, forKey: .gmailTimeRange) ?? .any
-        gmailCustomStart = try c.decodeIfPresent(Date.self, forKey: .gmailCustomStart)
-        gmailCustomEnd = try c.decodeIfPresent(Date.self, forKey: .gmailCustomEnd)
-        gmailFilter = try c.decodeIfPresent(GmailFilter.self, forKey: .gmailFilter) ?? GmailFilter()
         defaultAdvertisingMinutes = try c.decodeIfPresent(Int.self, forKey: .defaultAdvertisingMinutes) ?? 15
         defaultStartupPageRaw = try c.decodeIfPresent(String.self, forKey: .defaultStartupPageRaw)
             ?? SidebarItem.quickPrint.rawValue
         appLanguageRaw = try c.decodeIfPresent(String.self, forKey: .appLanguageRaw)
-            ?? AppLanguage.chinese.rawValue
+            ?? AppLanguage.installDefault.rawValue
+        retainWorkingContentOnQuit = try c.decodeIfPresent(Bool.self, forKey: .retainWorkingContentOnQuit) ?? true
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(selectedPrinterName, forKey: .selectedPrinterName)
+        try c.encode(printerConfig, forKey: .printerConfig)
+        try c.encode(hasCompletedSetup, forKey: .hasCompletedSetup)
+        try c.encode(defaultAdvertisingMinutes, forKey: .defaultAdvertisingMinutes)
+        try c.encode(defaultStartupPageRaw, forKey: .defaultStartupPageRaw)
+        try c.encode(appLanguageRaw, forKey: .appLanguageRaw)
+        try c.encode(retainWorkingContentOnQuit, forKey: .retainWorkingContentOnQuit)
     }
 
     var appLanguage: AppLanguage {
-        get { AppLanguage(rawValue: appLanguageRaw) ?? .chinese }
+        get { AppLanguage(rawValue: appLanguageRaw) ?? .installDefault }
         set { appLanguageRaw = newValue.rawValue }
     }
 
@@ -113,23 +104,17 @@ struct AppSettings: Codable, Equatable {
               var settings = try? JSONDecoder().decode(AppSettings.self, from: data) else {
             return AppSettings()
         }
-        let migrated = GmailOAuthConfig.normalizedRedirectURI(settings.gmailRedirectURI)
-        if migrated != settings.gmailRedirectURI {
-            settings.gmailRedirectURI = migrated
-            settings.save()
-        }
-        if ["is:unread newer_than:7d", "newer_than:30d"].contains(settings.gmailSearchQuery) {
-            settings.gmailSearchQuery = ""
-            settings.save()
-        }
         // Head→cutter gap on common 80mm POS needs more than the old default of 4 lines.
         if settings.printerConfig.feedLinesBeforeCut < 12 {
             settings.printerConfig.feedLinesBeforeCut = 12
             settings.save()
         }
-        // Migrate legacy Chinese sidebar labels to stable ids.
+        // Migrate legacy Chinese sidebar labels / removed Gmail pages to stable ids.
         if let legacy = SidebarItem.fromLegacyTitle(settings.defaultStartupPageRaw) {
             settings.defaultStartupPageRaw = legacy.rawValue
+            settings.save()
+        } else if ["emailExtraction", "orders", "cinemaRules", "gmail"].contains(settings.defaultStartupPageRaw) {
+            settings.defaultStartupPageRaw = SidebarItem.quickPrint.rawValue
             settings.save()
         }
         return settings
@@ -145,25 +130,9 @@ struct AppSettings: Codable, Equatable {
         (
             .default80mm,
             .quickPrint,
-            .chinese,
+            .installDefault,
             ""
         )
-    }
-
-    /// Merges legacy free-text filter, time range, and structured GmailFilter into extra `q` clauses.
-    func composedGmailExtraQuery(now: Date = Date()) -> String {
-        var parts: [String] = []
-        if let time = gmailTimeRange.queryFragment(customStart: gmailCustomStart, customEnd: gmailCustomEnd, now: now) {
-            parts.append(time)
-        }
-        if let filter = gmailFilter.queryFragment() {
-            parts.append(filter)
-        }
-        let legacy = gmailSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !legacy.isEmpty {
-            parts.append(legacy)
-        }
-        return parts.joined(separator: " ")
     }
 
     func save() {

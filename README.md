@@ -1,6 +1,6 @@
 # ReceiptPrinter
 
-macOS 热敏小票打印机软件：CUPS Raw 光栅打印、富文本快速打印、模板设计与打印、Gmail 订单同步、邮件字段抓取、TMDB 片长查询。
+macOS 热敏小票打印机软件：CUPS Raw 光栅打印、富文本快速打印、模板设计与打印、TMDB 片长查询。
 
 详细改动记在 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -66,7 +66,8 @@ open dist/ReceiptPrinterStore.app
 - 语言默认跟随系统（中文系统→中文，其它→英文）
 - 影票首次安装只种子「示例影票」，不自动装 IMAX / Orpheum / Dendy
 - 不种子旧「模板管理」示例库；POS 模板为空，由用户自建
-- 不含 Gmail Client Secret；Gmail 页只填 Client ID；TMDB Key 在设置中自填
+- TMDB Key 在设置中自填（可选）
+- 不含 Gmail / 邮件同步（已从产品中移除）
 - 数据目录：`~/Library/Application Support/ReceiptPrinterStore`（与日常 `…/ReceiptPrinter` 隔离）
 
 运行单元测试：
@@ -80,16 +81,6 @@ swift test
 1. 连接 USB 热敏打印机
 2. **系统设置 → 打印机与扫描仪 → 添加打印机**，驱动选 **Generic**
 3. 在应用 **设置** 中选择对应 CUPS 打印机名称
-
-## Gmail 配置
-
-1. [Google Cloud Console](https://console.cloud.google.com/) 创建项目
-2. **API 和服务 → 库 → 搜索「Gmail API」→ 启用**
-3. 配置 OAuth 同意屏幕，**测试用户** 添加你的 Gmail
-4. 创建 OAuth 客户端 ID → 类型选 **「桌面应用」**
-5. 在应用 **设置** 填入 Client ID / Secret（Redirect URI 默认 `http://127.0.0.1:8765/`）
-6. **Gmail** 页面连接账号；可配置时间筛选（近 7 天 / 3 个月等）并 **应用筛选并同步**
-7. 在 **影院规则** 配置发件人/主题与模板（自动订单同步）
 
 ## TMDB 片长（电影票）
 
@@ -106,10 +97,7 @@ swift test
 | 打印诊断 | 每次打印后台记录作业与载荷，可标记结果并对比两次作业 |
 | 模板打印 | 选模板 → 填字段 → 实时预览 → 打印；电影票支持广告时长与结束时间推算 |
 | 模板管理 / 设计 | 块式模板；设计器支持分类、JSON 导入导出、自由定位叠加层 |
-| 邮件抓取规则 | 从 Gmail 正文按锚点/正则提取字段，占位符 `{{gmail.fieldId}}` |
-| 订单收件箱 | 影院规则自动同步；状态栏固定顶部 |
-| Gmail | 时间筛选、发件人/主题过滤，合并进实际搜索 `q` |
-| 设置 | 纸宽/编码、默认广告时长、OAuth、TMDB Key |
+| 设置 | 纸宽/编码、默认启动页、语言、TMDB Key |
 
 照片识别（OCR）代码仍保留在仓库中，侧边栏入口已移除。
 

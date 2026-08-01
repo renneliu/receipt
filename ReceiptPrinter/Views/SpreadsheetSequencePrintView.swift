@@ -34,9 +34,16 @@ struct SpreadsheetSequencePrintView: View {
     @State private var selectedLogoID: UUID?
     /// Live NSTextView usedRect height (embed mode); corrects soft-wrap measure underestimates.
     @State private var liveEditorHeight: CGFloat = 0
+    @State private var showHistory = false
+    @State private var printHistory: [ModulePrintHistoryRecord] = []
+    @State private var showLoadDraftSheet = false
+    @State private var renamingTemplateId: UUID?
+    @State private var renameTemplateText = ""
 
     private let draftStore = QuickPrintStore(filename: "spreadsheet-sequence-draft.rtfd")
     private let templateStore = SequenceTemplateStore()
+    private let historyKind = "spreadsheetSequence"
+    private let draftModule = "spreadsheetSequence"
     private let paperCanvasMinHeight: CGFloat = 480
 
     private var columns: Int { appState.settings.printerConfig.columnsPerLine }
@@ -125,6 +132,14 @@ struct SpreadsheetSequencePrintView: View {
         placeholders.first { $0.id == selectedPlaceholderID }
     }
 
+    private var canSaveAsTemplate: Bool {
+        attributedText.length > 0
+            || !placeholders.isEmpty
+            || backgroundImage != nil
+            || !logos.isEmpty
+            || (spreadsheet?.isEmpty == false)
+    }
+
     private var currentRowValues: [String: String] {
         guard let sheet = spreadsheet, !sheet.rows.isEmpty else { return [:] }
         let idx = min(max(0, selectedRowIndex), sheet.rows.count - 1)
@@ -153,10 +168,11 @@ struct SpreadsheetSequencePrintView: View {
             sidePanel
                 .frame(minWidth: 280, idealWidth: 320, maxWidth: 400)
         }
-        .navigationTitle(L10n.ui("Excel表格序列打印"))
+        // Title owned by MainView (keep-alive stack).
         .onAppear {
             loadSavedContent()
             loadDraftMedia()
+            printHistory = ModulePrintHistoryStore.loadAll(kind: historyKind)
         }
         .onChange(of: attributedText) { _, newValue in
             draftStore.save(newValue)
@@ -170,6 +186,12 @@ struct SpreadsheetSequencePrintView: View {
         .onChange(of: backgroundScalePercent) { _, _ in
             persistDraftMedia()
         }
+        .onChange(of: spreadsheet) { _, _ in
+            persistSpreadsheetDraft()
+        }
+        .onChange(of: selectedRowIndex) { _, _ in
+            persistSpreadsheetDraft()
+        }
         .sheet(item: $previewPayload) { payload in
             BitmapPrintPreviewView(image: payload.image)
                 .frame(width: 420, height: 640)
@@ -179,6 +201,26 @@ struct SpreadsheetSequencePrintView: View {
         }
         .sheet(isPresented: $showLoadSheet) {
             loadTemplateSheet
+        }
+        .sheet(isPresented: $showHistory) {
+            modulePrintHistorySheet
+        }
+        .sheet(isPresented: $showLoadDraftSheet) {
+            NamedDraftPickerSheet(
+                title: L10n.ui("读取草稿"),
+                module: draftModule,
+                onLoad: { draft in
+                    loadNamedDraft(draft)
+                    showLoadDraftSheet = false
+                },
+                onClose: { showLoadDraftSheet = false }
+            )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .receiptPrinterPersistWorkingDrafts)) { _ in
+            saveDraftExplicitly(showMessage: false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .receiptPrinterClearWorkingContent)) { _ in
+            clearContent()
         }
     }
 
@@ -533,10 +575,16 @@ struct SpreadsheetSequencePrintView: View {
 
             Section(L10n.ui("模板")) {
                 Button(L10n.ui("存为模板…")) {
+                    syncEditorToState()
                     saveName = "序列打印 \(Date().formatted(date: .abbreviated, time: .shortened))"
                     showSaveSheet = true
                 }
-                .disabled(attributedText.length == 0 && placeholders.isEmpty && backgroundImage == nil && logos.isEmpty)
+                .disabled(!canSaveAsTemplate)
+                if !canSaveAsTemplate {
+                    Text(L10n.ui("请先输入正文、添加占位框/图片，或导入表格后再保存模板"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Button(L10n.ui("载入模板…")) {
                     savedTemplates = templateStore.loadAll()
                     showLoadSheet = true
@@ -611,6 +659,13 @@ struct SpreadsheetSequencePrintView: View {
             }
             Spacer()
             Button(L10n.ui("清空")) { clearContent() }
+            Button(L10n.ui("读取草稿")) {
+                showLoadDraftSheet = true
+            }
+            Button(L10n.ui("保存草稿")) {
+                saveNamedDraft()
+            }
+            Button(L10n.ui("打印记录")) { showHistory = true }
             Button(L10n.ui("预览")) {
                 Task { await previewCurrent() }
             }
@@ -631,6 +686,68 @@ struct SpreadsheetSequencePrintView: View {
         .background(.bar)
     }
 
+    private var modulePrintHistorySheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(L10n.ui("打印记录")).font(.title2.weight(.semibold))
+                Spacer()
+                Button(L10n.ui("清理全部"), role: .destructive) {
+                    ModulePrintHistoryStore.clear(kind: historyKind)
+                    printHistory = []
+                }
+                .disabled(printHistory.isEmpty)
+                Button(L10n.ui("关闭")) { showHistory = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+            if printHistory.isEmpty {
+                ContentUnavailableView(
+                    L10n.ui("暂无记录"),
+                    systemImage: "clock",
+                    description: Text(L10n.ui("成功打印后会自动保存在此"))
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(printHistory) { record in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(record.summary).font(.headline).lineLimit(1)
+                                Spacer()
+                                Text(record.createdAtText)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if record.sequenceRowCount > 0 {
+                                Text("\(L10n.ui("序列")) \(record.sequenceRowCount) \(L10n.ui("行"))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(record.plainText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(3)
+                            HStack {
+                                Button(L10n.ui("载入内容")) {
+                                    loadHistory(record)
+                                    showHistory = false
+                                }
+                                Spacer()
+                                Button(L10n.ui("删除"), role: .destructive) {
+                                    ModulePrintHistoryStore.delete(id: record.id, kind: historyKind)
+                                    printHistory = ModulePrintHistoryStore.loadAll(kind: historyKind)
+                                }
+                            }
+                            .controlSize(.small)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 520, height: 480)
+    }
+
     private var saveTemplateSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(L10n.ui("存为模板")).font(.headline)
@@ -640,44 +757,87 @@ struct SpreadsheetSequencePrintView: View {
                 Spacer()
                 Button(L10n.ui("取消")) { showSaveSheet = false }
                 Button(L10n.ui("保存")) {
+                    let name = saveName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !name.isEmpty else {
+                        message = L10n.ui("请输入模板名称")
+                        return
+                    }
+                    saveName = name
                     saveAsTemplate()
                     showSaveSheet = false
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(saveName.trimmingCharacters(in: .whitespaces).isEmpty)
+                .buttonStyle(.borderedProminent)
             }
         }
         .padding(24)
         .frame(width: 360)
+        .onAppear {
+            if saveName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                saveName = "序列打印 \(Date().formatted(date: .abbreviated, time: .shortened))"
+            }
+        }
     }
 
     private var loadTemplateSheet: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(L10n.ui("载入模板")).font(.headline)
+            HStack {
+                Text(L10n.ui("载入模板")).font(.headline)
+                Spacer()
+                Button(L10n.ui("刷新")) {
+                    savedTemplates = templateStore.loadAll()
+                }
+            }
             if savedTemplates.isEmpty {
                 Text(L10n.ui("暂无已存模板"))
                     .foregroundStyle(.secondary)
             } else {
                 List {
                     ForEach(savedTemplates, id: \.document.id) { item in
-                        Button {
-                            loadTemplate(item.document, body: item.body)
-                            showLoadSheet = false
-                        } label: {
-                            VStack(alignment: .leading) {
-                                Text(item.document.name)
-                                Text("占位框 \(item.document.placeholders.count) · \(item.document.updatedAt.formatted())")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 6) {
+                            if renamingTemplateId == item.document.id {
+                                HStack {
+                                    TextField(L10n.ui("模板名称"), text: $renameTemplateText)
+                                        .textFieldStyle(.roundedBorder)
+                                    Button(L10n.ui("保存")) {
+                                        templateStore.rename(id: item.document.id, to: renameTemplateText)
+                                        renamingTemplateId = nil
+                                        savedTemplates = templateStore.loadAll()
+                                    }
+                                    .disabled(renameTemplateText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                    Button(L10n.ui("取消")) { renamingTemplateId = nil }
+                                }
+                            } else {
+                                HStack {
+                                    Text(item.document.name).font(.headline)
+                                    Spacer()
+                                    Text(item.document.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
+                            Text("Logo \(item.document.logos.count) · \(L10n.ui("占位框")) \(item.document.placeholders.count) · \(item.body.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? L10n.ui("（空白）") : String(item.body.string.prefix(80)))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(3)
+                            HStack {
+                                Button(L10n.ui("载入")) {
+                                    loadTemplate(item.document, body: item.body)
+                                    showLoadSheet = false
+                                }
+                                Button(L10n.ui("改名")) {
+                                    renamingTemplateId = item.document.id
+                                    renameTemplateText = item.document.name
+                                }
+                                Spacer()
+                                Button(L10n.ui("删除"), role: .destructive) {
+                                    templateStore.delete(id: item.document.id)
+                                    savedTemplates = templateStore.loadAll()
+                                }
+                            }
+                            .controlSize(.small)
                         }
-                        .buttonStyle(.plain)
-                    }
-                    .onDelete { indexSet in
-                        for i in indexSet {
-                            templateStore.delete(id: savedTemplates[i].document.id)
-                        }
-                        savedTemplates = templateStore.loadAll()
+                        .padding(.vertical, 4)
                     }
                 }
                 .frame(minHeight: 220)
@@ -688,7 +848,11 @@ struct SpreadsheetSequencePrintView: View {
             }
         }
         .padding(20)
-        .frame(width: 420, height: 360)
+        .frame(width: 520, height: 440)
+        .onAppear {
+            renamingTemplateId = nil
+            savedTemplates = templateStore.loadAll()
+        }
     }
 
     // MARK: - Actions
@@ -748,6 +912,11 @@ struct SpreadsheetSequencePrintView: View {
         if selectedLogoID.map({ logoImages[$0] == nil }) == true {
             selectedLogoID = nil
         }
+        if let sheet = meta.spreadsheet, !sheet.isEmpty {
+            spreadsheet = sheet
+            selectedRowIndex = min(max(0, meta.selectedRowIndex), max(0, sheet.rows.count - 1))
+            importInfo = meta.importInfo
+        }
     }
 
     private func persistDraftMedia() {
@@ -759,8 +928,122 @@ struct SpreadsheetSequencePrintView: View {
             placeholders: placeholders,
             logos: pairs,
             backgroundImage: backgroundImage,
-            backgroundScalePercent: backgroundScalePercent
+            backgroundScalePercent: backgroundScalePercent,
+            spreadsheet: spreadsheet,
+            selectedRowIndex: selectedRowIndex,
+            importInfo: importInfo
         )
+    }
+
+    private func persistSpreadsheetDraft() {
+        templateStore.saveDraftSpreadsheet(
+            spreadsheet,
+            selectedRowIndex: selectedRowIndex,
+            importInfo: importInfo
+        )
+    }
+
+    private func saveDraftExplicitly(showMessage: Bool) {
+        syncEditorToState()
+        draftStore.save(attributedText)
+        persistDraftMedia()
+        persistSpreadsheetDraft()
+        if showMessage {
+            message = L10n.ui("草稿已保存")
+        }
+    }
+
+    private func saveNamedDraft() {
+        syncEditorToState()
+        let name = "草稿 \(Date().formatted(date: .abbreviated, time: .shortened))"
+        let pairs = logos.compactMap { item -> (item: SequenceLogoItem, image: NSImage)? in
+            guard let image = logoImages[item.id] else { return nil }
+            return (item, image)
+        }
+        let preview = attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = NamedWorkingDraftStore.saveExcelDraft(
+            name: name,
+            previewText: preview,
+            body: attributedText,
+            placeholders: placeholders,
+            logos: pairs,
+            backgroundImage: backgroundImage,
+            backgroundScalePercent: backgroundScalePercent,
+            spreadsheet: spreadsheet,
+            selectedRowIndex: selectedRowIndex,
+            importInfo: importInfo,
+            editorFontSize: editorFontSize
+        )
+        draftStore.save(attributedText)
+        persistDraftMedia()
+        persistSpreadsheetDraft()
+        message = L10n.ui("草稿已保存")
+    }
+
+    private func loadNamedDraft(_ draft: NamedWorkingDraft) {
+        let body = NamedWorkingDraftStore.loadBody(module: draftModule, id: draft.id)
+        let assets = NamedWorkingDraftStore.loadExcelDraftAssets(id: draft.id)
+        attributedText = body
+        placeholders = assets.meta.placeholders
+        logos = assets.meta.logos
+        logoImages = assets.logoImages
+        backgroundImage = assets.background
+        backgroundScalePercent = assets.meta.backgroundScalePercent
+        spreadsheet = assets.meta.spreadsheet
+        selectedRowIndex = assets.meta.selectedRowIndex
+        importInfo = assets.meta.importInfo
+        if let font = assets.editorFontSize { editorFontSize = font }
+        selectedPlaceholderID = nil
+        selectedLogoID = nil
+        draftStore.save(body)
+        persistDraftMedia()
+        persistSpreadsheetDraft()
+        message = L10n.ui("已读取草稿")
+    }
+
+    private func loadHistory(_ record: ModulePrintHistoryRecord) {
+        if let data = record.rtfdData,
+           let attr = try? NSAttributedString(
+            data: data,
+            options: [.documentType: NSAttributedString.DocumentType.rtfd],
+            documentAttributes: nil
+           ), attr.length > 0 {
+            attributedText = attr
+        } else {
+            attributedText = NSAttributedString(
+                string: record.plainText,
+                attributes: AttributedTextView.defaultTypingAttributes()
+            )
+        }
+        draftStore.save(attributedText)
+        message = L10n.ui("已载入历史内容")
+    }
+
+    private func recordPrintHistory(previewPNG: Data, sequenceRows: Int) {
+        syncEditorToState()
+        let plain = attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary: String = {
+            if sequenceRows > 1 {
+                return "\(L10n.ui("序列打印")) · \(sequenceRows) \(L10n.ui("行"))"
+            }
+            let first = plain.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+            if first.isEmpty { return L10n.ui("（无文字）") }
+            return first.count > 40 ? String(first.prefix(40)) + "…" : first
+        }()
+        let rtfd = try? attributedText.data(
+            from: NSRange(location: 0, length: attributedText.length),
+            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
+        )
+        let record = ModulePrintHistoryRecord(
+            kind: historyKind,
+            summary: summary,
+            plainText: plain,
+            rtfdData: rtfd,
+            previewPNG: previewPNG,
+            sequenceRowCount: sequenceRows
+        )
+        ModulePrintHistoryStore.append(record, kind: historyKind)
+        printHistory = ModulePrintHistoryStore.loadAll(kind: historyKind)
     }
 
     private func setBackgroundScale(_ percent: Double) {
@@ -853,6 +1136,8 @@ struct SpreadsheetSequencePrintView: View {
         placeholders = []
         selectedPlaceholderID = nil
         selectedRowIndex = 0
+        spreadsheet = nil
+        importInfo = ""
         backgroundImage = nil
         backgroundScalePercent = 100
         logos = []
@@ -891,6 +1176,11 @@ struct SpreadsheetSequencePrintView: View {
             selectedRowIndex = 0
             importInfo = "来自 \(url.lastPathComponent)"
             message = "已导入 \(table.rows.count) 行 · \(table.headers.count) 列（请手动添加占位框）"
+            persistSpreadsheetDraft()
+            // Auto-add first-column placeholder so「存为模板」and layout are immediately usable.
+            if placeholders.isEmpty, let first = table.headers.first {
+                addPlaceholder(bindingKey: first, staggerIndex: 0)
+            }
         } catch {
             appState.lastError = error.localizedDescription
             importInfo = error.localizedDescription
@@ -1008,15 +1298,15 @@ struct SpreadsheetSequencePrintView: View {
         )
 
         sequenceProgress = L10n.ui("正在打印序列…")
-        let statusPollingWasActive = appState.gmailSync.isRunning
         let record = await appState.runDiagnosticPrint(
             artifacts: artifacts,
-            statusPollingWasActive: statusPollingWasActive
+            statusPollingWasActive: false
         )
         if let err = record?.transportError {
             sequenceProgress = "序列打印失败: \(err)"
         } else {
             sequenceProgress = "序列打印完成：\(sheet.rows.count) 张"
+            recordPrintHistory(previewPNG: pngData, sequenceRows: sheet.rows.count)
         }
         message = sequenceProgress
     }
@@ -1128,12 +1418,12 @@ struct SpreadsheetSequencePrintView: View {
             attributedRTFD: rtfd
         )
 
-        let statusPollingWasActive = appState.gmailSync.isRunning
         if let record = await appState.runDiagnosticPrint(
             artifacts: artifacts,
-            statusPollingWasActive: statusPollingWasActive
+            statusPollingWasActive: false
         ) {
             if record.transportError == nil {
+                recordPrintHistory(previewPNG: artifacts.pngData, sequenceRows: 0)
                 message = L10n.ui("已发送到打印机")
             } else {
                 message = "打印失败: \(record.transportError ?? "")"

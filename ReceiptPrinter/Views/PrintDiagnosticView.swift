@@ -3,6 +3,7 @@ import SwiftUI
 
 struct PrintDiagnosticView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.appLanguage) private var language
     @State private var selectedId: String?
     @State private var compareSelection: [String] = []
     @State private var comparison: PrintDiagnosticComparison?
@@ -16,8 +17,11 @@ struct PrintDiagnosticView: View {
             detailColumn
                 .frame(minWidth: 420)
         }
-        .navigationTitle(L10n.ui("打印诊断"))
-        .onAppear { appState.reloadDiagnostics() }
+        .navigationTitle(L10n.ui("打印诊断", language))
+        .onAppear {
+            L10n.current = language
+            appState.reloadDiagnostics()
+        }
         .sheet(item: $comparison) { report in
             ComparisonReportView(report: report)
                 .frame(width: 640, height: 640)
@@ -27,7 +31,8 @@ struct PrintDiagnosticView: View {
     private var listColumn: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("打印作业 (\(records.count))")
+                let jobTitle = "\(L10n.ui("打印作业", language)) (\(records.count))"
+                Text(jobTitle)
                     .font(.headline)
                 Spacer()
                 Button {

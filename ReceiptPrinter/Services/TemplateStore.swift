@@ -4,9 +4,7 @@ final class TemplateStore {
     private let directory: URL
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        directory = appSupport.appendingPathComponent("ReceiptPrinter/Templates", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        directory = AppPaths.subdirectory("Templates")
         seedSamplesIfNeeded()
     }
 
@@ -33,6 +31,10 @@ final class TemplateStore {
     }
 
     private func seedSamplesIfNeeded() {
+        #if APPSTORE
+        // Store: no bundled legacy templates — users create their own.
+        return
+        #else
         let existing = loadAll()
         for template in SampleTemplates.all {
             if let match = existing.first(where: { $0.name == template.name }) {
@@ -46,6 +48,7 @@ final class TemplateStore {
                 save(template)
             }
         }
+        #endif
     }
 }
 

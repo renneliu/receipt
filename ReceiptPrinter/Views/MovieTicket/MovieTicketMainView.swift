@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct MovieTicketMainView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var session: MovieTicketSession
+    @Environment(\.appLanguage) private var language
 
     @State private var titleMode: TitleMode = .local
     @State private var durationMode: DurationMode = .local
@@ -32,6 +33,8 @@ struct MovieTicketMainView: View {
     }
 
     private static let templatesPerPage = 8
+    /// Quick picks for ticket type (print label); field remains freely editable.
+    private static let ticketTypePresets = ["Adult", "Child", "Senior", "Concession"]
 
     private enum TitleMode: String, CaseIterable, Identifiable {
         case local = "本地输入"
@@ -337,8 +340,26 @@ struct MovieTicketMainView: View {
                         .labelsHidden()
                 }
                 labeled(L10n.ui("票型")) {
-                    TextField("Adult / Child…", text: $session.draft.ticketType)
-                        .textFieldStyle(.roundedBorder)
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("Adult / Child…", text: $session.draft.ticketType)
+                            .textFieldStyle(.roundedBorder)
+                        HStack(spacing: 6) {
+                            ForEach(Self.ticketTypePresets, id: \.self) { option in
+                                Button(option) {
+                                    session.draft.ticketType = option
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .tint(
+                                    session.draft.ticketType
+                                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                                        .caseInsensitiveCompare(option) == .orderedSame
+                                        ? Color.accentColor
+                                        : Color.secondary
+                                )
+                            }
+                        }
+                    }
                 }
                 labeled(L10n.ui("影厅")) {
                     TextField(L10n.ui("影厅"), text: $session.draft.hall)
@@ -410,13 +431,14 @@ struct MovieTicketMainView: View {
 
     private var templatePicker: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(L10n.ui("当前使用模板")).font(.caption).foregroundStyle(.secondary)
+            Text(L10n.ui("当前使用模板", language)).font(.caption).foregroundStyle(.secondary)
             Picker("", selection: Binding(
                 get: { session.settings.activeTemplateId ?? session.templates.first?.id },
                 set: { if let id = $0 { session.selectTemplate(id) } }
             )) {
                 ForEach(session.templates) { t in
-                    Text(t.name).tag(Optional(t.id))
+                    let shown = L10n.ui(t.name, language)
+                    Text(shown).tag(Optional(t.id))
                 }
             }
             .labelsHidden()
@@ -557,7 +579,7 @@ struct MovieTicketMainView: View {
                 Image(systemName: selected ? "ticket.fill" : "ticket")
                     .font(.caption)
                     .foregroundStyle(selected ? Color.accentColor : .secondary)
-                Text(t.name)
+                Text(L10n.ui(t.name, language))
                     .font(.caption.weight(selected ? .semibold : .regular))
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -661,7 +683,7 @@ struct MovieTicketMainView: View {
         working.syncSeatArrays()
         working.serialNumber = working.serialBase
         let count = working.ticketCount
-        let statusPollingWasActive = appState.gmailSync.isRunning
+        let statusPollingWasActive = false
         var printed = 0
         var lastError: String?
 

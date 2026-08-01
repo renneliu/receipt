@@ -1,7 +1,7 @@
 import Foundation
 
 /// The ONE place printer transmission happens. Being an `actor`, it runs off the main actor and
-/// guarantees only a single job transmits at a time (manual print, Gmail auto-print, template,
+/// guarantees only a single job transmits at a time (manual print, template,
 /// retries all await here). No `Thread.sleep`, no drain loop, no auto-repeat.
 actor PrintController {
     private let service = CUPSPrintService()
@@ -139,7 +139,7 @@ actor PrintController {
         return record
     }
 
-    /// Serialized single transmission of a prebuilt payload (template / Gmail auto-print).
+    /// Serialized single transmission of a prebuilt payload (template / raw ESC/POS).
     /// Captures a lightweight record + payload artifact — no image/raster breakdown available here.
     @discardableResult
     func printRawOnce(config: Config, payload: Data, sourceLabel: String, renderMode: PrintRenderMode) async -> PrintDiagnosticRecord {

@@ -20,6 +20,7 @@ enum TemplateCategory: String, Codable, CaseIterable, Identifiable {
 
 enum PlaceholderBindingSource: String, Codable {
     case manual
+    /// Legacy value kept for decoding older templates; Gmail binding is no longer used.
     case gmail
     case calculated
     case movie

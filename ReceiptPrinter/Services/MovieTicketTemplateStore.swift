@@ -13,8 +13,7 @@ final class MovieTicketTemplateStore {
     private let rulesRoot: URL
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let base = appSupport.appendingPathComponent("ReceiptPrinter", isDirectory: true)
+        let base = AppPaths.applicationSupportRoot
         templatesRoot = base.appendingPathComponent("MovieTicketTemplates", isDirectory: true)
         rulesRoot = base.appendingPathComponent("MovieTicketPDFRules", isDirectory: true)
         try? FileManager.default.createDirectory(at: templatesRoot, withIntermediateDirectories: true)
@@ -222,6 +221,14 @@ final class MovieTicketTemplateStore {
 
     private func seedIfNeeded() {
         let existing = loadAll()
+        #if APPSTORE
+        // Store: only one sample ticket; never auto-install IMAX / Orpheum / Dendy.
+        if existing.isEmpty {
+            saveMeta(MovieTicketTemplate.makeRitz(name: "示例影票"))
+            UserDefaults.standard.set(Self.ritzSampleLayoutVersion, forKey: Self.ritzSampleLayoutVersionKey)
+        }
+        return
+        #else
         if existing.isEmpty {
             saveMeta(MovieTicketTemplate.makeRitz(name: "示例影票"))
             UserDefaults.standard.set(Self.ritzSampleLayoutVersion, forKey: Self.ritzSampleLayoutVersionKey)
@@ -246,6 +253,7 @@ final class MovieTicketTemplateStore {
         seedOrpheumIfNeeded(existing: existing)
         seedDendyIfNeeded(existing: existing)
         migrateCutFeedDefaultsIfNeeded()
+        #endif
     }
 
     /// Existing templates had no per-template cut feed and inherited the global 12-line
@@ -345,14 +353,8 @@ final class MovieTicketTemplateStore {
     }
 
     private static func bundledIMAXSydneyLogo() -> NSImage? {
-        let candidates: [URL?] = [
-            Bundle.module.url(
-                forResource: "IMAXSydneyLogo",
-                withExtension: "png",
-                subdirectory: "MovieTicket"
-            ),
-            Bundle.module.url(forResource: "IMAXSydneyLogo", withExtension: "png"),
-            // `build-debug-app.sh` copies Resources into the .app Contents/Resources tree.
+        var candidates: [URL?] = [
+            // Script-built .app and Xcode app both put Resources under Bundle.main.
             Bundle.main.url(
                 forResource: "IMAXSydneyLogo",
                 withExtension: "png",
@@ -360,6 +362,19 @@ final class MovieTicketTemplateStore {
             ),
             Bundle.main.url(forResource: "IMAXSydneyLogo", withExtension: "png")
         ]
+        #if SWIFT_PACKAGE
+        candidates.insert(
+            contentsOf: [
+                Bundle.module.url(
+                    forResource: "IMAXSydneyLogo",
+                    withExtension: "png",
+                    subdirectory: "MovieTicket"
+                ),
+                Bundle.module.url(forResource: "IMAXSydneyLogo", withExtension: "png")
+            ],
+            at: 0
+        )
+        #endif
         for url in candidates {
             if let url, let img = NSImage(contentsOf: url) { return img }
         }
@@ -369,12 +384,7 @@ final class MovieTicketTemplateStore {
 
 enum MovieTicketPrintHistoryStore {
     private static var directory: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport
-            .appendingPathComponent("ReceiptPrinter", isDirectory: true)
-            .appendingPathComponent("MovieTicketPrintHistory", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        AppPaths.subdirectory("MovieTicketPrintHistory")
     }
 
     private static var indexURL: URL {

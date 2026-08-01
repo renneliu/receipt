@@ -61,6 +61,52 @@ final class POSReceiptSession: ObservableObject {
             // Do NOT load Excel here: unzip uses Process.waitUntilExit and crashes
             // AttributeGraph if run during SwiftUI StateObject init/layout (crash 20:13:24).
         }
+        restoreCartDraftIfAvailable()
+    }
+
+    func restoreCartDraftIfAvailable() {
+        guard let draft = POSCartDraftStore.load() else { return }
+        lineItems = draft.lineItems
+        draftCode = draft.draftCode
+        draftName = draft.draftName
+        draftQuantity = draft.draftQuantity
+        draftAmount = draft.draftAmount
+        surcharge = draft.surcharge
+        surchargePercentLabel = draft.surchargePercentLabel
+        nextAutoCode = max(1, draft.nextAutoCode)
+        prefersNameFieldForNextLine = draft.prefersNameFieldForNextLine
+        if let id = draft.activeTemplateId, templates.contains(where: { $0.id == id }) {
+            settings.activeTemplateId = id
+            settings.save()
+            if let t = templates.first(where: { $0.id == id }) {
+                loadImages(for: t)
+            }
+        }
+        if let editId = draft.editingLineItemId, lineItems.contains(where: { $0.id == editId }) {
+            editingLineItemId = editId
+            selectedItemId = editId
+        }
+    }
+
+    func persistCartDraft() {
+        let draft = POSCartDraft(
+            lineItems: lineItems,
+            draftCode: draftCode,
+            draftName: draftName,
+            draftQuantity: draftQuantity,
+            draftAmount: draftAmount,
+            surcharge: surcharge,
+            surchargePercentLabel: surchargePercentLabel,
+            nextAutoCode: nextAutoCode,
+            prefersNameFieldForNextLine: prefersNameFieldForNextLine,
+            activeTemplateId: settings.activeTemplateId,
+            editingLineItemId: editingLineItemId
+        )
+        POSCartDraftStore.save(draft)
+    }
+
+    func clearCartDraftDisk() {
+        POSCartDraftStore.clear()
     }
 
     func reloadTemplates() {
@@ -105,6 +151,29 @@ final class POSReceiptSession: ObservableObject {
             }
         }
         logoImages = merged
+    }
+
+    /// Persist a lightweight meta tweak (e.g. cut feed) without a full save dialog.
+    func updateTemplateMeta(id: UUID? = nil, _ body: (inout POSReceiptTemplate) -> Void) {
+        let targetId = id ?? editingTemplate?.id ?? settings.activeTemplateId
+        guard let targetId else { return }
+        var t: POSReceiptTemplate
+        if let editing = editingTemplate, editing.id == targetId {
+            t = editing
+        } else if let stored = templates.first(where: { $0.id == targetId }) {
+            t = stored
+        } else {
+            return
+        }
+        body(&t)
+        t.touch()
+        store.saveMeta(t)
+        if let idx = templates.firstIndex(where: { $0.id == t.id }) {
+            templates[idx] = t
+        }
+        if editingTemplate?.id == t.id {
+            editingTemplate = t
+        }
     }
 
     func persistEditingTemplate() {

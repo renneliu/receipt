@@ -2,26 +2,12 @@ import XCTest
 @testable import ReceiptPrinter
 
 final class ReceiptPrinterCoreTests: XCTestCase {
-    func testGmailTimeRangeSevenDays() {
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let clause = GmailTimeRange.sevenDays.afterClause(now: now)
-        XCTAssertNotNil(clause)
-        XCTAssertTrue(clause?.hasPrefix("after:") == true)
-    }
-
-    func testGmailTimeRangeAnyIsEmpty() {
-        XCTAssertNil(GmailTimeRange.any.queryFragment())
-    }
-
-    func testComposedGmailExtraQueryMergesParts() {
-        var settings = AppSettings()
-        settings.gmailTimeRange = .sevenDays
-        settings.gmailFilter.senderContains = "orpheum"
-        settings.gmailSearchQuery = "is:unread"
-        let query = settings.composedGmailExtraQuery(now: Date(timeIntervalSince1970: 1_700_000_000))
-        XCTAssertTrue(query.contains("after:"))
-        XCTAssertTrue(query.contains("from:"))
-        XCTAssertTrue(query.contains("is:unread"))
+    func testL10nEnglishMapsDiagnosticAndSampleTicket() {
+        XCTAssertEqual(L10n.ui("打印作业", .english), "Print Jobs")
+        XCTAssertEqual(L10n.ui("示例影票", .english), "Sample Ticket")
+        XCTAssertEqual(L10n.ui("打印诊断", .english), "Print Diagnostics")
+        XCTAssertEqual(L10n.ui("打印作业", .chinese), "打印作业")
+        XCTAssertEqual(L10n.ui("示例影票", .chinese), "示例影票")
     }
 
     func testPlaceholderResolutionMovieTicketEndTime() {
@@ -57,17 +43,6 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         let back = TemplateDocumentMigration.toReceiptTemplate(document)
         XCTAssertEqual(back.name, template.name)
         XCTAssertEqual(back.blocks.count, template.blocks.count)
-    }
-
-    func testEmailExtractionAnchor() {
-        let body = "Movie: Dunkirk\nHall: 4\nPrice: $28"
-        let field = EmailExtractionField(
-            id: "hall",
-            label: "Hall",
-            strategy: .anchorBeforeAfter(before: "Hall: ", after: "\n")
-        )
-        let value = EmailExtractionEngine.extractField(field, from: body)
-        XCTAssertEqual(value, "4")
     }
 
     func testPrinterConfigDotsPerLine80mm() {
@@ -466,7 +441,15 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         XCTAssertEqual(Set(codeAndNameRow0.map(\.frame.y)).count, 1, "编号与项目应在同一行")
         let subtotal = layout.texts.first { $0.text == "30.00" }
         XCTAssertNotNil(subtotal)
-        XCTAssertEqual(Double(subtotal?.frame.y ?? 0), 100 + 28, accuracy: 0.1)
+        // Footer tracks itemsBottom (designBandBottom = name.y+h = 64), not mere (span-pitch).
+        let itemsBottom = Double(POSReceiptLayoutEngine.printRowY(template: template))
+            + Double(POSReceiptLayoutEngine.itemPitch(template: template)) * 2
+        let designBandBottom = 40.0 + 24.0
+        XCTAssertEqual(
+            Double(subtotal?.frame.y ?? 0),
+            100 + (itemsBottom - designBandBottom),
+            accuracy: 0.1
+        )
         let header = layout.texts.first { $0.text == "店名" }
         XCTAssertEqual(Double(header?.frame.y ?? -1), 8, accuracy: 0.1)
     }
@@ -508,10 +491,83 @@ final class ReceiptPrinterCoreTests: XCTestCase {
             surcharge: "0"
         )
         let pitch = POSReceiptLayoutEngine.itemPitch(template: template)
+        let designBandBottom = 80.0 + 28.0
+        let itemsBottom = Double(POSReceiptLayoutEngine.printRowY(template: template))
+            + Double(pitch) * 2
         let footer = layout.texts.first { $0.text == "页脚备注" }
         let header = layout.texts.first { $0.text == "页眉误放" }
-        XCTAssertEqual(Double(footer?.frame.y ?? -1), 40 + Double(pitch), accuracy: 0.1)
+        XCTAssertEqual(
+            Double(footer?.frame.y ?? -1),
+            40 + (itemsBottom - designBandBottom),
+            accuracy: 0.1
+        )
         XCTAssertEqual(Double(header?.frame.y ?? -1), 200, accuracy: 0.1)
+    }
+
+    /// Footer divider/text must not push the item band below them, and must sit after the last item.
+    func testPOSFooterFollowsItemsBottomDespiteDesignedOverlap() {
+        var template = POSReceiptTemplate.makeBlank(name: "t")
+        template.enableCode = false
+        template.enableQuantity = false
+        template.enableAmount = false
+        template.elements = [
+            POSReceiptElement(
+                kind: .logo,
+                frame: SequencePlaceholderFrame(x: 20, y: 16, width: 100, height: 106),
+                ticketSection: .header
+            ),
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 12, y: 140, width: 200, height: 40),
+                fieldKind: .name
+            ),
+            POSReceiptElement(
+                kind: .divider,
+                frame: SequencePlaceholderFrame(x: 20, y: 180, width: 278, height: 22),
+                ticketSection: .footer
+            ),
+            POSReceiptElement(
+                kind: .textBox,
+                frame: SequencePlaceholderFrame(x: 20, y: 200, width: 200, height: 28),
+                content: "Thanks for coming",
+                ticketSection: .footer
+            )
+        ]
+        let printY = POSReceiptLayoutEngine.printRowY(template: template)
+        XCTAssertEqual(
+            Double(printY),
+            140,
+            accuracy: 0.1,
+            "footer chrome must not push printRowY below the designed name row"
+        )
+
+        let items = [
+            POSLineItem(name: "甲"),
+            POSLineItem(name: "乙"),
+            POSLineItem(name: "丙")
+        ]
+        let layout = POSReceiptLayoutEngine.expand(
+            template: template,
+            items: items,
+            surcharge: "0"
+        )
+        let lastName = layout.texts.last { ["甲", "乙", "丙"].contains($0.text) }
+        let divider = layout.texts.first { $0.asRule }
+        let thanks = layout.texts.first { $0.text == "Thanks for coming" }
+        XCTAssertNotNil(lastName)
+        XCTAssertNotNil(divider)
+        XCTAssertNotNil(thanks)
+        let itemsBottom = (lastName?.frame.y ?? 0) + POSReceiptLayoutEngine.itemPitch(template: template)
+        XCTAssertGreaterThanOrEqual(
+            Double(divider?.frame.y ?? -1),
+            Double(itemsBottom) - 0.5,
+            "divider should sit at/after last item"
+        )
+        XCTAssertGreaterThan(
+            Double(thanks?.frame.y ?? -1),
+            Double(divider?.frame.y ?? 0),
+            "thanks keeps relative order under divider"
+        )
     }
 
     func testPOSNameWrapsAndGrowsRowHeight() {
@@ -610,6 +666,196 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         let name = layout.texts.first { $0.text == "同行" }
         XCTAssertEqual(code?.frame.y, name?.frame.y)
         XCTAssertEqual(Double(POSReceiptLayoutEngine.itemPitch(template: template)), 32, accuracy: 0.1)
+    }
+
+    func testPOSLineSpacingExtraWidensItemPitch() {
+        var template = POSReceiptTemplate.makeBlank(name: "spacing")
+        let base = POSReceiptLayoutEngine.itemPitch(template: template)
+        template.lineSpacingExtraDots = 12
+        let widened = POSReceiptLayoutEngine.itemPitch(template: template)
+        XCTAssertEqual(Double(widened - base), 12, accuracy: 0.1)
+    }
+
+    func testPOSNativeWrapContinuationKeepsSameTextSize() {
+        // Regression: wrap line 2 used to fall back to 28pt → GS ! double while line 1 stayed normal.
+        var template = POSReceiptTemplate.makeBlank(name: "size")
+        template.enableCode = false
+        if let idx = template.elements.firstIndex(where: { $0.fieldKind == .name }) {
+            template.elements[idx].fontSize = 18
+            template.elements[idx].frame = SequencePlaceholderFrame(x: 12, y: 80, width: 278, height: 28)
+        }
+        // Long enough to wrap at 48 cols (CJK width 2).
+        let name = String(repeating: "测", count: 30)
+        let result = POSReceiptPrintComposer.compose(
+            template: template,
+            items: [POSLineItem(code: "", name: name, quantity: "", amount: "")],
+            surcharge: "0",
+            backgroundImage: nil,
+            logoImages: [:],
+            config: .default80mm
+        )
+        let payload = result.artifacts.payload
+        // GS ! 0x11 = double; GS ! 0x00 = normal. 18pt → normal only.
+        func countPattern(_ pattern: [UInt8]) -> Int {
+            let needle = Data(pattern)
+            var count = 0
+            var search = payload.startIndex
+            while search < payload.endIndex,
+                  let r = payload[search...].range(of: needle) {
+                count += 1
+                search = r.upperBound
+            }
+            return count
+        }
+        XCTAssertEqual(countPattern([0x1D, 0x21, 0x11]), 0, "18pt name must not emit GS ! double on wrap continuations")
+        XCTAssertGreaterThan(countPattern([0x1D, 0x21, 0x00]), 0)
+    }
+
+    /// Payload once split a 23-CJK name after 12 chars (24 cols) despite wrapCols=48 — char-grid bug.
+    func testPOSNativeKeepsShortNameOnOneLine() {
+        var template = POSReceiptTemplate.makeBlank(name: "oneline")
+        template.enableCode = false
+        if let idx = template.elements.firstIndex(where: { $0.fieldKind == .name }) {
+            template.elements[idx].fontSize = 18
+            template.elements[idx].frame = SequencePlaceholderFrame(x: 12, y: 140, width: 278, height: 40)
+        }
+        let name = "分社电光火石开个会开始大家都说了克己复礼看电视"
+        XCTAssertEqual(name.count, 23)
+        let result = POSReceiptPrintComposer.compose(
+            template: template,
+            items: [POSLineItem(code: "", name: name, quantity: "", amount: "")],
+            surcharge: "0",
+            backgroundImage: nil,
+            logoImages: [:],
+            config: .default80mm
+        )
+        let cfEnc = CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)
+        let enc = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cfEnc))
+        let gbk = try! XCTUnwrap(name.data(using: enc))
+        XCTAssertNotNil(
+            result.artifacts.payload.range(of: gbk),
+            "name must appear contiguous in payload (no mid-name LF)"
+        )
+    }
+
+    func testPOSNativeWrapUsesElementFontColumnsNotDoubleGrid() {
+        let config = PrinterConfig.default80mm
+        let paperW: CGFloat = 302
+        let frame = SequencePlaceholderFrame(x: 12, y: 80, width: 278, height: 28)
+        let name = "水电费水电费水电费水电费是"
+        let wrapCols = SequenceLayoutComposer.wrapColumns(
+            for: frame, fontSize: 18, config: config, paperWidthPoints: paperW
+        )
+        let printed = ReceiptTextLayout.wrap(name, maxColumns: wrapCols, asciiAsDoubleWidth: false)
+        XCTAssertEqual(printed.count, 1, "18pt name must not re-wrap on 24-col double grid")
+        XCTAssertGreaterThanOrEqual(wrapCols, 26)
+        XCTAssertLessThanOrEqual(wrapCols, 48)
+        let posMetrics = SequenceLayoutComposer.metricsForPOSPrint(
+            config: config, paperWidthPoints: paperW
+        )
+        XCTAssertEqual(posMetrics.columns, 48)
+
+        var template = POSReceiptTemplate.makeBlank(name: "wrap")
+        template.enableCode = false
+        if let idx = template.elements.firstIndex(where: { $0.fieldKind == .name }) {
+            template.elements[idx].fontSize = 18
+            template.elements[idx].frame = frame
+        }
+        let layout = POSReceiptLayoutEngine.expand(
+            template: template,
+            items: [POSLineItem(code: "", name: name, quantity: "", amount: "")],
+            surcharge: "0",
+            config: config
+        )
+        let placed = layout.texts.first { $0.text.contains("水电") }
+        XCTAssertEqual(placed?.text.split(separator: "\n").count, 1)
+    }
+
+    func testPOSComposeUsesNativeTextNotFullPageRaster() {
+        var template = POSReceiptTemplate.makeBlank(name: "native")
+        template.enableCode = true
+        template.lineSpacingExtraDots = 8
+        let result = POSReceiptPrintComposer.compose(
+            template: template,
+            items: [POSLineItem(code: "A1", name: "测试项目", quantity: "1", amount: "10")],
+            surcharge: "0",
+            backgroundImage: nil,
+            logoImages: [:],
+            config: .default80mm
+        )
+        XCTAssertTrue(result.artifacts.usedNativeText)
+        XCTAssertFalse(result.artifacts.usedRaster)
+        XCTAssertTrue(
+            result.artifacts.renderMode == .nativeText || result.artifacts.renderMode == .mixed
+        )
+        // FS & Chinese mode (native), not a whole-ticket GS v 0 bake of the preview.
+        XCTAssertTrue(result.artifacts.payload.contains(Data([0x1C, 0x26])))
+        // ESC 3 with base 30 + extra 8 = 38
+        XCTAssertTrue(result.artifacts.payload.contains(Data([0x1B, 0x33, 38])))
+        // GBK for 测 (0xB2E2) should appear in payload
+        XCTAssertTrue(result.artifacts.payload.contains(Data([0xB2, 0xE2])))
+        // USB first-packet pad (same as movie-ticket path).
+        XCTAssertTrue(result.artifacts.payload.prefix(96).allSatisfy { $0 == 0 })
+    }
+
+    func testPOSTemplateCutFeedAppearsInPayload() {
+        var template = POSReceiptTemplate.makeBlank(name: "cut-feed")
+        template.feedLinesBeforeCut = 7
+        var config = PrinterConfig.default80mm
+        config.cutPaper = true
+        config.feedLinesBeforeCut = 12
+        let result = POSReceiptPrintComposer.compose(
+            template: template,
+            items: [POSLineItem(name: "A")],
+            surcharge: "0",
+            backgroundImage: nil,
+            logoImages: [:],
+            config: config
+        )
+        XCTAssertEqual(template.resolvedFeedLinesBeforeCut(config: config), 7)
+        // ESC d n before cut
+        XCTAssertTrue(result.artifacts.payload.contains(Data([0x1B, 0x64, 7])))
+        XCTAssertFalse(result.artifacts.payload.contains(Data([0x1B, 0x64, 12])))
+    }
+
+    func testPOSLogoJobStartsWithUSBPaddingBeforeRaster() {
+        let logoId = UUID()
+        var template = POSReceiptTemplate.makeBlank(name: "logo-pad")
+        var logoEl = POSReceiptElement(
+            kind: .logo,
+            frame: SequencePlaceholderFrame(x: 20, y: 16, width: 100, height: 60),
+            ticketSection: .header
+        )
+        logoEl.id = logoId
+        template.elements = [
+            logoEl,
+            POSReceiptElement(
+                kind: .fieldPlaceholder,
+                frame: SequencePlaceholderFrame(x: 12, y: 140, width: 200, height: 40),
+                fieldKind: .name
+            )
+        ]
+        let logo = NSImage(size: NSSize(width: 40, height: 20), flipped: false) { rect in
+            NSColor.black.setFill()
+            rect.fill()
+            return true
+        }
+        let result = POSReceiptPrintComposer.compose(
+            template: template,
+            items: [POSLineItem(name: "示例")],
+            surcharge: "0",
+            backgroundImage: nil,
+            logoImages: [logoId: logo],
+            config: .default80mm
+        )
+        let payload = result.artifacts.payload
+        XCTAssertTrue(payload.prefix(96).allSatisfy { $0 == 0 }, "96 NUL pad protects GS v 0 header")
+        XCTAssertEqual(
+            Array(payload.dropFirst(96).prefix(4)),
+            [0x1B, 0x40, 0x1C, 0x2E],
+            "raster init must follow padding"
+        )
+        XCTAssertTrue(payload.contains(Data([0x1D, 0x76, 0x30, 0x00])))
     }
 
     func testPOSFirstItemStartsBelowLogo() {
@@ -822,6 +1068,34 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         let date = MovieTicketPDFRecognitionService.dateOnly(from: page)
         XCTAssertEqual(date, "Thursday, July 9")
         XCTAssertNil(MovieTicketPDFRecognitionService.dateOnly(from: "The Dark Knight"))
+    }
+
+    /// Dendy web PDF: show line "July 23rd…" must win over purchase "July 22, 2026 10:27 am".
+    func testDendyShowDatePrefersShowingLineOverPurchaseTimestamp() {
+        let page = """
+        SHOWING
+        Membership
+        A Clockwork Orange
+        View & manage membership
+        July 23rd, 6:15 pm (Ends at 8:52 pm)
+        Account Information
+        x 1 Cinema 3 Retro Film
+        CARD VISA ...3450 $23.95
+        TOTAL $23.95
+        July 22, 2026 10:27 am
+        """
+        XCTAssertEqual(
+            MovieTicketPDFRecognitionService.dateOnly(from: page),
+            "July 23rd"
+        )
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.endTime, text: page),
+            "8:52 pm"
+        )
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.startTime, text: page),
+            "6:15 pm"
+        )
     }
 
     func testEndTimeIsPDFExtractableAndAppliesDuration() {

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Editable snapshot of settings that only commits on Save.
@@ -9,6 +10,7 @@ struct SettingsDraft: Equatable {
     var defaultStartupPage: SidebarItem
     var appLanguage: AppLanguage
     var tmdbAPIKey: String
+    var retainWorkingContentOnQuit: Bool
 
     static func from(settings: AppSettings) -> SettingsDraft {
         SettingsDraft(
@@ -17,7 +19,8 @@ struct SettingsDraft: Equatable {
             hasCompletedSetup: settings.hasCompletedSetup,
             defaultStartupPage: settings.defaultStartupPage,
             appLanguage: settings.appLanguage,
-            tmdbAPIKey: settings.tmdbAPIKey
+            tmdbAPIKey: settings.tmdbAPIKey,
+            retainWorkingContentOnQuit: settings.retainWorkingContentOnQuit
         )
     }
 }
@@ -59,6 +62,7 @@ final class SettingsDraftStore: ObservableObject {
         draft.defaultStartupPage = defaults.defaultStartupPage
         draft.appLanguage = defaults.appLanguage
         draft.tmdbAPIKey = defaults.tmdbAPIKey
+        draft.retainWorkingContentOnQuit = true
         statusMessage = nil
     }
 
@@ -69,6 +73,7 @@ final class SettingsDraftStore: ObservableObject {
         appState.settings.defaultStartupPage = draft.defaultStartupPage
         appState.settings.appLanguage = draft.appLanguage
         appState.settings.tmdbAPIKey = draft.tmdbAPIKey
+        appState.settings.retainWorkingContentOnQuit = draft.retainWorkingContentOnQuit
         appState.settings.save()
         L10n.current = draft.appLanguage
         baseline = draft
@@ -160,6 +165,16 @@ private struct SettingsForm: View {
                             .pickerStyle(.segmented)
                             .frame(maxWidth: 220, alignment: .leading)
                         }
+                        divider
+                        Toggle(isOn: $store.draft.retainWorkingContentOnQuit) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(L10n.t("settings.retainWorkingContent", language))
+                                Text(L10n.t("settings.retainWorkingContentHint", language))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .toggleStyle(.checkbox)
                     }
 
                     settingsCard(title: L10n.t("settings.printer", language), systemImage: "printer") {

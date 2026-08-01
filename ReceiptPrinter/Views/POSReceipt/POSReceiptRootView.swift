@@ -57,7 +57,7 @@ struct POSReceiptRootView: View {
             }
             .environmentObject(session)
         }
-        .navigationTitle(L10n.ui("POS小票打印"))
+        // Title owned by MainView (keep-alive stack).
         .onAppear {
             // Always land on 主页面 when opening POS 小票.
             pane = .main

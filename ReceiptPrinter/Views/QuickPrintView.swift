@@ -30,9 +30,21 @@ struct QuickPrintView: View {
     @State private var autoNumber = QuickPrintAutoNumber()
     @State private var autoNumberSelected = false
     @State private var liveEditorHeight: CGFloat = 0
+    @State private var showHistory = false
+    @State private var printHistory: [ModulePrintHistoryRecord] = []
+    @State private var showLoadTemplateSheet = false
+    @State private var showSaveTemplateSheet = false
+    @State private var saveTemplateName = ""
+    @State private var savedQuickTemplates: [(document: QuickPrintTemplateDocument, body: NSAttributedString)] = []
+    @State private var renamingTemplateId: UUID?
+    @State private var renameTemplateText = ""
+    @State private var showLoadDraftSheet = false
 
     private let store = QuickPrintStore()
     private let mediaStore = QuickPrintMediaStore()
+    private let templateStore = QuickPrintTemplateStore()
+    private let historyKind = "quickPrint"
+    private let draftModule = "quickPrint"
     private let paperCanvasMinHeight: CGFloat = 480
 
     private var columns: Int { appState.settings.printerConfig.columnsPerLine }
@@ -120,10 +132,11 @@ struct QuickPrintView: View {
             sidePanel
                 .frame(minWidth: 280, idealWidth: 320, maxWidth: 400)
         }
-        .navigationTitle(L10n.ui("快速打印"))
+        // Title owned by MainView (keep-alive stack).
         .onAppear {
             loadSavedContent()
             loadDraftMedia()
+            printHistory = ModulePrintHistoryStore.loadAll(kind: historyKind)
         }
         .onChange(of: attributedText) { _, newValue in
             store.save(newValue)
@@ -134,6 +147,41 @@ struct QuickPrintView: View {
         .sheet(item: $previewPayload) { payload in
             BitmapPrintPreviewView(image: payload.image)
                 .frame(width: 420, height: 640)
+        }
+        .sheet(isPresented: $showHistory) {
+            modulePrintHistorySheet
+        }
+        .sheet(isPresented: $showLoadTemplateSheet) {
+            loadQuickTemplateSheet
+        }
+        .sheet(isPresented: $showSaveTemplateSheet) {
+            NamePromptSheet(
+                title: L10n.ui("存为模板"),
+                nameLabel: L10n.ui("模板名称"),
+                name: $saveTemplateName,
+                onCancel: { showSaveTemplateSheet = false },
+                onSave: {
+                    saveAsTemplateConfirmed()
+                    showSaveTemplateSheet = false
+                }
+            )
+        }
+        .sheet(isPresented: $showLoadDraftSheet) {
+            NamedDraftPickerSheet(
+                title: L10n.ui("读取草稿"),
+                module: draftModule,
+                onLoad: { draft in
+                    loadNamedDraft(draft)
+                    showLoadDraftSheet = false
+                },
+                onClose: { showLoadDraftSheet = false }
+            )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .receiptPrinterPersistWorkingDrafts)) { _ in
+            saveDraftExplicitly(showMessage: false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .receiptPrinterClearWorkingContent)) { _ in
+            clearContent()
         }
     }
 
@@ -480,8 +528,22 @@ struct QuickPrintView: View {
             }
             Spacer()
             Button(L10n.ui("清空")) { clearContent() }
-            Button(L10n.ui("存为模板")) { saveAsTemplate() }
-                .disabled(attributedText.length == 0)
+            Button(L10n.ui("读取草稿")) {
+                showLoadDraftSheet = true
+            }
+            Button(L10n.ui("保存草稿")) {
+                saveNamedDraft()
+            }
+            Button(L10n.ui("打印记录")) { showHistory = true }
+            Button(L10n.ui("载入模板")) {
+                showLoadTemplateSheet = true
+            }
+            Button(L10n.ui("存为模板")) {
+                syncEditorToState()
+                saveTemplateName = "快速打印 \(Date().formatted(date: .abbreviated, time: .shortened))"
+                showSaveTemplateSheet = true
+            }
+            .disabled(attributedText.length == 0 && logos.isEmpty && backgroundImage == nil)
             Button(L10n.ui("预览")) {
                 syncEditorToState()
                 let image = RichTextPrintRenderer.renderSequencePageImage(
@@ -500,6 +562,143 @@ struct QuickPrintView: View {
         }
         .padding()
         .background(.bar)
+    }
+
+    private var loadQuickTemplateSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(L10n.ui("载入模板")).font(.headline)
+                Spacer()
+                Button(L10n.ui("刷新")) { reloadQuickTemplates() }
+            }
+            if savedQuickTemplates.isEmpty {
+                Text(L10n.ui("暂无已存模板"))
+                    .foregroundStyle(.secondary)
+            } else {
+                List {
+                    ForEach(savedQuickTemplates, id: \.document.id) { item in
+                        VStack(alignment: .leading, spacing: 6) {
+                            if renamingTemplateId == item.document.id {
+                                HStack {
+                                    TextField(L10n.ui("模板名称"), text: $renameTemplateText)
+                                        .textFieldStyle(.roundedBorder)
+                                    Button(L10n.ui("保存")) {
+                                        templateStore.rename(id: item.document.id, to: renameTemplateText)
+                                        renamingTemplateId = nil
+                                        reloadQuickTemplates()
+                                    }
+                                    .disabled(renameTemplateText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                    Button(L10n.ui("取消")) { renamingTemplateId = nil }
+                                }
+                            } else {
+                                HStack {
+                                    Text(item.document.name).font(.headline)
+                                    Spacer()
+                                    Text(item.document.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            let preview = item.body.string.trimmingCharacters(in: .whitespacesAndNewlines)
+                            Text(
+                                "Logo \(item.document.logos.count)"
+                                    + " · "
+                                    + (preview.isEmpty ? L10n.ui("（空白）") : String(preview.prefix(80)))
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                            HStack {
+                                Button(L10n.ui("载入")) {
+                                    loadQuickTemplate(item.document, body: item.body)
+                                    showLoadTemplateSheet = false
+                                }
+                                Button(L10n.ui("改名")) {
+                                    renamingTemplateId = item.document.id
+                                    renameTemplateText = item.document.name
+                                }
+                                Spacer()
+                                Button(L10n.ui("删除"), role: .destructive) {
+                                    templateStore.delete(id: item.document.id)
+                                    reloadQuickTemplates()
+                                }
+                            }
+                            .controlSize(.small)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                .frame(minHeight: 220)
+            }
+            HStack {
+                Spacer()
+                Button(L10n.ui("关闭")) { showLoadTemplateSheet = false }
+            }
+        }
+        .padding(20)
+        .frame(width: 480, height: 420)
+        .onAppear { reloadQuickTemplates() }
+    }
+
+    private func reloadQuickTemplates() {
+        savedQuickTemplates = templateStore.loadAll()
+    }
+
+    private var modulePrintHistorySheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(L10n.ui("打印记录")).font(.title2.weight(.semibold))
+                Spacer()
+                Button(L10n.ui("清理全部"), role: .destructive) {
+                    ModulePrintHistoryStore.clear(kind: historyKind)
+                    printHistory = []
+                }
+                .disabled(printHistory.isEmpty)
+                Button(L10n.ui("关闭")) { showHistory = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+            if printHistory.isEmpty {
+                ContentUnavailableView(
+                    L10n.ui("暂无记录"),
+                    systemImage: "clock",
+                    description: Text(L10n.ui("成功打印后会自动保存在此"))
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(printHistory) { record in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(record.summary).font(.headline).lineLimit(1)
+                                Spacer()
+                                Text(record.createdAtText)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(record.plainText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(3)
+                            HStack {
+                                Button(L10n.ui("载入内容")) {
+                                    loadHistory(record)
+                                    showHistory = false
+                                }
+                                Spacer()
+                                Button(L10n.ui("删除"), role: .destructive) {
+                                    ModulePrintHistoryStore.delete(id: record.id, kind: historyKind)
+                                    printHistory = ModulePrintHistoryStore.loadAll(kind: historyKind)
+                                }
+                            }
+                            .controlSize(.small)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 520, height: 480)
     }
 
     private var printButtonTitle: String {
@@ -560,6 +759,104 @@ struct QuickPrintView: View {
             backgroundScalePercent: backgroundScalePercent,
             autoNumber: autoNumber
         )
+    }
+
+    private func saveDraftExplicitly(showMessage: Bool) {
+        syncEditorToState()
+        store.save(attributedText)
+        persistDraftMedia()
+        if showMessage {
+            message = L10n.ui("草稿已保存")
+        }
+    }
+
+    private func saveNamedDraft() {
+        syncEditorToState()
+        let name = "草稿 \(Date().formatted(date: .abbreviated, time: .shortened))"
+        let pairs = logos.compactMap { item -> (item: SequenceLogoItem, image: NSImage)? in
+            guard let image = logoImages[item.id] else { return nil }
+            return (item, image)
+        }
+        let preview = attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = NamedWorkingDraftStore.saveQuickDraft(
+            name: name,
+            previewText: preview,
+            body: attributedText,
+            logos: pairs,
+            backgroundImage: backgroundImage,
+            backgroundScalePercent: backgroundScalePercent,
+            autoNumber: autoNumber
+        )
+        store.save(attributedText)
+        persistDraftMedia()
+        message = L10n.ui("草稿已保存")
+    }
+
+    private func loadNamedDraft(_ draft: NamedWorkingDraft) {
+        let body = NamedWorkingDraftStore.loadBody(module: draftModule, id: draft.id)
+        attributedText = body
+        let assets = NamedWorkingDraftStore.loadQuickDraftAssets(id: draft.id)
+        logos = assets.meta.logos
+        logoImages = assets.logoImages
+        backgroundImage = assets.background
+        backgroundScalePercent = assets.meta.backgroundScalePercent
+        autoNumber = assets.meta.autoNumber
+        store.save(attributedText)
+        persistDraftMedia()
+        message = L10n.ui("已读取草稿")
+    }
+
+    private func loadQuickTemplate(_ doc: QuickPrintTemplateDocument, body: NSAttributedString) {
+        attributedText = body
+        logos = doc.logos
+        logoImages = templateStore.loadLogoImages(document: doc)
+        backgroundImage = templateStore.loadBackground(document: doc)
+        backgroundScalePercent = backgroundImage == nil ? 100 : doc.backgroundScalePercent
+        autoNumber = doc.autoNumber
+        editorFontSize = doc.editorFontSize
+        store.save(attributedText)
+        persistDraftMedia()
+        message = "\(L10n.ui("已载入模板"))「\(doc.name)」"
+    }
+
+    private func loadHistory(_ record: ModulePrintHistoryRecord) {
+        if let data = record.rtfdData,
+           let attr = try? NSAttributedString(
+            data: data,
+            options: [.documentType: NSAttributedString.DocumentType.rtfd],
+            documentAttributes: nil
+           ), attr.length > 0 {
+            attributedText = attr
+        } else {
+            attributedText = NSAttributedString(
+                string: record.plainText,
+                attributes: AttributedTextView.defaultTypingAttributes()
+            )
+        }
+        store.save(attributedText)
+        message = L10n.ui("已载入历史内容")
+    }
+
+    private func recordPrintHistory(previewPNG: Data) {
+        let plain = attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary: String = {
+            let first = plain.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+            if first.isEmpty { return L10n.ui("（无文字）") }
+            return first.count > 40 ? String(first.prefix(40)) + "…" : first
+        }()
+        let rtfd = try? attributedText.data(
+            from: NSRange(location: 0, length: attributedText.length),
+            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
+        )
+        let record = ModulePrintHistoryRecord(
+            kind: historyKind,
+            summary: summary,
+            plainText: plain,
+            rtfdData: rtfd,
+            previewPNG: previewPNG
+        )
+        ModulePrintHistoryStore.append(record, kind: historyKind)
+        printHistory = ModulePrintHistoryStore.loadAll(kind: historyKind)
     }
 
     private func clearContent() {
@@ -664,16 +961,30 @@ struct QuickPrintView: View {
 
     // MARK: - Print / preview helpers
 
-    private func saveAsTemplate() {
-        let plain = attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !plain.isEmpty else { return }
-        var template = ReceiptTemplate(name: "快速打印 \(Date().formatted(date: .abbreviated, time: .shortened))")
-        template.blocks = [
-            TemplateBlock(type: .text, content: plain, align: .left, size: .double)
-        ]
-        template.defaultData = [:]
-        appState.saveTemplate(template)
-        message = "已保存为模板「\(template.name)」"
+    private func saveAsTemplateConfirmed() {
+        syncEditorToState()
+        let name = saveTemplateName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let pairs = logos.compactMap { item -> (item: SequenceLogoItem, image: NSImage)? in
+            guard let image = logoImages[item.id] else { return nil }
+            return (item, image)
+        }
+        let doc = QuickPrintTemplateDocument(
+            name: name,
+            paperWidthMM: appState.settings.printerConfig.paperWidthMM,
+            editorFontSize: editorFontSize,
+            backgroundScalePercent: backgroundImage == nil ? 100 : backgroundScalePercent,
+            logos: logos,
+            autoNumber: autoNumber
+        )
+        templateStore.save(
+            document: doc,
+            body: attributedText,
+            logos: pairs,
+            backgroundImage: backgroundImage,
+            autoNumber: autoNumber
+        )
+        message = "已保存为模板「\(name)」"
     }
 
     private func printDocument() async {
@@ -768,16 +1079,16 @@ struct QuickPrintView: View {
             )
         }
 
-        let statusPollingWasActive = appState.gmailSync.isRunning
         if let record = await appState.runDiagnosticPrint(
             artifacts: artifacts,
-            statusPollingWasActive: statusPollingWasActive
+            statusPollingWasActive: false
         ) {
             if record.transportError == nil {
                 if autoNumber.enabled {
                     autoNumber.advanceAfterPrint(count: count)
                     persistDraftMedia()
                 }
+                recordPrintHistory(previewPNG: artifacts.pngData)
                 message = count > 1 ? "已发送 \(count) 张到打印机" : L10n.ui("已发送到打印机")
             } else {
                 message = "打印失败: \(record.transportError ?? "")"

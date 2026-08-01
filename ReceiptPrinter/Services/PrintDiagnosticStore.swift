@@ -8,11 +8,7 @@ struct PrintDiagnosticStore: Sendable {
     private let indexURL: URL
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport
-            .appendingPathComponent("ReceiptPrinter", isDirectory: true)
-            .appendingPathComponent("PrintDiagnostics", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = AppPaths.subdirectory("PrintDiagnostics")
         rootDirectory = dir
         indexURL = dir.appendingPathComponent("index.json")
     }

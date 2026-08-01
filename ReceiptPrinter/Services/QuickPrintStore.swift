@@ -4,9 +4,7 @@ final class QuickPrintStore {
     private let fileURL: URL
 
     init(filename: String = "quick-print.rtfd") {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport.appendingPathComponent("ReceiptPrinter", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = AppPaths.applicationSupportRoot
         fileURL = dir.appendingPathComponent(filename, isDirectory: true)
     }
 

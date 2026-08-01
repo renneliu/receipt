@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct MovieTicketTemplateView: View {
     @EnvironmentObject private var session: MovieTicketSession
     @EnvironmentObject private var appState: AppState
+    @Environment(\.appLanguage) private var language
 
     @State private var selectedElementIds: Set<UUID> = []
     /// Last clicked / focused element (inspector target when a single item is selected).
@@ -230,7 +231,7 @@ struct MovieTicketTemplateView: View {
                 )
             ) {
                 ForEach(session.templates) { t in
-                    Text(t.name).tag(Optional(t.id))
+                    Text(L10n.ui(t.name, language)).tag(Optional(t.id))
                 }
             }
             .pickerStyle(.menu)

@@ -566,6 +566,25 @@ struct POSReceiptTemplateView: View {
                         ), in: 300...1200, step: 20)
                     }
 
+                    labeled(L10n.ui("行间距")) {
+                        HStack(spacing: 8) {
+                            Slider(value: Binding(
+                                get: {
+                                    Double(session.editingTemplate?.lineSpacingExtraDots ?? t.lineSpacingExtraDots)
+                                },
+                                set: {
+                                    session.editingTemplate?.lineSpacingExtraDots = Int($0.rounded())
+                                }
+                            ), in: 0...40, step: 1)
+                            Text("\(session.editingTemplate?.lineSpacingExtraDots ?? t.lineSpacingExtraDots)")
+                                .font(.caption.monospacedDigit())
+                                .frame(width: 28, alignment: .trailing)
+                        }
+                        Text(L10n.ui("增大打印行距与项目行间距（0 为默认）"))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
                     Divider()
                     if let id = selectedElementId,
                        session.editingTemplate?.elements.contains(where: { $0.id == id }) == true {

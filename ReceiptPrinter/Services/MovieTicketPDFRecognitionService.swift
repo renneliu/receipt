@@ -395,7 +395,10 @@ enum MovieTicketPDFRecognitionService {
                 if line.range(of: #"(?i)including\s+tax"#, options: .regularExpression) != nil {
                     continue
                 }
-                return String(full[amountRange])
+                let amount = String(full[amountRange])
+                // Skip $0.00 placeholders; keep looking for a real total.
+                if isZeroMoneyAmount(amount) { continue }
+                return amount
             }
         }
         // Fallback: amount on the same line after the word Total only (do not cross \n).
@@ -403,11 +406,20 @@ enum MovieTicketPDFRecognitionService {
             let after = String(full[range.upperBound...])
             let sameLine = String(after.prefix(while: { $0 != "\n" && $0 != "\r" }))
             if sameLine.range(of: #"(?i)including\s+tax"#, options: .regularExpression) == nil,
-               let amount = firstMoneyAmount(in: sameLine) {
+               let amount = firstMoneyAmount(in: sameLine),
+               !isZeroMoneyAmount(amount) {
                 return amount
             }
         }
         return nil
+    }
+
+    private static func isZeroMoneyAmount(_ raw: String) -> Bool {
+        let digits = raw.replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Double(digits) else { return false }
+        return value == 0
     }
 
     /// `$12.00` / `29` / `26.5` — used for Total lines that omit trailing cents.
@@ -861,15 +873,25 @@ enum MovieTicketPDFRecognitionService {
         keywords: [String],
         fieldKind: MovieTicketFieldKind? = nil
     ) -> String? {
+        guard let full = page.string, !full.isEmpty else { return nil }
+        return valueAfterKeywords(keywords, in: full, fieldKind: fieldKind)
+    }
+
+    /// Public helper for auto-detect: read past a keyword and glue PDF mid-word wraps
+    /// (e.g. `35MM J` + `OINT SECURITY AREA (2000)` → full title).
+    static func valueAfterKeywords(
+        _ keywords: [String],
+        in full: String,
+        fieldKind: MovieTicketFieldKind? = nil
+    ) -> String? {
         let keys = keywords
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        guard !keys.isEmpty, let full = page.string, !full.isEmpty else { return nil }
+        guard !keys.isEmpty, !full.isEmpty else { return nil }
         let ordered = keys.sorted { $0.count > $1.count }
         for key in ordered {
             guard let range = firstMatchRange(of: key, in: full) else { continue }
-            let afterKey = full[range.upperBound...]
-            let value = collectValueLines(after: afterKey, for: fieldKind)
+            let value = collectValueLines(after: full[range.upperBound...], for: fieldKind)
             if !value.isEmpty { return value }
         }
         return nil
@@ -1068,6 +1090,10 @@ enum MovieTicketPDFRecognitionService {
             if t.range(of: #"(?i)^Cinema\s+\d+$"#, options: .regularExpression) != nil {
                 return true
             }
+            // Orpheum-style invert badge is often a bare digit ("4") — was rejected by count>=2.
+            if t.range(of: #"^\d{1,3}$"#, options: .regularExpression) != nil {
+                return true
+            }
             // Promo / ticket-type lines are not halls.
             let upper = t.uppercased()
             if upper.contains("%") || upper.contains("OFF") || upper.contains("TICKET")
@@ -1077,18 +1103,33 @@ enum MovieTicketPDFRecognitionService {
             return t.count >= 2 && t.count <= 40
         case .ticketType, .seatArea:
             if kind == .ticketType {
-                // Reject mid-word fragments like "ies".
-                if t.count < 4 { return false }
+                // Reject mid-word fragments and usher / marketing copy.
+                if t.count < 4 || t.count > 80 { return false }
+                let lower = t.lowercased()
+                if lower.contains("usher") || lower.contains("popcorn") || lower.contains("hey ")
+                    || lower.contains("your ticket to") || lower.contains("proceed")
+                    || lower.contains("booking -") || lower.contains("show this")
+                    || lower.contains("cinema numer") || lower.contains("cinema number") {
+                    return false
+                }
+                if t.contains("%") { return false }
                 if t.range(of: #"(?i)^(Adult|Child|Senior|Student|Concession|Member|Family)"#, options: .regularExpression) != nil {
                     return true
                 }
-                if t.contains("%") { return false }
+                if t.range(of: #"(?i)\bx\s*\d+\b"#, options: .regularExpression) != nil { return true }
+                if t.range(of: #"(?i)\d+x\b"#, options: .regularExpression) != nil { return true }
+                // Short product-ish lines only — never multi-sentence prose.
+                if t.contains(".") && t.count > 40 { return false }
+                return t.count <= 60 && !t.contains("!")
             }
             return t.count >= 2
         case .startTime, .endTime, .timeRange:
             return containsClockTime(t)
         case .showDate:
             return hasCalendarDate(t)
+        case .ticketPrice:
+            if isZeroMoneyAmount(t) { return false }
+            return firstMoneyAmount(in: t) != nil || t.contains("$") || t.contains(where: \.isNumber)
         default:
             return t.count >= 2
         }
@@ -1353,8 +1394,17 @@ enum MovieTicketPDFRecognitionService {
         }
     }
 
+    /// Strip English day ordinals so "July 23rd" parses as "July 23".
+    private static func stripDayOrdinals(_ text: String) -> String {
+        text.replacingOccurrences(
+            of: #"(\d{1,2})(?:st|nd|rd|th)\b"#,
+            with: "$1",
+            options: [.regularExpression, .caseInsensitive]
+        )
+    }
+
     private static func parseFlexibleDateOnly(_ raw: String) -> Date? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = stripDayOrdinals(raw.trimmingCharacters(in: .whitespacesAndNewlines))
         let formats = [
             "EEEE d MMMM yyyy",
             "EEEE d MMMM",
@@ -1422,12 +1472,14 @@ enum MovieTicketPDFRecognitionService {
 
     private static func hasCalendarDate(_ text: String) -> Bool {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let day = #"\d{1,2}(?:st|nd|rd|th)?"#
         let patterns = [
-            #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+\#(monthPattern)"#,
-            // US / Dendy: "Thursday, July 9"
-            #"(?i)\#(weekdayPattern),?\s+\#(monthPattern)\s+\d{1,2}"#,
-            #"(?i)\#(monthPattern)\s+\d{1,2},?\s+\d{4}"#,
-            #"(?i)\d{1,2}\s+\#(monthPattern)(?:\s+\d{4})?"#,
+            #"(?i)\#(weekdayPattern)\s+\#(day)\s+\#(monthPattern)"#,
+            // US / Dendy: "Thursday, July 9" / "July 23rd"
+            #"(?i)\#(weekdayPattern),?\s+\#(monthPattern)\s+\#(day)"#,
+            #"(?i)\#(monthPattern)\s+\#(day),?\s+\d{4}"#,
+            #"(?i)\#(monthPattern)\s+\#(day)\b"#,
+            #"(?i)\#(day)\s+\#(monthPattern)(?:\s+\d{4})?"#,
             #"\d{1,2}/\d{1,2}/\d{2,4}"#
         ]
         return patterns.contains { t.range(of: $0, options: .regularExpression) != nil }
@@ -1441,29 +1493,72 @@ enum MovieTicketPDFRecognitionService {
     private static func extractSessionDateTimeFromPage(_ page: PDFPage) -> String? {
         guard let full = page.string, !full.isEmpty else { return nil }
 
+        let date = firstDateOnlyMatch(in: full)
+        let time = firstClockOnlyMatch(in: full)
         // Prefer composing split IMAX lines: "Saturday 7 March" + "3:15PM".
-        if let date = firstDateOnlyMatch(in: full),
-           let time = firstClockOnlyMatch(in: full) {
+        let composed: String? = {
+            guard let date, let time else { return nil }
             return "\(date) \(normalizeClockToken(time))"
-        }
+        }()
+        let combined = firstSessionDateTimeMatch(in: full, allowClockOnly: false)
+        let clockOnly = firstSessionDateTimeMatch(in: full, allowClockOnly: true)
+        return composed ?? combined ?? clockOnly
+    }
 
-        if let combined = firstSessionDateTimeMatch(in: full, allowClockOnly: false) {
-            return combined
-        }
-        return firstSessionDateTimeMatch(in: full, allowClockOnly: true)
+    /// Date-only patterns (optional English ordinals: 23rd / 1st / 2nd / 3rd).
+    private static var dateOnlyPatterns: [String] {
+        let day = #"\d{1,2}(?:st|nd|rd|th)?"#
+        return [
+            // AU/IMAX: "Saturday 7 March" / "Saturday 7 March 2026"
+            #"(?i)\#(weekdayPattern)\s+\#(day)\s+\#(monthPattern)(?:\s+\d{4})?"#,
+            // US/Dendy: "Thursday, July 9" / "Thursday, July 9, 2026"
+            #"(?i)\#(weekdayPattern),?\s+\#(monthPattern)\s+\#(day)(?:,?\s+\d{4})?"#,
+            // Dendy web: "July 23rd, 2026" / "July 23rd" (no weekday)
+            #"(?i)\#(monthPattern)\s+\#(day),?\s+\d{4}"#,
+            #"(?i)\#(monthPattern)\s+\#(day)\b"#,
+            // "9 July 2026"
+            #"(?i)\#(day)\s+\#(monthPattern)\s+\d{4}"#
+        ]
     }
 
     private static func firstDateOnlyMatch(in text: String) -> String? {
-        let patterns = [
-            // AU/IMAX: "Saturday 7 March" / "Saturday 7 March 2026"
-            #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+\#(monthPattern)(?:\s+\d{4})?"#,
-            // US/Dendy: "Thursday, July 9" / "Thursday, July 9, 2026"
-            #"(?i)\#(weekdayPattern),?\s+\#(monthPattern)\s+\d{1,2}(?:,?\s+\d{4})?"#,
-            // "July 9, 2026" / "9 July 2026"
-            #"(?i)\#(monthPattern)\s+\d{1,2},?\s+\d{4}"#,
-            #"(?i)\d{1,2}\s+\#(monthPattern)\s+\d{4}"#
-        ]
-        return firstRegexMatch(in: text, patterns: patterns)
+        // Dendy web invoices put the show line near SHOWING / Ends at, and a
+        // purchase timestamp later ("July 22, 2026 10:27 am"). Prefer show date.
+        if let showing = text.range(of: "SHOWING", options: [.caseInsensitive]) {
+            let window = String(text[showing.upperBound...].prefix(500))
+            if let date = earliestRegexMatch(in: window, patterns: dateOnlyPatterns) {
+                return date
+            }
+        }
+        for line in text.components(separatedBy: .newlines) {
+            guard line.range(
+                of: #"(?i)Ends?\s+at\b"#,
+                options: .regularExpression
+            ) != nil else { continue }
+            if let date = earliestRegexMatch(in: line, patterns: dateOnlyPatterns) {
+                return date
+            }
+        }
+        // Earliest date in document across all patterns (not year-form first).
+        return earliestRegexMatch(in: text, patterns: dateOnlyPatterns)
+    }
+
+    /// First match by document position across all patterns (avoids year-form bias).
+    private static func earliestRegexMatch(in text: String, patterns: [String]) -> String? {
+        let ns = text as NSString
+        let fullRange = NSRange(location: 0, length: ns.length)
+        var bestLocation = Int.max
+        var best: String?
+        for pattern in patterns {
+            guard let re = try? NSRegularExpression(pattern: pattern),
+                  let match = re.firstMatch(in: text, range: fullRange),
+                  match.range.location < bestLocation,
+                  let range = Range(match.range, in: text)
+            else { continue }
+            bestLocation = match.range.location
+            best = String(text[range])
+        }
+        return best
     }
 
     private static func firstClockOnlyMatch(in text: String) -> String? {
@@ -1489,14 +1584,17 @@ enum MovieTicketPDFRecognitionService {
     }
 
     private static func firstSessionDateTimeMatch(in text: String, allowClockOnly: Bool) -> String? {
+        let day = #"\d{1,2}(?:st|nd|rd|th)?"#
         var patterns = [
-            #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+\#(monthPattern),?\s+\d{1,2}:\d{2}\s*[AP]M"#,
-            #"(?i)\#(weekdayPattern)\s+\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
-            #"(?i)\#(weekdayPattern)\s+[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
+            #"(?i)\#(weekdayPattern)\s+\#(day)\s+\#(monthPattern),?\s+\d{1,2}:\d{2}\s*[AP]M"#,
+            #"(?i)\#(weekdayPattern)\s+\#(day)\s+[A-Za-z]{3,9},?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
+            #"(?i)\#(weekdayPattern)\s+[A-Za-z]{3,9}\s+\#(day),?\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
             // Dendy: "Thursday, July 9 Stratford, 6:00 pm"
-            #"(?i)\#(weekdayPattern),?\s+\#(monthPattern)\s+\d{1,2}(?:\s+[A-Za-z]+)?,?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
-            #"(?i)\d{1,2}\s+\#(monthPattern)\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
-            #"(?i)\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#
+            #"(?i)\#(weekdayPattern),?\s+\#(monthPattern)\s+\#(day)(?:\s+[A-Za-z]+)?,?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
+            // Dendy web: "July 23rd, 6:15 pm" (no weekday)
+            #"(?i)\#(monthPattern)\s+\#(day),?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
+            #"(?i)\#(day)\s+\#(monthPattern)\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#,
+            #"(?i)\#(day)\s+[A-Za-z]{3,9},?\s+\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#
         ]
         if allowClockOnly {
             patterns.append(#"(?i)\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#)
@@ -1518,7 +1616,7 @@ enum MovieTicketPDFRecognitionService {
 
     private static func parseFlexibleDateTime(_ raw: String) -> Date? {
         // Prefer the first clock-bearing segment (handles ranges / labels).
-        let candidate = firstDateTimeCandidate(from: raw)
+        let candidate = stripDayOrdinals(firstDateTimeCandidate(from: raw))
         let formats = [
             "yyyy-MM-dd HH:mm",
             "yyyy-MM-dd h:mm a",

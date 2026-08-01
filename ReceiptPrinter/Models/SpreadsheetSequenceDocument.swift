@@ -175,6 +175,10 @@ struct SequenceDraftMeta: Codable, Equatable {
     /// Legacy single-logo draft fields.
     var logoFrame: SequencePlaceholderFrame? = nil
     var hasLogo: Bool = false
+    /// Imported sheet kept across page switches / relaunch when retain is on.
+    var spreadsheet: SpreadsheetTable? = nil
+    var selectedRowIndex: Int = 0
+    var importInfo: String = ""
 
     mutating func normalizeLogos() {
         if logos.isEmpty, hasLogo, let frame = logoFrame {

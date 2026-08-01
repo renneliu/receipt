@@ -1,0 +1,771 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		00F57D78AFC0CCC9C87A6C18 /* MovieTicketPDFFieldRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9752D03E900F8381D54BCDF /* MovieTicketPDFFieldRecognizer.swift */; };
+		0958F9DFD4B9FDD04A9A9018 /* BarcodeGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F443323A0D1A0553C4CBCAD /* BarcodeGenerator.swift */; };
+		09A72A12C6BE8505F49CA918 /* QuickPrintStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8B07C0A960A758562FFAF2E /* QuickPrintStore.swift */; };
+		149B1DF51A3212ECB47EC3C3 /* ModulePrintHistoryRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AA0EE06020DBF0003938BC7 /* ModulePrintHistoryRecord.swift */; };
+		2272CB35224DE633C6C443C3 /* WorkingContentDrafts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7826B9CBA59A07A269E820C9 /* WorkingContentDrafts.swift */; };
+		22BE8BBEA646878D17484D52 /* SequenceLayoutComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42BDFDD55BF1C72A86FD56F1 /* SequenceLayoutComposer.swift */; };
+		25E3E99E82EDBE74CB289963 /* SpreadsheetImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37493DC24A5271AA73888E32 /* SpreadsheetImportService.swift */; };
+		2A90AF6D11DB0EAAC8DD20D0 /* PrintDiagnosticComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09824EA3D77712EE507FE6A3 /* PrintDiagnosticComparison.swift */; };
+		2B243DEBB053746A2F307307 /* POSReceiptTemplateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FC6A1533309A5D35826B31E /* POSReceiptTemplateView.swift */; };
+		2FA9DCA9EABB150BB44AE058 /* MovieTicketPrintMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E04C0B0C2F25CD13C90A5C2 /* MovieTicketPrintMetrics.swift */; };
+		300F6A0E18196BDE647A1F44 /* POSReceiptLayoutEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9361CDF817BCCD2966FC570A /* POSReceiptLayoutEngine.swift */; };
+		335FCA0CEEFCCAE8A6A2DB9B /* NamedWorkingDraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F767EE65E781247A2435A3D0 /* NamedWorkingDraftStore.swift */; };
+		36FB47EE5AEAB05AAB9FA3D4 /* ReceiptPrinterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F650A80F21FD6182762CA55 /* ReceiptPrinterApp.swift */; };
+		3FB2F7960C087B21C1A4B3C4 /* MovieTicketMainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73F1D039EA85D85C97B711B1 /* MovieTicketMainView.swift */; };
+		412B055CDC838309F028A909 /* PlaceholderBoxOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED14F9640AE0B880C2941A9C /* PlaceholderBoxOverlay.swift */; };
+		41ED2C9E3E0542F045DBB1C9 /* MovieTicketData.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0A415F2491D8D285DD7A9D2 /* MovieTicketData.swift */; };
+		4895B60EEC818DE27CA7FAD2 /* NamedDraftPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C92F44816C47003412848CD /* NamedDraftPickerSheet.swift */; };
+		4ADDB39E93481673B5301DBE /* MovieTicketOrpheumESCPOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AB8C810893F123E6BFAEDA4 /* MovieTicketOrpheumESCPOS.swift */; };
+		4C5CEE1E715AA95E4BA3CE1D /* POSCartDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E6727A23EBC1EEEB9BA6441 /* POSCartDraft.swift */; };
+		4D6C8404E1A6FDD2C1FD7115 /* TemplateListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2312F510155B5E1A3443DD56 /* TemplateListView.swift */; };
+		4EF4499305DD27946B76FF57 /* POSReceiptModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 930F1EE336B164674AD60047 /* POSReceiptModels.swift */; };
+		54877ECA90AC34F76EDC8052 /* L10n.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09A4E7431FF9ACA077B8E57 /* L10n.swift */; };
+		5A20ABB562543E50B05F4E59 /* SpreadsheetSequenceDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 147DDA613B04960F7E2F5573 /* SpreadsheetSequenceDocument.swift */; };
+		5F173AE829C6705128D7CF42 /* PrintDiagnosticView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0355AB30392E5A02CA878736 /* PrintDiagnosticView.swift */; };
+		61405599E4A10454B1888266 /* .placeholder.json in Resources */ = {isa = PBXBuildFile; fileRef = F2D5D94C882DECC7ABFEAE6C /* .placeholder.json */; };
+		6261143CEE93BF9703EC9C4A /* AppPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFC12CE365DEE4BD2F2BEA71 /* AppPaths.swift */; };
+		65D81CBB05B7948DAF4C3CE8 /* POSReceiptTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C26C43A6AEFEAF820D974171 /* POSReceiptTemplateStore.swift */; };
+		65ED2F53F1AB56A31873F330 /* MovieTicketDendyESCPOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 321C70B2F14B719938E47DBE /* MovieTicketDendyESCPOS.swift */; };
+		67835C6F28A3510E5B8A0611 /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = 4D1DA5297DF46F68971F25B2 /* AppIcon.png */; };
+		67D6B2E28DD3EB8C64F1466D /* TemplateRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60657A4773992166CD5D1696 /* TemplateRenderer.swift */; };
+		699D8DC199E6B3CF899F717A /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FC4249C796A94D19BB12E85 /* NotificationService.swift */; };
+		6CA15BF22DD50AB4C4FBF90F /* MovieTicketModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BA937468287F5DFE1D3E05E /* MovieTicketModels.swift */; };
+		6F087947B8B9CE4710954700 /* POSReceiptRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CD9299B473EE29D138E1AC1 /* POSReceiptRootView.swift */; };
+		72FABB7444E8F3D0D77BFF00 /* ReceiptScannerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 698790A7DD64DBCCBE0CD066 /* ReceiptScannerService.swift */; };
+		73E084958B1FBD91F3700730 /* POSElementBoxOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD7EBDEEDF9E6A0DCE64E318 /* POSElementBoxOverlay.swift */; };
+		73E6AC9502322B0C7A6202AE /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = B3848600EA5C27FBC902DB80 /* AppIcon.icns */; };
+		7591F058B446F3B2853CB5B9 /* QuickPrintView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14A86C170B2790FA6A322CFE /* QuickPrintView.swift */; };
+		760275120BC926AEDE2C3C1D /* MovieTicketPDFRecognitionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD07DB7FF653688180BE7BC0 /* MovieTicketPDFRecognitionService.swift */; };
+		7A4F03269A1FEA0B0F1D7476 /* ReceiptTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE99AB5F55E629CCD36F34F6 /* ReceiptTemplate.swift */; };
+		7E9CB742AFC1B0C88DBCF7B2 /* PDFPrintView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C84631E5D0D5715AAAF6E214 /* PDFPrintView.swift */; };
+		7FFE249E5B2EB2FB473D83A2 /* SequenceTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F60B5946C01F2BEBF02E07F /* SequenceTemplateStore.swift */; };
+		81310F1237746DADB20141C2 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B08412857A95E4274C87B5F /* SettingsView.swift */; };
+		8A20B8B4A745BE9E0C70978A /* ImagePreprocessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 844BF65EB2E339236A1C9262 /* ImagePreprocessor.swift */; };
+		8C70912DAB55ED1B6888618F /* MovieTicketPDFRegionEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6998CBBE93F9C384FF9F51C /* MovieTicketPDFRegionEditorSheet.swift */; };
+		8E8A59114DB9B0ECD5A42CA9 /* ReceiptTextLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D0F26C9477A08735B8D5C91 /* ReceiptTextLayout.swift */; };
+		8EF1AA05D6D1379E978BB681 /* PrintPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF3089876EC80C7BE630331A /* PrintPreviewView.swift */; };
+		91D4D19E1D916519ECC83732 /* MovieTicketLayoutEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056461F2E33F72412691C7C0 /* MovieTicketLayoutEngine.swift */; };
+		94A06DC30BE129F530904D9A /* MovieTicketIMAXESCPOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E943665CFD84217C0D550FA /* MovieTicketIMAXESCPOS.swift */; };
+		95B4E7BE969C5844E79DB5CA /* PrintDiagnosticStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98996F1D52597FEDA31DBEB5 /* PrintDiagnosticStore.swift */; };
+		96BE0C9534FAC3A50E29F2DC /* MovieTicketRitzESCPOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00977D0E5F5E4A3A1D284873 /* MovieTicketRitzESCPOS.swift */; };
+		9BA9A73D66F50B686DAFE951 /* MovieTicketRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4380613855441475E4A05AF /* MovieTicketRootView.swift */; };
+		9CA5169744463DB0EC582B32 /* L10nEnFromZh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38E03A6B5342A27068E4E4E2 /* L10nEnFromZh.swift */; };
+		9D9B4279A9A4685F20BC5EB0 /* LogoBoxOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DDBD19F1941CCD72CE14598 /* LogoBoxOverlay.swift */; };
+		9EA351D07FB5A4278276E620 /* ESCPOSBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B33F5B0056514AD3B789E578 /* ESCPOSBuilder.swift */; };
+		A3F7F424B5678B99DA7D3494 /* TemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 530CAF7172ABD86560C30090 /* TemplateStore.swift */; };
+		A4F36B778241707E626B1F3B /* MovieTicketTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 737EDEB1E50BDD466C1424B0 /* MovieTicketTemplateStore.swift */; };
+		A53F82C8C2FE8E93B71D3582 /* ImportReceiptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8342C93503AA70DC8B7AD014 /* ImportReceiptView.swift */; };
+		A5B74EEF399EEB4A97F27B35 /* POSESCPOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32AD0949894F3E345D1D6735 /* POSESCPOS.swift */; };
+		A6A20CA0460335E5199B9D34 /* MovieTicketDataEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42A87B1A0493E73BAD113BD6 /* MovieTicketDataEditorView.swift */; };
+		A9BDFF207EDDF31CC2ED72F8 /* PrintDiagnosticRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = F22F0B456CE698B312BDBE5D /* PrintDiagnosticRecord.swift */; };
+		AC5A0228AC3947A021D89818 /* POSExcelLookupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41130A1456B3C0EADFB3E84D /* POSExcelLookupService.swift */; };
+		AF150FF8E8204E545309A308 /* POSReceiptMainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA644BD074E792E639776E78 /* POSReceiptMainView.swift */; };
+		B1B9730DFAAC5C7DFF07C7D0 /* POSReceiptSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37A27C42C31A4AA2AACA1553 /* POSReceiptSession.swift */; };
+		B2CCC9A1301D7C781E614D0B /* AutoNumberBoxOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEBF03F2D061B4D0F8972D77 /* AutoNumberBoxOverlay.swift */; };
+		B7982586EA5D0E2476C06AA9 /* MovieTicketPrintComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 098E4BA4FFB341044D0E0469 /* MovieTicketPrintComposer.swift */; };
+		B7BC59F808259F5C6DFA4807 /* TemplatePrintView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82402640104115C967FD28E8 /* TemplatePrintView.swift */; };
+		B7DB4595812353F02AA68059 /* TemplateInferrer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2691D7F70FD8DE5930310D14 /* TemplateInferrer.swift */; };
+		B8967C3A27D30C4FFDCADC92 /* TemplateDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02842E71F35783CCA1443148 /* TemplateDocument.swift */; };
+		B90CDA0AB1FED9647EE468A6 /* MovieTicketSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3962540F022C260ACFBFD158 /* MovieTicketSession.swift */; };
+		BC0DF2427934A280CBF87D5A /* MovieTicketTemplateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30E02B421F329ECE36BD5508 /* MovieTicketTemplateView.swift */; };
+		C08CF8DF5CFD3FAA8E2292E8 /* TemplateDesignerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38C655BE23F97F5AEB9E8B1F /* TemplateDesignerView.swift */; };
+		C39F5998D40B13CEAFCBCB7C /* QuickPrintAutoNumber.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFF7583234FBA84A8644CE8F /* QuickPrintAutoNumber.swift */; };
+		C817C8434292B0DE33BD1893 /* QuickPrintMediaStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E2C8166E850F68B69DC4101 /* QuickPrintMediaStore.swift */; };
+		CB77B25887728ED752B06850 /* PrintController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940A6EED01F0C257846F850B /* PrintController.swift */; };
+		D056A0D8FD37E1A873BA0128 /* ReceiptRasterRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDA2107A627FEC75525EA390 /* ReceiptRasterRenderer.swift */; };
+		D8732C97A3A8B36A34F39386 /* POSPrintHistoryRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DDD1B2E1D72584010B54556 /* POSPrintHistoryRecord.swift */; };
+		DB7D5E48EB1C3D2898FB6354 /* AppVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A8ABBBE8F797CC64B618DC /* AppVersion.swift */; };
+		DC511126E640A85BFD624ABA /* PrinterConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A00BB3B56937C39B3FD9752 /* PrinterConfig.swift */; };
+		E287B82C529E43A0DA35E864 /* QuickPrintTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE67BC6F34C662840B52339A /* QuickPrintTemplateStore.swift */; };
+		E4B8E0414A02E2659D740841 /* AttributedTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CD10A4469B286396A521FD7 /* AttributedTextView.swift */; };
+		E56ACEF85CECB612ECD1D701 /* RichTextPrintRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCD74D08AE3293977E04DA17 /* RichTextPrintRenderer.swift */; };
+		E5B52AE6755839B9307CA617 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 873DE6509FF177D1BF2795A9 /* KeychainHelper.swift */; };
+		E5DAA819D7AA9D9F2FB6BB8A /* TemplateBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 136FD867D58A883EDF54D475 /* TemplateBlock.swift */; };
+		EA2DD87B910D03EC12967FFB /* FlowLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51B8DC69ED5AEC98DDE57471 /* FlowLayout.swift */; };
+		EAFFC24ADEB270FC19C73AA0 /* POSReceiptPrintComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C100277F23BE58A8CEAD183 /* POSReceiptPrintComposer.swift */; };
+		EB82750DB7C59BBDFFEF67E3 /* RichTextToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F350F613488B4D6736C9556 /* RichTextToolbar.swift */; };
+		EDAAF69E54B7B1DB60FC67C7 /* OrpheumTicketRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 660220E2376A57774113FBCD /* OrpheumTicketRenderer.swift */; };
+		EDF7BFBF8350715BBA6C7AED /* RecognitionPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F0E5146DA58807E67D98ACF /* RecognitionPreviewView.swift */; };
+		F0E7676BBBB0DCAC79B4DC0D /* CUPSPrintService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92D38DA44A3D5BF25A94CBB4 /* CUPSPrintService.swift */; };
+		F644BCE0585EF3910F295E20 /* PlaceholderResolutionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9208F441FCB851A11A78EE4D /* PlaceholderResolutionService.swift */; };
+		F78F499DFA90EFBC17D3E2C6 /* TMDBMovieMetadataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A59F86B9994242CBA7E079D /* TMDBMovieMetadataProvider.swift */; };
+		F8AD40987984CD0CC0EDCF9E /* SpreadsheetSequencePrintView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3D9728337239D3727988EE9 /* SpreadsheetSequencePrintView.swift */; };
+		FC8E1E4CDCD89846E16F5ECD /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DEA0FA3635BC68236A90D4E /* MainView.swift */; };
+		FDB46E43C79467C1D9BD90B8 /* IMAXSydneyLogo.png in Resources */ = {isa = PBXBuildFile; fileRef = E173CE45A459FAAC84D4115A /* IMAXSydneyLogo.png */; };
+		FE2BB48FCF1A30FE948913C8 /* RichTextEditorController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 949D41ABF88D862A70B1AE6E /* RichTextEditorController.swift */; };
+		FE9D4AD62F07E33A2F757439 /* MovieTicketElementBoxOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D18C911C4889B9B05E9B78AD /* MovieTicketElementBoxOverlay.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		00977D0E5F5E4A3A1D284873 /* MovieTicketRitzESCPOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketRitzESCPOS.swift; sourceTree = "<group>"; };
+		02842E71F35783CCA1443148 /* TemplateDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplateDocument.swift; sourceTree = "<group>"; };
+		0355AB30392E5A02CA878736 /* PrintDiagnosticView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrintDiagnosticView.swift; sourceTree = "<group>"; };
+		056461F2E33F72412691C7C0 /* MovieTicketLayoutEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketLayoutEngine.swift; sourceTree = "<group>"; };
+		09824EA3D77712EE507FE6A3 /* PrintDiagnosticComparison.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrintDiagnosticComparison.swift; sourceTree = "<group>"; };
+		098E4BA4FFB341044D0E0469 /* MovieTicketPrintComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketPrintComposer.swift; sourceTree = "<group>"; };
+		0AA0EE06020DBF0003938BC7 /* ModulePrintHistoryRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModulePrintHistoryRecord.swift; sourceTree = "<group>"; };
+		0AB8C810893F123E6BFAEDA4 /* MovieTicketOrpheumESCPOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketOrpheumESCPOS.swift; sourceTree = "<group>"; };
+		0B08412857A95E4274C87B5F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		0C92F44816C47003412848CD /* NamedDraftPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NamedDraftPickerSheet.swift; sourceTree = "<group>"; };
+		0DEA0FA3635BC68236A90D4E /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
+		0E943665CFD84217C0D550FA /* MovieTicketIMAXESCPOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketIMAXESCPOS.swift; sourceTree = "<group>"; };
+		0F443323A0D1A0553C4CBCAD /* BarcodeGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarcodeGenerator.swift; sourceTree = "<group>"; };
+		136FD867D58A883EDF54D475 /* TemplateBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplateBlock.swift; sourceTree = "<group>"; };
+		147DDA613B04960F7E2F5573 /* SpreadsheetSequenceDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpreadsheetSequenceDocument.swift; sourceTree = "<group>"; };
+		14A86C170B2790FA6A322CFE /* QuickPrintView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPrintView.swift; sourceTree = "<group>"; };
+		1BA937468287F5DFE1D3E05E /* MovieTicketModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketModels.swift; sourceTree = "<group>"; };
+		1CD9299B473EE29D138E1AC1 /* POSReceiptRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POSReceiptRootView.swift; sourceTree = "<group>"; };
+		1DEEC81977BA5879DD8598AF /* ReceiptPrinterAppStore.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ReceiptPrinterAppStore.entitlements; sourceTree = "<group>"; };
+		1FC6A1533309A5D35826B31E /* POSReceiptTemplateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POSReceiptTemplateView.swift; sourceTree = "<group>"; };
+		2312F510155B5E1A3443DD56 /* TemplateListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplateListView.swift; sourceTree = "<group>"; };
+		2691D7F70FD8DE5930310D14 /* TemplateInferrer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplateInferrer.swift; sourceTree = "<group>"; };
+		2DDD1B2E1D72584010B54556 /* POSPrintHistoryRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POSPrintHistoryRecord.swift; sourceTree = "<group>"; };
+		2E04C0B0C2F25CD13C90A5C2 /* MovieTicketPrintMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketPrintMetrics.swift; sourceTree = "<group>"; };
+		2F0E5146DA58807E67D98ACF /* RecognitionPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecognitionPreviewView.swift; sourceTree = "<group>"; };
+		2F350F613488B4D6736C9556 /* RichTextToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichTextToolbar.swift; sourceTree = "<group>"; };
+		30E02B421F329ECE36BD5508 /* MovieTicketTemplateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketTemplateView.swift; sourceTree = "<group>"; };
+		321C70B2F14B719938E47DBE /* MovieTicketDendyESCPOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketDendyESCPOS.swift; sourceTree = "<group>"; };
+		32AD0949894F3E345D1D6735 /* POSESCPOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POSESCPOS.swift; sourceTree = "<group>"; };
+		37493DC24A5271AA73888E32 /* SpreadsheetImportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpreadsheetImportService.swift; sourceTree = "<group>"; };
+		37A27C42C31A4AA2AACA1553 /* POSReceiptSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POSReceiptSession.swift; sourceTree = "<group>"; };
+		38C655BE23F97F5AEB9E8B1F /* TemplateDesignerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplateDesignerView.swift; sourceTree = "<group>"; };
+		38E03A6B5342A27068E4E4E2 /* L10nEnFromZh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10nEnFromZh.swift; sourceTree = "<group>"; };
+		3962540F022C260ACFBFD158 /* MovieTicketSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketSession.swift; sourceTree = "<group>"; };
+		3E6727A23EBC1EEEB9BA6441 /* POSCartDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POSCartDraft.swift; sourceTree = "<group>"; };
+		41130A1456B3C0EADFB3E84D /* POSExcelLookupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POSExcelLookupService.swift; sourceTree = "<group>"; };
+		42A87B1A0493E73BAD113BD6 /* MovieTicketDataEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketDataEditorView.swift; sourceTree = "<group>"; };
+		42BDFDD55BF1C72A86FD56F1 /* SequenceLayoutComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SequenceLayoutComposer.swift; sourceTree = "<group>"; };
+		4B63EC2EB90428F7584E7973 /* ReceiptPrinter.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ReceiptPrinter.entitlements; sourceTree = "<group>"; };
+		4D1DA5297DF46F68971F25B2 /* AppIcon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = AppIcon.png; sourceTree = "<group>"; };
+		51B8DC69ED5AEC98DDE57471 /* FlowLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlowLayout.swift; sourceTree = "<group>"; };
+		530CAF7172ABD86560C30090 /* TemplateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplateStore.swift; sourceTree = "<group>"; };
+		5A59F86B9994242CBA7E079D /* TMDBMovieMetadataProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TMDBMovieMetadataProvider.swift; sourceTree = "<group>"; };
+		5D0F26C9477A08735B8D5C91 /* ReceiptTextLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptTextLayout.swift; sourceTree = "<group>"; };
+		60657A4773992166CD5D1696 /* TemplateRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplateRenderer.swift; sourceTree = "<group>"; };
+		660220E2376A57774113FBCD /* OrpheumTicketRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrpheumTicketRenderer.swift; sourceTree = "<group>"; };
+		698790A7DD64DBCCBE0CD066 /* ReceiptScannerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptScannerService.swift; sourceTree = "<group>"; };
+		6D121164E66E08539EC31D43 /* ReceiptPrinterStore.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ReceiptPrinterStore.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6E2C8166E850F68B69DC4101 /* QuickPrintMediaStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPrintMediaStore.swift; sourceTree = "<group>"; };
+		737EDEB1E50BDD466C1424B0 /* MovieTicketTemplateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketTemplateStore.swift; sourceTree = "<group>"; };
+		73F1D039EA85D85C97B711B1 /* MovieTicketMainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketMainView.swift; sourceTree = "<group>"; };
+		7826B9CBA59A07A269E820C9 /* WorkingContentDrafts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkingContentDrafts.swift; sourceTree = "<group>"; };
+		7C100277F23BE58A8CEAD183 /* POSReceiptPrintComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POSReceiptPrintComposer.swift; sourceTree = "<group>"; };
+		7CD10A4469B286396A521FD7 /* AttributedTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttributedTextView.swift; sourceTree = "<group>"; };
+		82402640104115C967FD28E8 /* TemplatePrintView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplatePrintView.swift; sourceTree = "<group>"; };
+		8342C93503AA70DC8B7AD014 /* ImportReceiptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportReceiptView.swift; sourceTree = "<group>"; };
+		844BF65EB2E339236A1C9262 /* ImagePreprocessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePreprocessor.swift; sourceTree = "<group>"; };
+		873DE6509FF177D1BF2795A9 /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
+		8A00BB3B56937C39B3FD9752 /* PrinterConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrinterConfig.swift; sourceTree = "<group>"; };
+		8FC4249C796A94D19BB12E85 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		9208F441FCB851A11A78EE4D /* PlaceholderResolutionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceholderResolutionService.swift; sourceTree = "<group>"; };
+		92D38DA44A3D5BF25A94CBB4 /* CUPSPrintService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CUPSPrintService.swift; sourceTree = "<group>"; };
+		930F1EE336B164674AD60047 /* POSReceiptModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POSReceiptModels.swift; sourceTree = "<group>"; };
+		9361CDF817BCCD2966FC570A /* POSReceiptLayoutEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POSReceiptLayoutEngine.swift; sourceTree = "<group>"; };
+		940A6EED01F0C257846F850B /* PrintController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrintController.swift; sourceTree = "<group>"; };
+		949D41ABF88D862A70B1AE6E /* RichTextEditorController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichTextEditorController.swift; sourceTree = "<group>"; };
+		98996F1D52597FEDA31DBEB5 /* PrintDiagnosticStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrintDiagnosticStore.swift; sourceTree = "<group>"; };
+		9DDBD19F1941CCD72CE14598 /* LogoBoxOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogoBoxOverlay.swift; sourceTree = "<group>"; };
+		9F60B5946C01F2BEBF02E07F /* SequenceTemplateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SequenceTemplateStore.swift; sourceTree = "<group>"; };
+		9F650A80F21FD6182762CA55 /* ReceiptPrinterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptPrinterApp.swift; sourceTree = "<group>"; };
+		AD07DB7FF653688180BE7BC0 /* MovieTicketPDFRecognitionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketPDFRecognitionService.swift; sourceTree = "<group>"; };
+		B33F5B0056514AD3B789E578 /* ESCPOSBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ESCPOSBuilder.swift; sourceTree = "<group>"; };
+		B3848600EA5C27FBC902DB80 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
+		B3D9728337239D3727988EE9 /* SpreadsheetSequencePrintView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpreadsheetSequencePrintView.swift; sourceTree = "<group>"; };
+		B9752D03E900F8381D54BCDF /* MovieTicketPDFFieldRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketPDFFieldRecognizer.swift; sourceTree = "<group>"; };
+		BCD74D08AE3293977E04DA17 /* RichTextPrintRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichTextPrintRenderer.swift; sourceTree = "<group>"; };
+		BFC12CE365DEE4BD2F2BEA71 /* AppPaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPaths.swift; sourceTree = "<group>"; };
+		C09A4E7431FF9ACA077B8E57 /* L10n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10n.swift; sourceTree = "<group>"; };
+		C26C43A6AEFEAF820D974171 /* POSReceiptTemplateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POSReceiptTemplateStore.swift; sourceTree = "<group>"; };
+		C84631E5D0D5715AAAF6E214 /* PDFPrintView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFPrintView.swift; sourceTree = "<group>"; };
+		CD7EBDEEDF9E6A0DCE64E318 /* POSElementBoxOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POSElementBoxOverlay.swift; sourceTree = "<group>"; };
+		CFF7583234FBA84A8644CE8F /* QuickPrintAutoNumber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPrintAutoNumber.swift; sourceTree = "<group>"; };
+		D18C911C4889B9B05E9B78AD /* MovieTicketElementBoxOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketElementBoxOverlay.swift; sourceTree = "<group>"; };
+		D4380613855441475E4A05AF /* MovieTicketRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketRootView.swift; sourceTree = "<group>"; };
+		D6998CBBE93F9C384FF9F51C /* MovieTicketPDFRegionEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketPDFRegionEditorSheet.swift; sourceTree = "<group>"; };
+		DA644BD074E792E639776E78 /* POSReceiptMainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POSReceiptMainView.swift; sourceTree = "<group>"; };
+		DE99AB5F55E629CCD36F34F6 /* ReceiptTemplate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptTemplate.swift; sourceTree = "<group>"; };
+		E0A415F2491D8D285DD7A9D2 /* MovieTicketData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieTicketData.swift; sourceTree = "<group>"; };
+		E173CE45A459FAAC84D4115A /* IMAXSydneyLogo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = IMAXSydneyLogo.png; sourceTree = "<group>"; };
+		ED14F9640AE0B880C2941A9C /* PlaceholderBoxOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaceholderBoxOverlay.swift; sourceTree = "<group>"; };
+		EDA2107A627FEC75525EA390 /* ReceiptRasterRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptRasterRenderer.swift; sourceTree = "<group>"; };
+		EE67BC6F34C662840B52339A /* QuickPrintTemplateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPrintTemplateStore.swift; sourceTree = "<group>"; };
+		EF3089876EC80C7BE630331A /* PrintPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrintPreviewView.swift; sourceTree = "<group>"; };
+		F22F0B456CE698B312BDBE5D /* PrintDiagnosticRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrintDiagnosticRecord.swift; sourceTree = "<group>"; };
+		F2D5D94C882DECC7ABFEAE6C /* .placeholder.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = .placeholder.json; sourceTree = "<group>"; };
+		F4A8ABBBE8F797CC64B618DC /* AppVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppVersion.swift; sourceTree = "<group>"; };
+		F767EE65E781247A2435A3D0 /* NamedWorkingDraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NamedWorkingDraftStore.swift; sourceTree = "<group>"; };
+		F8B07C0A960A758562FFAF2E /* QuickPrintStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPrintStore.swift; sourceTree = "<group>"; };
+		FEBF03F2D061B4D0F8972D77 /* AutoNumberBoxOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoNumberBoxOverlay.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		39226AC6C847B1871FA56FEB /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				DB53DEBB48037FC065880E35 /* MovieTicket */,
+				8DC125AADE366F3B2213E2BC /* SampleTemplates */,
+				B3848600EA5C27FBC902DB80 /* AppIcon.icns */,
+				4D1DA5297DF46F68971F25B2 /* AppIcon.png */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		3E5A2D84C90EACD7A9FE80FB /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				BFC12CE365DEE4BD2F2BEA71 /* AppPaths.swift */,
+				F4A8ABBBE8F797CC64B618DC /* AppVersion.swift */,
+				0F443323A0D1A0553C4CBCAD /* BarcodeGenerator.swift */,
+				92D38DA44A3D5BF25A94CBB4 /* CUPSPrintService.swift */,
+				B33F5B0056514AD3B789E578 /* ESCPOSBuilder.swift */,
+				844BF65EB2E339236A1C9262 /* ImagePreprocessor.swift */,
+				873DE6509FF177D1BF2795A9 /* KeychainHelper.swift */,
+				C09A4E7431FF9ACA077B8E57 /* L10n.swift */,
+				38E03A6B5342A27068E4E4E2 /* L10nEnFromZh.swift */,
+				321C70B2F14B719938E47DBE /* MovieTicketDendyESCPOS.swift */,
+				0E943665CFD84217C0D550FA /* MovieTicketIMAXESCPOS.swift */,
+				056461F2E33F72412691C7C0 /* MovieTicketLayoutEngine.swift */,
+				0AB8C810893F123E6BFAEDA4 /* MovieTicketOrpheumESCPOS.swift */,
+				B9752D03E900F8381D54BCDF /* MovieTicketPDFFieldRecognizer.swift */,
+				AD07DB7FF653688180BE7BC0 /* MovieTicketPDFRecognitionService.swift */,
+				098E4BA4FFB341044D0E0469 /* MovieTicketPrintComposer.swift */,
+				2E04C0B0C2F25CD13C90A5C2 /* MovieTicketPrintMetrics.swift */,
+				00977D0E5F5E4A3A1D284873 /* MovieTicketRitzESCPOS.swift */,
+				737EDEB1E50BDD466C1424B0 /* MovieTicketTemplateStore.swift */,
+				F767EE65E781247A2435A3D0 /* NamedWorkingDraftStore.swift */,
+				8FC4249C796A94D19BB12E85 /* NotificationService.swift */,
+				660220E2376A57774113FBCD /* OrpheumTicketRenderer.swift */,
+				9208F441FCB851A11A78EE4D /* PlaceholderResolutionService.swift */,
+				32AD0949894F3E345D1D6735 /* POSESCPOS.swift */,
+				41130A1456B3C0EADFB3E84D /* POSExcelLookupService.swift */,
+				9361CDF817BCCD2966FC570A /* POSReceiptLayoutEngine.swift */,
+				7C100277F23BE58A8CEAD183 /* POSReceiptPrintComposer.swift */,
+				C26C43A6AEFEAF820D974171 /* POSReceiptTemplateStore.swift */,
+				940A6EED01F0C257846F850B /* PrintController.swift */,
+				09824EA3D77712EE507FE6A3 /* PrintDiagnosticComparison.swift */,
+				98996F1D52597FEDA31DBEB5 /* PrintDiagnosticStore.swift */,
+				6E2C8166E850F68B69DC4101 /* QuickPrintMediaStore.swift */,
+				F8B07C0A960A758562FFAF2E /* QuickPrintStore.swift */,
+				EE67BC6F34C662840B52339A /* QuickPrintTemplateStore.swift */,
+				EDA2107A627FEC75525EA390 /* ReceiptRasterRenderer.swift */,
+				698790A7DD64DBCCBE0CD066 /* ReceiptScannerService.swift */,
+				5D0F26C9477A08735B8D5C91 /* ReceiptTextLayout.swift */,
+				BCD74D08AE3293977E04DA17 /* RichTextPrintRenderer.swift */,
+				42BDFDD55BF1C72A86FD56F1 /* SequenceLayoutComposer.swift */,
+				9F60B5946C01F2BEBF02E07F /* SequenceTemplateStore.swift */,
+				37493DC24A5271AA73888E32 /* SpreadsheetImportService.swift */,
+				2691D7F70FD8DE5930310D14 /* TemplateInferrer.swift */,
+				60657A4773992166CD5D1696 /* TemplateRenderer.swift */,
+				530CAF7172ABD86560C30090 /* TemplateStore.swift */,
+				5A59F86B9994242CBA7E079D /* TMDBMovieMetadataProvider.swift */,
+				7826B9CBA59A07A269E820C9 /* WorkingContentDrafts.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		50A679825771A2EB38A86A05 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				0AA0EE06020DBF0003938BC7 /* ModulePrintHistoryRecord.swift */,
+				E0A415F2491D8D285DD7A9D2 /* MovieTicketData.swift */,
+				1BA937468287F5DFE1D3E05E /* MovieTicketModels.swift */,
+				3E6727A23EBC1EEEB9BA6441 /* POSCartDraft.swift */,
+				2DDD1B2E1D72584010B54556 /* POSPrintHistoryRecord.swift */,
+				930F1EE336B164674AD60047 /* POSReceiptModels.swift */,
+				F22F0B456CE698B312BDBE5D /* PrintDiagnosticRecord.swift */,
+				8A00BB3B56937C39B3FD9752 /* PrinterConfig.swift */,
+				CFF7583234FBA84A8644CE8F /* QuickPrintAutoNumber.swift */,
+				DE99AB5F55E629CCD36F34F6 /* ReceiptTemplate.swift */,
+				147DDA613B04960F7E2F5573 /* SpreadsheetSequenceDocument.swift */,
+				136FD867D58A883EDF54D475 /* TemplateBlock.swift */,
+				02842E71F35783CCA1443148 /* TemplateDocument.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		6BEFC5319191272E8E5FC015 /* POSReceipt */ = {
+			isa = PBXGroup;
+			children = (
+				CD7EBDEEDF9E6A0DCE64E318 /* POSElementBoxOverlay.swift */,
+				DA644BD074E792E639776E78 /* POSReceiptMainView.swift */,
+				1CD9299B473EE29D138E1AC1 /* POSReceiptRootView.swift */,
+				37A27C42C31A4AA2AACA1553 /* POSReceiptSession.swift */,
+				1FC6A1533309A5D35826B31E /* POSReceiptTemplateView.swift */,
+			);
+			path = POSReceipt;
+			sourceTree = "<group>";
+		};
+		8DC125AADE366F3B2213E2BC /* SampleTemplates */ = {
+			isa = PBXGroup;
+			children = (
+				F2D5D94C882DECC7ABFEAE6C /* .placeholder.json */,
+			);
+			path = SampleTemplates;
+			sourceTree = "<group>";
+		};
+		ABED1EE61828C32DBF053BD6 /* ReceiptPrinter */ = {
+			isa = PBXGroup;
+			children = (
+				50A679825771A2EB38A86A05 /* Models */,
+				39226AC6C847B1871FA56FEB /* Resources */,
+				3E5A2D84C90EACD7A9FE80FB /* Services */,
+				D91FA3A2211DDFD575A6E981 /* Views */,
+				4B63EC2EB90428F7584E7973 /* ReceiptPrinter.entitlements */,
+				9F650A80F21FD6182762CA55 /* ReceiptPrinterApp.swift */,
+				1DEEC81977BA5879DD8598AF /* ReceiptPrinterAppStore.entitlements */,
+			);
+			path = ReceiptPrinter;
+			sourceTree = "<group>";
+		};
+		BC6CBBB24BA58240AF9000E9 /* MovieTicket */ = {
+			isa = PBXGroup;
+			children = (
+				D18C911C4889B9B05E9B78AD /* MovieTicketElementBoxOverlay.swift */,
+				73F1D039EA85D85C97B711B1 /* MovieTicketMainView.swift */,
+				D6998CBBE93F9C384FF9F51C /* MovieTicketPDFRegionEditorSheet.swift */,
+				D4380613855441475E4A05AF /* MovieTicketRootView.swift */,
+				3962540F022C260ACFBFD158 /* MovieTicketSession.swift */,
+				30E02B421F329ECE36BD5508 /* MovieTicketTemplateView.swift */,
+			);
+			path = MovieTicket;
+			sourceTree = "<group>";
+		};
+		BE14C13C26825CDB396AB450 = {
+			isa = PBXGroup;
+			children = (
+				ABED1EE61828C32DBF053BD6 /* ReceiptPrinter */,
+				FD1D62D2F5343E4AECE53541 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		D91FA3A2211DDFD575A6E981 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				BC6CBBB24BA58240AF9000E9 /* MovieTicket */,
+				6BEFC5319191272E8E5FC015 /* POSReceipt */,
+				F93A8A5F7A106D8E7765699F /* RichText */,
+				FEBF03F2D061B4D0F8972D77 /* AutoNumberBoxOverlay.swift */,
+				51B8DC69ED5AEC98DDE57471 /* FlowLayout.swift */,
+				8342C93503AA70DC8B7AD014 /* ImportReceiptView.swift */,
+				9DDBD19F1941CCD72CE14598 /* LogoBoxOverlay.swift */,
+				0DEA0FA3635BC68236A90D4E /* MainView.swift */,
+				42A87B1A0493E73BAD113BD6 /* MovieTicketDataEditorView.swift */,
+				0C92F44816C47003412848CD /* NamedDraftPickerSheet.swift */,
+				C84631E5D0D5715AAAF6E214 /* PDFPrintView.swift */,
+				ED14F9640AE0B880C2941A9C /* PlaceholderBoxOverlay.swift */,
+				0355AB30392E5A02CA878736 /* PrintDiagnosticView.swift */,
+				EF3089876EC80C7BE630331A /* PrintPreviewView.swift */,
+				14A86C170B2790FA6A322CFE /* QuickPrintView.swift */,
+				2F0E5146DA58807E67D98ACF /* RecognitionPreviewView.swift */,
+				0B08412857A95E4274C87B5F /* SettingsView.swift */,
+				B3D9728337239D3727988EE9 /* SpreadsheetSequencePrintView.swift */,
+				38C655BE23F97F5AEB9E8B1F /* TemplateDesignerView.swift */,
+				2312F510155B5E1A3443DD56 /* TemplateListView.swift */,
+				82402640104115C967FD28E8 /* TemplatePrintView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		DB53DEBB48037FC065880E35 /* MovieTicket */ = {
+			isa = PBXGroup;
+			children = (
+				E173CE45A459FAAC84D4115A /* IMAXSydneyLogo.png */,
+			);
+			path = MovieTicket;
+			sourceTree = "<group>";
+		};
+		F93A8A5F7A106D8E7765699F /* RichText */ = {
+			isa = PBXGroup;
+			children = (
+				7CD10A4469B286396A521FD7 /* AttributedTextView.swift */,
+				949D41ABF88D862A70B1AE6E /* RichTextEditorController.swift */,
+				2F350F613488B4D6736C9556 /* RichTextToolbar.swift */,
+			);
+			path = RichText;
+			sourceTree = "<group>";
+		};
+		FD1D62D2F5343E4AECE53541 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				6D121164E66E08539EC31D43 /* ReceiptPrinterStore.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		98D70084A9E71BC09ED6DDE4 /* ReceiptPrinterStore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 56D83532FC7E8CFA2377E3B1 /* Build configuration list for PBXNativeTarget "ReceiptPrinterStore" */;
+			buildPhases = (
+				CF4636E33A0553F0A9B5E290 /* Sources */,
+				F0B3D5F7CCCB508DA9E7D481 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ReceiptPrinterStore;
+			packageProductDependencies = (
+			);
+			productName = ReceiptPrinterStore;
+			productReference = 6D121164E66E08539EC31D43 /* ReceiptPrinterStore.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A812A4A6963586B4F3BC6538 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					98D70084A9E71BC09ED6DDE4 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 2F30D53795B79561B616940C /* Build configuration list for PBXProject "ReceiptPrinterStore" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = BE14C13C26825CDB396AB450;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				98D70084A9E71BC09ED6DDE4 /* ReceiptPrinterStore */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F0B3D5F7CCCB508DA9E7D481 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				61405599E4A10454B1888266 /* .placeholder.json in Resources */,
+				73E6AC9502322B0C7A6202AE /* AppIcon.icns in Resources */,
+				67835C6F28A3510E5B8A0611 /* AppIcon.png in Resources */,
+				FDB46E43C79467C1D9BD90B8 /* IMAXSydneyLogo.png in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		CF4636E33A0553F0A9B5E290 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6261143CEE93BF9703EC9C4A /* AppPaths.swift in Sources */,
+				DB7D5E48EB1C3D2898FB6354 /* AppVersion.swift in Sources */,
+				E4B8E0414A02E2659D740841 /* AttributedTextView.swift in Sources */,
+				B2CCC9A1301D7C781E614D0B /* AutoNumberBoxOverlay.swift in Sources */,
+				0958F9DFD4B9FDD04A9A9018 /* BarcodeGenerator.swift in Sources */,
+				F0E7676BBBB0DCAC79B4DC0D /* CUPSPrintService.swift in Sources */,
+				9EA351D07FB5A4278276E620 /* ESCPOSBuilder.swift in Sources */,
+				EA2DD87B910D03EC12967FFB /* FlowLayout.swift in Sources */,
+				8A20B8B4A745BE9E0C70978A /* ImagePreprocessor.swift in Sources */,
+				A53F82C8C2FE8E93B71D3582 /* ImportReceiptView.swift in Sources */,
+				E5B52AE6755839B9307CA617 /* KeychainHelper.swift in Sources */,
+				54877ECA90AC34F76EDC8052 /* L10n.swift in Sources */,
+				9CA5169744463DB0EC582B32 /* L10nEnFromZh.swift in Sources */,
+				9D9B4279A9A4685F20BC5EB0 /* LogoBoxOverlay.swift in Sources */,
+				FC8E1E4CDCD89846E16F5ECD /* MainView.swift in Sources */,
+				149B1DF51A3212ECB47EC3C3 /* ModulePrintHistoryRecord.swift in Sources */,
+				41ED2C9E3E0542F045DBB1C9 /* MovieTicketData.swift in Sources */,
+				A6A20CA0460335E5199B9D34 /* MovieTicketDataEditorView.swift in Sources */,
+				65ED2F53F1AB56A31873F330 /* MovieTicketDendyESCPOS.swift in Sources */,
+				FE9D4AD62F07E33A2F757439 /* MovieTicketElementBoxOverlay.swift in Sources */,
+				94A06DC30BE129F530904D9A /* MovieTicketIMAXESCPOS.swift in Sources */,
+				91D4D19E1D916519ECC83732 /* MovieTicketLayoutEngine.swift in Sources */,
+				3FB2F7960C087B21C1A4B3C4 /* MovieTicketMainView.swift in Sources */,
+				6CA15BF22DD50AB4C4FBF90F /* MovieTicketModels.swift in Sources */,
+				4ADDB39E93481673B5301DBE /* MovieTicketOrpheumESCPOS.swift in Sources */,
+				00F57D78AFC0CCC9C87A6C18 /* MovieTicketPDFFieldRecognizer.swift in Sources */,
+				760275120BC926AEDE2C3C1D /* MovieTicketPDFRecognitionService.swift in Sources */,
+				8C70912DAB55ED1B6888618F /* MovieTicketPDFRegionEditorSheet.swift in Sources */,
+				B7982586EA5D0E2476C06AA9 /* MovieTicketPrintComposer.swift in Sources */,
+				2FA9DCA9EABB150BB44AE058 /* MovieTicketPrintMetrics.swift in Sources */,
+				96BE0C9534FAC3A50E29F2DC /* MovieTicketRitzESCPOS.swift in Sources */,
+				9BA9A73D66F50B686DAFE951 /* MovieTicketRootView.swift in Sources */,
+				B90CDA0AB1FED9647EE468A6 /* MovieTicketSession.swift in Sources */,
+				A4F36B778241707E626B1F3B /* MovieTicketTemplateStore.swift in Sources */,
+				BC0DF2427934A280CBF87D5A /* MovieTicketTemplateView.swift in Sources */,
+				4895B60EEC818DE27CA7FAD2 /* NamedDraftPickerSheet.swift in Sources */,
+				335FCA0CEEFCCAE8A6A2DB9B /* NamedWorkingDraftStore.swift in Sources */,
+				699D8DC199E6B3CF899F717A /* NotificationService.swift in Sources */,
+				EDAAF69E54B7B1DB60FC67C7 /* OrpheumTicketRenderer.swift in Sources */,
+				7E9CB742AFC1B0C88DBCF7B2 /* PDFPrintView.swift in Sources */,
+				4C5CEE1E715AA95E4BA3CE1D /* POSCartDraft.swift in Sources */,
+				A5B74EEF399EEB4A97F27B35 /* POSESCPOS.swift in Sources */,
+				73E084958B1FBD91F3700730 /* POSElementBoxOverlay.swift in Sources */,
+				AC5A0228AC3947A021D89818 /* POSExcelLookupService.swift in Sources */,
+				D8732C97A3A8B36A34F39386 /* POSPrintHistoryRecord.swift in Sources */,
+				300F6A0E18196BDE647A1F44 /* POSReceiptLayoutEngine.swift in Sources */,
+				AF150FF8E8204E545309A308 /* POSReceiptMainView.swift in Sources */,
+				4EF4499305DD27946B76FF57 /* POSReceiptModels.swift in Sources */,
+				EAFFC24ADEB270FC19C73AA0 /* POSReceiptPrintComposer.swift in Sources */,
+				6F087947B8B9CE4710954700 /* POSReceiptRootView.swift in Sources */,
+				B1B9730DFAAC5C7DFF07C7D0 /* POSReceiptSession.swift in Sources */,
+				65D81CBB05B7948DAF4C3CE8 /* POSReceiptTemplateStore.swift in Sources */,
+				2B243DEBB053746A2F307307 /* POSReceiptTemplateView.swift in Sources */,
+				412B055CDC838309F028A909 /* PlaceholderBoxOverlay.swift in Sources */,
+				F644BCE0585EF3910F295E20 /* PlaceholderResolutionService.swift in Sources */,
+				CB77B25887728ED752B06850 /* PrintController.swift in Sources */,
+				2A90AF6D11DB0EAAC8DD20D0 /* PrintDiagnosticComparison.swift in Sources */,
+				A9BDFF207EDDF31CC2ED72F8 /* PrintDiagnosticRecord.swift in Sources */,
+				95B4E7BE969C5844E79DB5CA /* PrintDiagnosticStore.swift in Sources */,
+				5F173AE829C6705128D7CF42 /* PrintDiagnosticView.swift in Sources */,
+				8EF1AA05D6D1379E978BB681 /* PrintPreviewView.swift in Sources */,
+				DC511126E640A85BFD624ABA /* PrinterConfig.swift in Sources */,
+				C39F5998D40B13CEAFCBCB7C /* QuickPrintAutoNumber.swift in Sources */,
+				C817C8434292B0DE33BD1893 /* QuickPrintMediaStore.swift in Sources */,
+				09A72A12C6BE8505F49CA918 /* QuickPrintStore.swift in Sources */,
+				E287B82C529E43A0DA35E864 /* QuickPrintTemplateStore.swift in Sources */,
+				7591F058B446F3B2853CB5B9 /* QuickPrintView.swift in Sources */,
+				36FB47EE5AEAB05AAB9FA3D4 /* ReceiptPrinterApp.swift in Sources */,
+				D056A0D8FD37E1A873BA0128 /* ReceiptRasterRenderer.swift in Sources */,
+				72FABB7444E8F3D0D77BFF00 /* ReceiptScannerService.swift in Sources */,
+				7A4F03269A1FEA0B0F1D7476 /* ReceiptTemplate.swift in Sources */,
+				8E8A59114DB9B0ECD5A42CA9 /* ReceiptTextLayout.swift in Sources */,
+				EDF7BFBF8350715BBA6C7AED /* RecognitionPreviewView.swift in Sources */,
+				FE2BB48FCF1A30FE948913C8 /* RichTextEditorController.swift in Sources */,
+				E56ACEF85CECB612ECD1D701 /* RichTextPrintRenderer.swift in Sources */,
+				EB82750DB7C59BBDFFEF67E3 /* RichTextToolbar.swift in Sources */,
+				22BE8BBEA646878D17484D52 /* SequenceLayoutComposer.swift in Sources */,
+				7FFE249E5B2EB2FB473D83A2 /* SequenceTemplateStore.swift in Sources */,
+				81310F1237746DADB20141C2 /* SettingsView.swift in Sources */,
+				25E3E99E82EDBE74CB289963 /* SpreadsheetImportService.swift in Sources */,
+				5A20ABB562543E50B05F4E59 /* SpreadsheetSequenceDocument.swift in Sources */,
+				F8AD40987984CD0CC0EDCF9E /* SpreadsheetSequencePrintView.swift in Sources */,
+				F78F499DFA90EFBC17D3E2C6 /* TMDBMovieMetadataProvider.swift in Sources */,
+				E5DAA819D7AA9D9F2FB6BB8A /* TemplateBlock.swift in Sources */,
+				C08CF8DF5CFD3FAA8E2292E8 /* TemplateDesignerView.swift in Sources */,
+				B8967C3A27D30C4FFDCADC92 /* TemplateDocument.swift in Sources */,
+				B7DB4595812353F02AA68059 /* TemplateInferrer.swift in Sources */,
+				4D6C8404E1A6FDD2C1FD7115 /* TemplateListView.swift in Sources */,
+				B7BC59F808259F5C6DFA4807 /* TemplatePrintView.swift in Sources */,
+				67D6B2E28DD3EB8C64F1466D /* TemplateRenderer.swift in Sources */,
+				A3F7F424B5678B99DA7D3494 /* TemplateStore.swift in Sources */,
+				2272CB35224DE633C6C443C3 /* WorkingContentDrafts.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A1355B6A46FE72DF38179F08 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ReceiptPrinter/ReceiptPrinterAppStore.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 18;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "ReceiptPrinter/Info-AppStore.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.receiptprinter.store;
+				PRODUCT_MODULE_NAME = ReceiptPrinter;
+				PRODUCT_NAME = ReceiptPrinterStore;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = APPSTORE;
+			};
+			name = Release;
+		};
+		CA1791608D8D363AB911E2B6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ReceiptPrinter/ReceiptPrinterAppStore.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 18;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "ReceiptPrinter/Info-AppStore.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.receiptprinter.store;
+				PRODUCT_MODULE_NAME = ReceiptPrinter;
+				PRODUCT_NAME = ReceiptPrinterStore;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "APPSTORE DEBUG";
+			};
+			name = Debug;
+		};
+		F3A83FDC6AE79BDCC2A5C90A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+		FB301BB2CF590F454F1D5384 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2F30D53795B79561B616940C /* Build configuration list for PBXProject "ReceiptPrinterStore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F3A83FDC6AE79BDCC2A5C90A /* Debug */,
+				FB301BB2CF590F454F1D5384 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		56D83532FC7E8CFA2377E3B1 /* Build configuration list for PBXNativeTarget "ReceiptPrinterStore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CA1791608D8D363AB911E2B6 /* Debug */,
+				A1355B6A46FE72DF38179F08 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A812A4A6963586B4F3BC6538 /* Project object */;
+}

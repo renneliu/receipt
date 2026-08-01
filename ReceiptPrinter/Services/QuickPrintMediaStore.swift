@@ -20,9 +20,7 @@ final class QuickPrintMediaStore {
     private let draftLogosDir: URL
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        draftDir = appSupport.appendingPathComponent("ReceiptPrinter", isDirectory: true)
-        try? FileManager.default.createDirectory(at: draftDir, withIntermediateDirectories: true)
+        draftDir = AppPaths.applicationSupportRoot
         draftMetaURL = draftDir.appendingPathComponent(Self.draftMetaFilename)
         draftBackgroundURL = draftDir.appendingPathComponent(Self.draftBackgroundFilename)
         draftLogosDir = draftDir.appendingPathComponent(Self.draftLogosFolderName, isDirectory: true)

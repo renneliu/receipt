@@ -1,7 +1,7 @@
 import Foundation
 
 /// Imported spreadsheet (CSV / TSV / basic XLSX) for sequence printing.
-struct SpreadsheetTable: Equatable {
+struct SpreadsheetTable: Codable, Equatable {
     var headers: [String]
     var rows: [[String]]
 

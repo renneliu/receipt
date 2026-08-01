@@ -86,7 +86,7 @@ struct MainView: View {
 
     private func isHiddenSidebarItem(_ item: SidebarItem) -> Bool {
         switch item {
-        case .templates, .designer, .emailExtraction, .orders, .cinemaRules, .gmail:
+        case .templates, .designer:
             return true
         default:
             return false
@@ -95,24 +95,64 @@ struct MainView: View {
 
     @ViewBuilder
     private var detailView: some View {
-        switch appState.selectedSidebarItem {
-        case .quickPrint:
+        let selected = appState.selectedSidebarItem
+        ZStack {
+            // Keep these modules mounted so typed content / imported sheets survive sidebar switches.
             QuickPrintView()
-        case .spreadsheetSequence:
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(selected == .quickPrint ? 1 : 0)
+                .allowsHitTesting(selected == .quickPrint)
+                .accessibilityHidden(selected != .quickPrint)
+                .zIndex(selected == .quickPrint ? 1 : 0)
+
             SpreadsheetSequencePrintView()
-        case .posReceipt:
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(selected == .spreadsheetSequence ? 1 : 0)
+                .allowsHitTesting(selected == .spreadsheetSequence)
+                .accessibilityHidden(selected != .spreadsheetSequence)
+                .zIndex(selected == .spreadsheetSequence ? 1 : 0)
+
             POSReceiptRootView()
-        case .templatePrint, .templates, .designer:
-            MovieTicketRootView()
-        case .pdfPrint:
-            PDFPrintView()
-        case .emailExtraction, .orders, .cinemaRules, .gmail:
-            Text(L10n.t("common.featureRemoved", language))
-                .foregroundStyle(.secondary)
-        case .diagnostics:
-            PrintDiagnosticView()
-        case .settings:
-            SettingsView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(selected == .posReceipt ? 1 : 0)
+                .allowsHitTesting(selected == .posReceipt)
+                .accessibilityHidden(selected != .posReceipt)
+                .zIndex(selected == .posReceipt ? 1 : 0)
+
+            Group {
+                switch selected {
+                case .quickPrint, .spreadsheetSequence, .posReceipt:
+                    EmptyView()
+                case .templatePrint, .templates, .designer:
+                    MovieTicketRootView()
+                case .pdfPrint:
+                    PDFPrintView()
+                case .diagnostics:
+                    PrintDiagnosticView()
+                case .settings:
+                    SettingsView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .zIndex(isKeepAliveModule(selected) ? 0 : 2)
+        }
+        // Title owned by MainView so keep-alive children cannot steal navigationTitle.
+        .navigationTitle(detailTitle(for: selected))
+    }
+
+    private func isKeepAliveModule(_ item: SidebarItem) -> Bool {
+        item == .quickPrint || item == .spreadsheetSequence || item == .posReceipt
+    }
+
+    private func detailTitle(for item: SidebarItem) -> String {
+        switch item {
+        case .quickPrint: return L10n.ui("快速打印", language)
+        case .spreadsheetSequence: return L10n.ui("Excel表格序列打印", language)
+        case .posReceipt: return L10n.ui("POS小票打印", language)
+        case .templatePrint, .templates, .designer: return L10n.ui("影票打印", language)
+        case .pdfPrint: return L10n.ui("PDF打印", language)
+        case .diagnostics: return L10n.ui("打印诊断", language)
+        case .settings: return L10n.t("settings.title", language)
         }
     }
 }

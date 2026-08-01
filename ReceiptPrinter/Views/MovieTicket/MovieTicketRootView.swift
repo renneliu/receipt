@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MovieTicketRootView: View {
     @StateObject private var session = MovieTicketSession()
+    @Environment(\.appLanguage) private var language
     @State private var pane: Pane = .main
     @State private var showUnsavedDialog = false
     @State private var pendingPane: Pane?
@@ -35,10 +36,10 @@ struct MovieTicketRootView: View {
                 Spacer()
 
                 if let name = session.activeTemplate?.name {
-                    Text("\(L10n.ui("当前模板："))\(name)")
+                    Text("\(L10n.ui("当前模板：", language))\(L10n.ui(name, language))")
                         .foregroundStyle(.secondary)
                 } else {
-                    Text(L10n.ui("未选择模板"))
+                    Text(L10n.ui("未选择模板", language))
                         .foregroundStyle(.secondary)
                 }
             }

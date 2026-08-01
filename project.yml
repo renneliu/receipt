@@ -1,24 +1,57 @@
-name: ReceiptPrinter
+# XcodeGen spec — App Store Archive target only.
+# Local daily builds stay on SwiftPM scripts (./scripts/build-debug-app.sh).
+# Regenerate: ./scripts/generate-store-xcodeproj.sh
+#
+# Do NOT use `info:` / `entitlements:` property blocks here — XcodeGen would
+# overwrite ReceiptPrinter/Info-AppStore.plist and
+# ReceiptPrinter/ReceiptPrinterAppStore.entitlements on every generate.
+
+name: ReceiptPrinterStore
 options:
   bundleIdPrefix: com.receiptprinter
   deploymentTarget:
     macOS: "14.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  xcodeVersion: "16.0"
+
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    CODE_SIGN_ENTITLEMENTS: ReceiptPrinter/ReceiptPrinter.entitlements
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    # Leave empty: pick your Team in Xcode (Signing & Capabilities).
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+
 targets:
-  ReceiptPrinter:
+  ReceiptPrinterStore:
     type: application
     platform: macOS
     sources:
-      - ReceiptPrinter
+      - path: ReceiptPrinter
+        excludes:
+          - "**/.DS_Store"
+          - Info-AppStore.plist
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: com.receiptprinter.app
-      INFOPLIST_KEY_CFBundleURLTypes:
-        - CFBundleURLSchemes:
-            - com.receiptprinter
-          CFBundleURLName: OAuth Redirect
-      GENERATE_INFOPLIST_FILE: YES
-      INFOPLIST_KEY_LSMinimumSystemVersion: "14.0"
-      ENABLE_APP_SANDBOX: NO
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.receiptprinter.store
+        PRODUCT_NAME: ReceiptPrinterStore
+        PRODUCT_MODULE_NAME: ReceiptPrinter
+        MARKETING_VERSION: "${MARKETING_VERSION}"
+        CURRENT_PROJECT_VERSION: "${BUILD_NUMBER}"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: ReceiptPrinter/Info-AppStore.plist
+        CODE_SIGN_ENTITLEMENTS: ReceiptPrinter/ReceiptPrinterAppStore.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        ENABLE_APP_SANDBOX: YES
+        COMBINE_HIDPI_IMAGES: YES
+      configs:
+        Debug:
+          # Isolates store data path / seed behavior (see AppPaths, TemplateStore, …)
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "APPSTORE DEBUG"
+        Release:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "APPSTORE"
+    scheme:
+      testTargets: []
+      archive:
+        config: Release

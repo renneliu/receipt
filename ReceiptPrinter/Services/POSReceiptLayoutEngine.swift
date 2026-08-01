@@ -15,7 +15,8 @@ enum POSReceiptLayoutEngine {
         let h = frames.map(\.height).max() ?? 28
         // defaultFontSize is 28 → metrics.lineHeight ≈ 28; keep pitch ≥ that to avoid row collapse.
         let minLine = max(28, AttributedTextView.defaultFontSize)
-        return max(minLine, h + 4)
+        let spacingPad = CGFloat(max(0, min(48, template.lineSpacingExtraDots)))
+        return max(minLine, h + 4 + spacingPad)
     }
 
     /// Printer columns for one line of 项目名称 (legacy helper; wrap now uses frame width).
@@ -101,10 +102,13 @@ enum POSReceiptLayoutEngine {
     }
 
     /// First item must sit below logos / date / time / static text so clearFrames & paint don't wipe it.
+    /// Footer-marked chrome is excluded — it follows the item list instead of pushing it down.
     static func printRowY(template: POSReceiptTemplate) -> CGFloat {
         var y = rowY(template: template)
         let pitch = itemPitch(template: template)
         for el in template.elements {
+            // Footer elements track the list end; must not shove the first item below them.
+            if el.allowsTicketSection, el.ticketSection == .footer { continue }
             switch el.kind {
             case .logo, .date, .time, .autoNumber, .textBox, .divider:
                 break
@@ -213,17 +217,27 @@ enum POSReceiptLayoutEngine {
                 ? (packed.first(where: { $0.kind == .name })?.width ?? availableNameSlotWidth(template: template, paperWidth: template.paperSize.width))
                 : (nameElement?.frame.width ?? availableNameSlotWidth(template: template, paperWidth: template.paperSize.width)))
         )
+        // Printer-column wrap (same as POSESCPOS) — AppKit wrapFittingWidth wraps earlier
+        // than ESC/POS columns (log: fittedLines=2, elementWrapLines=1).
+        let nameWrapFrame = SequencePlaceholderFrame(
+            x: 0, y: 0, width: nameWrapWidth, height: 28
+        )
+        let nameWrapCols = SequenceLayoutComposer.wrapColumns(
+            for: nameWrapFrame,
+            fontSize: nameFontSize,
+            config: config,
+            paperWidthPoints: template.paperSize.width
+        )
 
-        // Per-item heights from width-based wrap (fill 项目名称框, then wrap).
+        // Per-item heights from printer-column wrap (fill 项目名称框, then wrap).
         var itemLineCounts: [Int] = []
         var itemHeights: [CGFloat] = []
         for i in 0..<count {
             let item = items.indices.contains(i) ? items[i] : POSLineItem()
-            let wrapped = ReceiptTextLayout.wrapFittingWidth(
+            let wrapped = ReceiptTextLayout.wrap(
                 item.name,
-                maxWidth: nameWrapWidth,
-                fontSize: nameFontSize,
-                preserveEnglishWords: true
+                maxColumns: nameWrapCols,
+                asciiAsDoubleWidth: false
             )
             let lines = max(1, wrapped.count)
             itemLineCounts.append(lines)
@@ -232,7 +246,14 @@ enum POSReceiptLayoutEngine {
         }
         let itemsSpan = itemHeights.reduce(0, +)
         let singleBandH = band?.height ?? pitch
-        let computedShift = max(0, itemsSpan - singleBandH)
+        // Anchor footers to the real ink bottom of the expanded item list (includes
+        // printRowY push from header logos), not merely (itemsSpan - pitch).
+        let designBandBottom = lineFieldFrames(template: template)
+            .map { $0.y + $0.height }
+            .max()
+            ?? (rowY(template: template) + singleBandH)
+        let itemsBottom = anchorY + itemsSpan
+        let computedShift = max(0, itemsBottom - designBandBottom)
         let totalShift = expandFooterShift ? computedShift : 0
 
         var texts: [PlacedText] = []
@@ -398,12 +419,18 @@ enum POSReceiptLayoutEngine {
                 )
                 let placedText: String
                 if slot.kind == .name {
-                    let wrapW = max(36, frame.width)
-                    let wrapped = ReceiptTextLayout.wrapFittingWidth(
-                        rawText,
-                        maxWidth: wrapW,
+                    let cols = SequenceLayoutComposer.wrapColumns(
+                        for: SequencePlaceholderFrame(
+                            x: 0, y: 0, width: max(36, frame.width), height: frame.height
+                        ),
                         fontSize: el.fontSize,
-                        preserveEnglishWords: true
+                        config: config,
+                        paperWidthPoints: template.paperSize.width
+                    )
+                    let wrapped = ReceiptTextLayout.wrap(
+                        rawText,
+                        maxColumns: cols,
+                        asciiAsDoubleWidth: false
                     )
                     placedText = wrapped.joined(separator: "\n")
                 } else {

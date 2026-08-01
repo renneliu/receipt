@@ -13,10 +13,28 @@ enum AppLanguage: String, Codable, CaseIterable, Identifiable {
         case .english: return "English"
         }
     }
+
+    /// Prefer system UI language (zh* → Chinese, otherwise English).
+    static var systemPreferred: AppLanguage {
+        for id in Locale.preferredLanguages {
+            let lower = id.lowercased()
+            if lower.hasPrefix("zh") { return .chinese }
+        }
+        return .english
+    }
+
+    /// Default for new installs: App Store follows system; local/dev stays Chinese.
+    static var installDefault: AppLanguage {
+        #if APPSTORE
+        systemPreferred
+        #else
+        .chinese
+        #endif
+    }
 }
 
 private struct AppLanguageKey: EnvironmentKey {
-    static let defaultValue: AppLanguage = .chinese
+    static let defaultValue: AppLanguage = .installDefault
 }
 
 extension EnvironmentValues {
@@ -29,7 +47,7 @@ extension EnvironmentValues {
 /// App language + string tables. Use `L10n.t` for keyed chrome; `L10n.ui("中文原文")` for feature copy.
 enum L10n {
     /// Mirrored from saved settings so non-View code (models, AppState) can localize.
-    static var current: AppLanguage = .chinese
+    static var current: AppLanguage = .installDefault
 
     static func t(_ key: String, _ language: AppLanguage) -> String {
         let table = language == .english ? keyedEN : keyedZH
@@ -57,10 +75,6 @@ enum L10n {
         "nav.pdfPrint": "PDF打印",
         "nav.templates": "模板管理",
         "nav.designer": "模板设计",
-        "nav.emailExtraction": "邮件抓取规则",
-        "nav.orders": "订单收件箱",
-        "nav.cinemaRules": "影院规则",
-        "nav.gmail": "Gmail",
         "nav.diagnostics": "打印诊断",
         "nav.settings": "设置",
 
@@ -85,6 +99,8 @@ enum L10n {
         "settings.defaultPage": "打开软件时默认功能页",
         "settings.language": "语言",
         "settings.appLanguage": "软件语言",
+        "settings.retainWorkingContent": "退出时保留已输入内容",
+        "settings.retainWorkingContentHint": "关闭后，退出软件会清空快速打印 / Excel / POS 的草稿内容。",
         "settings.tmdb": "TMDB",
         "settings.apiKey": "API Key",
         "settings.apiKeyHint": "用于「匹配片长」。在 themoviedb.org 申请 API Key。可在此单独保存或重置。",
@@ -125,10 +141,6 @@ enum L10n {
         "nav.pdfPrint": "PDF Print",
         "nav.templates": "Templates",
         "nav.designer": "Template Designer",
-        "nav.emailExtraction": "Email Extraction",
-        "nav.orders": "Orders Inbox",
-        "nav.cinemaRules": "Cinema Rules",
-        "nav.gmail": "Gmail",
         "nav.diagnostics": "Print Diagnostics",
         "nav.settings": "Settings",
 
@@ -153,6 +165,8 @@ enum L10n {
         "settings.defaultPage": "Default page on launch",
         "settings.language": "Language",
         "settings.appLanguage": "App language",
+        "settings.retainWorkingContent": "Keep entered content when quitting",
+        "settings.retainWorkingContentHint": "When off, quitting clears Quick Print / Excel / POS drafts.",
         "settings.tmdb": "TMDB",
         "settings.apiKey": "API Key",
         "settings.apiKeyHint": "Used for matching movie runtime. Get an API key at themoviedb.org. Save or reset the key here independently.",

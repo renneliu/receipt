@@ -12,6 +12,7 @@ struct POSReceiptMainView: View {
     @State private var isPrinting = false
     @State private var showHistory = false
     @State private var isRefreshingExcel = false
+    @State private var showLoadDraftSheet = false
 
     private struct PreviewPayload: Identifiable {
         let id = UUID()
@@ -63,6 +64,17 @@ struct POSReceiptMainView: View {
         .sheet(isPresented: $showHistory) {
             printHistorySheet
         }
+        .sheet(isPresented: $showLoadDraftSheet) {
+            NamedDraftPickerSheet(
+                title: L10n.ui("读取草稿"),
+                module: "posReceipt",
+                onLoad: { draft in
+                    loadNamedDraft(draft)
+                    showLoadDraftSheet = false
+                },
+                onClose: { showLoadDraftSheet = false }
+            )
+        }
         .onAppear {
             refreshExcelIfNeeded()
             focusInitialField()
@@ -70,6 +82,19 @@ struct POSReceiptMainView: View {
         .onChange(of: template?.id) { _, _ in
             refreshExcelIfNeeded()
             focusInitialField()
+        }
+        .onChange(of: session.lineItems) { _, _ in session.persistCartDraft() }
+        .onChange(of: session.draftCode) { _, _ in session.persistCartDraft() }
+        .onChange(of: session.draftName) { _, _ in session.persistCartDraft() }
+        .onChange(of: session.draftQuantity) { _, _ in session.persistCartDraft() }
+        .onChange(of: session.draftAmount) { _, _ in session.persistCartDraft() }
+        .onChange(of: session.surcharge) { _, _ in session.persistCartDraft() }
+        .onReceive(NotificationCenter.default.publisher(for: .receiptPrinterPersistWorkingDrafts)) { _ in
+            session.persistCartDraft()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .receiptPrinterClearWorkingContent)) { _ in
+            session.clearLineItemsForNextTicket(resetSurchargeFrom: session.activeTemplate)
+            session.clearCartDraftDisk()
         }
     }
 
@@ -208,6 +233,29 @@ struct POSReceiptMainView: View {
                     .font(.caption)
             }
 
+            if template != nil {
+                Group {
+                    Text(L10n.ui("切纸位置")).font(.headline)
+                    HStack(spacing: 10) {
+                        Stepper(
+                            "\(L10n.ui("切纸前走纸")) \(cutFeedLines) \(L10n.ui("行"))",
+                            value: Binding(
+                                get: { cutFeedLines },
+                                set: { setCutFeedLines($0) }
+                            ),
+                            in: 0...40
+                        )
+                        Button(L10n.ui("恢复默认")) {
+                            setCutFeedLines(appState.settings.printerConfig.feedLinesBeforeCut)
+                        }
+                        .controlSize(.small)
+                    }
+                    Text(L10n.ui("控制打印结束后到切刀之间的空白；越小越省纸，过小可能裁到票面。"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             HStack {
                 Button(L10n.ui("预览")) { previewTicket() }
                     .disabled(template == nil || session.lineItems.isEmpty || isPrinting)
@@ -216,11 +264,28 @@ struct POSReceiptMainView: View {
                 }
                 .disabled(template == nil || session.lineItems.isEmpty || isPrinting)
                 .keyboardShortcut(.return, modifiers: .command)
+                Button(L10n.ui("保存草稿")) {
+                    saveNamedDraft()
+                }
+                Button(L10n.ui("读取草稿")) {
+                    showLoadDraftSheet = true
+                }
                 Button(L10n.ui("打印记录")) { showHistory = true }
             }
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var cutFeedLines: Int {
+        template?.resolvedFeedLinesBeforeCut(config: appState.settings.printerConfig)
+            ?? appState.settings.printerConfig.feedLinesBeforeCut
+    }
+
+    private func setCutFeedLines(_ value: Int) {
+        let clamped = max(0, min(40, value))
+        guard let id = template?.id else { return }
+        session.updateTemplateMeta(id: id) { $0.feedLinesBeforeCut = clamped }
     }
 
     private var surchargePercentButtons: some View {
@@ -612,6 +677,58 @@ struct POSReceiptMainView: View {
         focusInitialField()
     }
 
+    private func saveNamedDraft() {
+        let name = "草稿 \(Date().formatted(date: .abbreviated, time: .shortened))"
+        session.persistCartDraft()
+        let cart = POSCartDraft(
+            lineItems: session.lineItems,
+            draftCode: session.draftCode,
+            draftName: session.draftName,
+            draftQuantity: session.draftQuantity,
+            draftAmount: session.draftAmount,
+            surcharge: session.surcharge,
+            surchargePercentLabel: session.surchargePercentLabel,
+            nextAutoCode: session.nextAutoCode,
+            prefersNameFieldForNextLine: session.prefersNameFieldForNextLine,
+            activeTemplateId: session.settings.activeTemplateId,
+            editingLineItemId: session.editingLineItemId
+        )
+        let preview = session.lineItems.map(\.name).filter { !$0.isEmpty }.joined(separator: "、")
+        _ = NamedWorkingDraftStore.savePOSDraft(name: name, previewText: preview, cart: cart)
+        session.message = L10n.ui("草稿已保存")
+    }
+
+    private func loadNamedDraft(_ draft: NamedWorkingDraft) {
+        guard let cart = NamedWorkingDraftStore.loadPOSCart(id: draft.id) else {
+            session.message = L10n.ui("暂无草稿")
+            return
+        }
+        session.lineItems = cart.lineItems
+        session.draftCode = cart.draftCode
+        session.draftName = cart.draftName
+        session.draftQuantity = cart.draftQuantity
+        session.draftAmount = cart.draftAmount
+        session.surcharge = cart.surcharge
+        session.surchargePercentLabel = cart.surchargePercentLabel
+        session.nextAutoCode = max(1, cart.nextAutoCode)
+        session.prefersNameFieldForNextLine = cart.prefersNameFieldForNextLine
+        if let id = cart.activeTemplateId, session.templates.contains(where: { $0.id == id }) {
+            session.settings.activeTemplateId = id
+            session.settings.save()
+            if let t = session.templates.first(where: { $0.id == id }) {
+                session.loadImages(for: t)
+            }
+        }
+        if let editId = cart.editingLineItemId, session.lineItems.contains(where: { $0.id == editId }) {
+            session.editingLineItemId = editId
+            session.selectedItemId = editId
+        } else {
+            session.endEditingLineItem()
+        }
+        session.persistCartDraft()
+        session.message = L10n.ui("已读取草稿")
+    }
+
     private var printHistorySheet: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -726,10 +843,9 @@ struct POSReceiptMainView: View {
             config: appState.settings.printerConfig,
             ticketAutoNumber: ticketNumber
         )
-        let statusPollingWasActive = appState.gmailSync.isRunning
         if let record = await appState.runDiagnosticPrint(
             artifacts: result.artifacts,
-            statusPollingWasActive: statusPollingWasActive
+            statusPollingWasActive: false
         ) {
             if record.transportError == nil {
                 session.recordSuccessfulPrint(

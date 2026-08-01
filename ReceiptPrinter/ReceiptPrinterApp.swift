@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import UserNotifications
 
@@ -18,6 +19,9 @@ struct ReceiptPrinterApp: App {
                     }
                     appState.bootstrap()
                 }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    appState.handleAppWillTerminate()
+                }
         }
         .commands {
             CommandGroup(replacing: .newItem) {}
@@ -25,18 +29,19 @@ struct ReceiptPrinterApp: App {
     }
 }
 
+extension Notification.Name {
+    static let receiptPrinterPersistWorkingDrafts = Notification.Name("ReceiptPrinter.persistWorkingDrafts")
+    static let receiptPrinterClearWorkingContent = Notification.Name("ReceiptPrinter.clearWorkingContent")
+}
+
 @MainActor
 final class AppState: ObservableObject {
     @Published var settings = AppSettings.load()
     @Published var templates: [ReceiptTemplate] = []
-    @Published var cinemaRules: [CinemaRule] = []
-    @Published var orders: [PendingOrder] = []
     @Published var selectedSidebarItem: SidebarItem = .quickPrint
     @Published var designerTemplate: ReceiptTemplate?
     @Published var importResult: ImportReceiptResult?
     @Published var lastError: String?
-    @Published var gmailSyncStatus: String = "未同步"
-    @Published var extractionSchemas: [EmailExtractionSchema] = []
     @Published var diagnosticRecords: [PrintDiagnosticRecord] = []
     @Published var isPrinting = false
     /// Settings editor drafts report dirtiness so MainView can prompt on leave.
@@ -47,64 +52,32 @@ final class AppState: ObservableObject {
     let printController = PrintController()
     let diagnosticStore = PrintDiagnosticStore()
     let templateStore = TemplateStore()
-    let cinemaRuleStore = CinemaRuleStore()
-    let orderStore = OrderStore()
-    let extractionSchemaStore = ExtractionSchemaStore()
-    let gmailAuth = GmailAuthService()
-    let gmailSync: GmailSyncService
     let notificationService = NotificationService()
 
-    init() {
-        gmailSync = GmailSyncService(auth: gmailAuth)
-        gmailSync.rulesProvider = { [weak self] in self?.cinemaRules ?? [] }
-        gmailSync.settingsProvider = { [weak self] in self?.settings ?? AppSettings.load() }
-        gmailSync.templatesProvider = { [weak self] in self?.templates ?? [] }
-        gmailSync.hasOrderForMessageId = { [weak self] messageId in
-            self?.orderStore.hasOrder(messageId: messageId) ?? false
-        }
-        gmailSync.hasProcessedMessageId = { [weak self] messageId in
-            self?.orderStore.hasProcessed(messageId: messageId) ?? false
-        }
-        gmailSync.onNewOrder = { [weak self] order in
-            Task { @MainActor in
-                self?.handleNewOrder(order)
-            }
-        }
-        gmailSync.onStatusChange = { [weak self] status in
-            Task { @MainActor in
-                self?.gmailSyncStatus = status
-            }
-        }
-    }
-
     func bootstrap() {
-        // Unlocks old Keychain-based secrets that caused a unlock dialog on every launch.
         KeychainHelper.abandonLegacyKeychainItems()
+        if !settings.retainWorkingContentOnQuit {
+            WorkingContentDrafts.clearAll()
+        }
         templates = templateStore.loadAll()
-        cinemaRules = cinemaRuleStore.loadAll()
-        orders = orderStore.loadAll()
-        extractionSchemas = extractionSchemaStore.loadAll()
         diagnosticRecords = diagnosticStore.loadAll()
         notificationService.requestAuthorization()
         L10n.current = settings.appLanguage
         selectedSidebarItem = settings.defaultStartupPage
-        // Gmail sync removed from product UI — never auto-start.
-        if gmailSync.isRunning {
-            gmailSync.stop()
+    }
+
+    /// Called before process exit: either flush POS cart or wipe working drafts.
+    func handleAppWillTerminate() {
+        if settings.retainWorkingContentOnQuit {
+            NotificationCenter.default.post(name: .receiptPrinterPersistWorkingDrafts, object: nil)
+        } else {
+            WorkingContentDrafts.clearAll()
+            NotificationCenter.default.post(name: .receiptPrinterClearWorkingContent, object: nil)
         }
-        settings.gmailSyncEnabled = false
     }
 
     func reloadTemplates() {
         templates = templateStore.loadAll()
-    }
-
-    func reloadRules() {
-        cinemaRules = cinemaRuleStore.loadAll()
-    }
-
-    func reloadOrders() {
-        orders = orderStore.loadAll()
     }
 
     func saveTemplate(_ template: ReceiptTemplate) {
@@ -115,16 +88,6 @@ final class AppState: ObservableObject {
     func deleteTemplate(_ template: ReceiptTemplate) {
         templateStore.delete(template)
         reloadTemplates()
-    }
-
-    func saveRule(_ rule: CinemaRule) {
-        cinemaRuleStore.save(rule)
-        reloadRules()
-    }
-
-    func deleteRule(_ rule: CinemaRule) {
-        cinemaRuleStore.delete(rule)
-        reloadRules()
     }
 
     func printTemplate(_ template: ReceiptTemplate, data: [String: String]) async {
@@ -139,7 +102,6 @@ final class AppState: ObservableObject {
             statusPollingWasActive: false,
             clearStuckJobsFirst: false
         )
-        // Route through the single serialized, off-main controller (no overlap with manual/Gmail).
         let record = await printController.printRawOnce(
             config: config,
             payload: escpos,
@@ -194,66 +156,6 @@ final class AppState: ObservableObject {
         diagnosticStore.delete(id: id)
         diagnosticRecords.removeAll { $0.id == id }
     }
-
-    func handleNewOrder(_ order: PendingOrder) {
-        orderStore.save(order)
-        reloadOrders()
-        notificationService.notifyNewOrder(order)
-    }
-
-    func confirmPrint(order: PendingOrder) async {
-        guard let template = templates.first(where: { $0.id == order.templateId }) else {
-            lastError = L10n.ui("找不到关联模板")
-            return
-        }
-        let data = OrderPrintData.merged(for: order, templates: templates)
-        await printTemplate(template, data: data)
-        var updated = order
-        updated.status = .printed
-        updated.printedAt = Date()
-        orderStore.save(updated)
-        reloadOrders()
-    }
-
-    func reprintOrder(order: PendingOrder) async {
-        guard let template = templates.first(where: { $0.id == order.templateId }) else {
-            lastError = L10n.ui("找不到关联模板")
-            return
-        }
-        let data = OrderPrintData.merged(for: order, templates: templates)
-        await printTemplate(template, data: data)
-        var updated = order
-        updated.printedAt = Date()
-        orderStore.save(updated)
-        reloadOrders()
-    }
-
-    func saveOrderEdits(_ order: PendingOrder) {
-        orderStore.save(order)
-        reloadOrders()
-    }
-
-    func ignoreOrder(_ order: PendingOrder) {
-        var updated = order
-        updated.status = .ignored
-        orderStore.save(updated)
-        reloadOrders()
-    }
-
-    func syncGmailNow() async {
-        await gmailSync.syncNow(rules: cinemaRules, settings: settings)
-        reloadOrders()
-    }
-
-    func saveExtractionSchema(_ schema: EmailExtractionSchema) {
-        extractionSchemaStore.save(schema)
-        extractionSchemas = extractionSchemaStore.loadAll()
-    }
-
-    func deleteExtractionSchema(_ schema: EmailExtractionSchema) {
-        extractionSchemaStore.delete(schema)
-        extractionSchemas = extractionSchemaStore.loadAll()
-    }
 }
 
 enum SidebarItem: String, CaseIterable, Identifiable {
@@ -265,20 +167,16 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     /// Kept for deep-links / migration; hidden from sidebar.
     case templates
     case designer
-    case emailExtraction
-    case orders
-    case cinemaRules
-    case gmail
     case diagnostics
     case settings
 
     var id: String { rawValue }
 
-    /// Sidebar entries (email/Gmail pipeline and template designer folded away).
+    /// Sidebar entries (legacy template designer folded into 影票打印).
     static var sidebarItems: [SidebarItem] {
         allCases.filter {
             switch $0 {
-            case .templates, .designer, .emailExtraction, .orders, .cinemaRules, .gmail:
+            case .templates, .designer:
                 return false
             default:
                 return true
@@ -309,10 +207,9 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case "PDF打印": return .pdfPrint
         case "模板管理": return .templates
         case "模板设计": return .designer
-        case "邮件抓取规则": return .emailExtraction
-        case "订单收件箱": return .orders
-        case "影院规则": return .cinemaRules
-        case "Gmail": return .gmail
+        case "邮件抓取规则", "订单收件箱", "影院规则", "Gmail":
+            // Removed Gmail / email pipeline — map old defaults to Quick Print.
+            return .quickPrint
         case "打印诊断": return .diagnostics
         case "设置": return .settings
         default: return nil
@@ -328,10 +225,6 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .pdfPrint: return "doc.viewfinder"
         case .templates: return "doc.text"
         case .designer: return "pencil.and.outline"
-        case .emailExtraction: return "envelope.badge"
-        case .orders: return "tray"
-        case .cinemaRules: return "film"
-        case .gmail: return "envelope"
         case .diagnostics: return "stethoscope"
         case .settings: return "gearshape"
         }

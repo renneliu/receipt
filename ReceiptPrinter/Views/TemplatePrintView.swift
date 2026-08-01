@@ -12,7 +12,6 @@ struct TemplatePrintView: View {
     @State private var movieSearchResults: [MovieSearchResult] = []
     @State private var showMovieSearch = false
     @State private var isSearchingMovies = false
-    @State private var selectedExtractionSchemaId: UUID?
 
     private var selectedTemplate: ReceiptTemplate? {
         if let id = selectedTemplateId {
@@ -86,16 +85,6 @@ struct TemplatePrintView: View {
                     .formStyle(.grouped)
                 } else {
                     Form {
-                        if !appState.extractionSchemas.isEmpty {
-                            Section("邮件抓取") {
-                                Picker("规则", selection: $selectedExtractionSchemaId) {
-                                    Text("无").tag(UUID?.none)
-                                    ForEach(appState.extractionSchemas) { schema in
-                                        Text(schema.name).tag(UUID?.some(schema.id))
-                                    }
-                                }
-                            }
-                        }
                         Section("字段") {
                             ForEach(template.placeholders(), id: \.self) { key in
                                 TextField(key, text: binding(for: key))
@@ -217,7 +206,6 @@ struct TemplatePrintView: View {
         let context = TemplateDataContext(
             manual: template.defaultData,
             settings: appState.settings,
-            gmailFields: [:],
             movieFields: [:]
         )
         fieldValues = PlaceholderResolutionService.resolve(template: template, context: context)
@@ -251,16 +239,9 @@ struct TemplatePrintView: View {
     }
 
     private func resolvedPrintData(for template: ReceiptTemplate) -> [String: String] {
-        var gmailFields: [String: String] = [:]
-        if let schemaId = selectedExtractionSchemaId,
-           let schema = appState.extractionSchemas.first(where: { $0.id == schemaId }),
-           let body = fieldValues["gmail.body"] ?? fieldValues["_emailBody"] {
-            gmailFields = EmailExtractionEngine.extractFields(from: body, schema: schema)
-        }
         let context = TemplateDataContext(
             manual: fieldValues,
             settings: appState.settings,
-            gmailFields: gmailFields,
             movieFields: [:]
         )
         return PlaceholderResolutionService.resolve(template: template, context: context)

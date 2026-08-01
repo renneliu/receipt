@@ -1,10 +1,13 @@
 #!/bin/bash
-# 发版一条龙：改版本号 → 打包 → 提交 Git → 打标签
+# 发版一条龙：备份用户数据 → 改版本号 → 打包 → 提交 Git → 打标签
 #
 # 用法:
 #   ./scripts/release.sh patch "修复电影票片名太小"
 #   ./scripts/release.sh minor "新增某某功能"
 #   ./scripts/release.sh build "仅测试打包，版本 build+1"
+#
+# Git 标签只管源代码；模板/设置在 Application Support，由 backup-userdata.sh
+# 写入 backups/（gitignore，不进仓库）。
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -26,7 +29,11 @@ case "$KIND" in
         ;;
 esac
 
-echo "━━━ 1/4 更新版本号 ━━━"
+echo "━━━ 0/5 备份用户配置与模板 ━━━"
+./scripts/backup-userdata.sh --label "pre-release-${KIND}"
+
+echo ""
+echo "━━━ 1/5 更新版本号 ━━━"
 ./scripts/bump-version.sh "$KIND"
 # shellcheck source=version-lib.sh
 source scripts/version-lib.sh
@@ -34,12 +41,18 @@ read_version
 TAG="v${MARKETING_VERSION}"
 
 echo ""
-echo "━━━ 2/4 打包正式版 ━━━"
+echo "━━━ 2/5 打包正式版 ━━━"
 ./scripts/build-app.sh
 
 echo ""
-echo "━━━ 3/4 提交到 Git ━━━"
+echo "━━━ 3/5 再次备份（带新版本号） ━━━"
+./scripts/backup-userdata.sh --label "release"
+
+echo ""
+echo "━━━ 4/5 提交到 Git ━━━"
 git add -A
+# userdata 压缩包在 .gitignore；不要误加
+git reset -q -- backups/ReceiptPrinter-userdata-*.tar.gz 2>/dev/null || true
 if git diff --cached --quiet; then
     echo "没有代码改动需要提交（仅 VERSION 可能已更新）"
     git add VERSION
@@ -56,7 +69,7 @@ else
 fi
 
 echo ""
-echo "━━━ 4/4 推送到 GitHub ━━━"
+echo "━━━ 5/5 推送到 GitHub ━━━"
 echo "请执行（或复制到终端）："
 echo ""
 echo "  git push origin main"
@@ -64,5 +77,6 @@ echo "  git push origin ${TAG}"
 echo ""
 echo "完成！应用版本: ${MARKETING_VERSION} (build ${BUILD_NUMBER})"
 echo "安装包: dist/ReceiptPrinter.app"
+echo "用户数据备份: backups/ReceiptPrinter-userdata-*.tar.gz"
 echo ""
 echo "记得在 CHANGELOG.md 顶部补一行本次更新说明。"

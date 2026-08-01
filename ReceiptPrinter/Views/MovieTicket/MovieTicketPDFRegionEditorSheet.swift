@@ -44,7 +44,7 @@ struct MovieTicketPDFRegionEditorSheet: View {
     }
 
     private static let recognizerOrder: [MovieTicketFieldKind] = [
-        .movieTitle, .showDate, .startTime, .timeRange, .hall,
+        .movieTitle, .showDate, .startTime, .endTime, .timeRange, .hall,
         .seatArea, .ticketType, .ticketPrice, .serialNumber, .barcode, .qrCode
     ]
 
@@ -265,6 +265,12 @@ struct MovieTicketPDFRegionEditorSheet: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
+                if kind == .startTime || kind == .timeRange {
+                    Toggle(L10n.ui("同时识别日期"), isOn: recognizeDateBinding(for: el))
+                        .font(.caption)
+                        .toggleStyle(.checkbox)
+                        .disabled(showMappingSheet)
+                }
             }
             recognizerButtons(el: el, region: region, seatSkipped: seatSkipped, isBoxing: isBoxing)
             if isBoxing {
@@ -488,6 +494,22 @@ struct MovieTicketPDFRegionEditorSheet: View {
         rule.regions.first { $0.elementId == el.id || $0.fieldKind == el.fieldKind }
     }
 
+    private func recognizeDateBinding(for el: MovieTicketElement) -> Binding<Bool> {
+        Binding(
+            get: { regionForElement(el)?.recognizesDateWithTime == true },
+            set: { enabled in
+                let idx = ensureRegionStub(for: el)
+                guard idx >= 0 else { return }
+                rule.regions[idx].recognizeDate = enabled
+                if enabled {
+                    status = L10n.ui("已开启同时识别日期；可再点「自动识别」刷新为日期+时间")
+                } else {
+                    status = L10n.ui("已关闭同时识别日期（仅时间）")
+                }
+            }
+        )
+    }
+
     private func recognizerHint(
         region: MovieTicketPDFRegion?,
         seatSkipped: Bool
@@ -556,7 +578,13 @@ struct MovieTicketPDFRegionEditorSheet: View {
             status = L10n.ui("已设为无指定座位，跳过座位识别")
             return
         }
-        let hit = MovieTicketPDFFieldRecognizer.autoDetect(fieldKind: kind, from: url)
+        let wantDate = (kind == .startTime || kind == .timeRange)
+            && (regionForElement(el)?.recognizesDateWithTime == true)
+        let hit = wantDate
+            ? MovieTicketPDFFieldRecognizer.autoDetect(
+                fieldKind: kind, from: url, includeDateWithTime: true
+            )
+            : MovieTicketPDFFieldRecognizer.autoDetect(fieldKind: kind, from: url)
         guard let hit else {
             boxTargetElementId = el.id
             status = "未找到「\(elementLabel(el))」特征 — 请在左侧 PDF 上框选定位"

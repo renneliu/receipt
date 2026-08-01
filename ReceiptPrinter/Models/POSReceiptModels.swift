@@ -219,6 +219,12 @@ struct POSReceiptTemplate: Codable, Identifiable, Equatable {
     var defaultSurcharge: String = "0"
     var gridEnabled: Bool = true
     var gridSize: CGFloat = 20
+    /// Extra printer dots between text lines (`ESC 3` = 30 + this). Also widens item pitch in layout/preview.
+    /// 0 keeps default printer line spacing (`ESC 2`).
+    var lineSpacingExtraDots: Int = 0
+    /// Lines to advance after ticket content before the cutter fires.
+    /// `nil` = use global `PrinterConfig.feedLinesBeforeCut`. Smaller = shorter tail / less waste.
+    var feedLinesBeforeCut: Int? = nil
 
     var excelBookmarkData: Data?
     var excelDisplayName: String?
@@ -252,6 +258,12 @@ struct POSReceiptTemplate: Codable, Identifiable, Equatable {
 
     var paperSize: CGSize {
         CGSize(width: 302, height: max(200, canvasHeight))
+    }
+
+    /// Effective cut feed for this template (0…40).
+    func resolvedFeedLinesBeforeCut(config: PrinterConfig) -> Int {
+        let raw = feedLinesBeforeCut ?? config.feedLinesBeforeCut
+        return max(0, min(40, raw))
     }
 }
 

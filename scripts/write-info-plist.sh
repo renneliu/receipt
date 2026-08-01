@@ -2,6 +2,10 @@
 set -euo pipefail
 
 # 用法: write-info-plist.sh <Info.plist 输出路径>
+# 可选环境变量:
+#   BUNDLE_ID   默认 com.receiptprinter.app
+#   APP_NAME    默认 ReceiptPrinter
+#   URL_SCHEME  默认 com.receiptprinter
 if [ $# -lt 1 ]; then
     echo "Usage: $0 <path/to/Info.plist>" >&2
     exit 1
@@ -13,6 +17,9 @@ source "${SCRIPT_DIR}/version-lib.sh"
 read_version
 
 OUT="$1"
+BUNDLE_ID="${BUNDLE_ID:-com.receiptprinter.app}"
+APP_NAME="${APP_NAME:-ReceiptPrinter}"
+URL_SCHEME="${URL_SCHEME:-com.receiptprinter}"
 mkdir -p "$(dirname "$OUT")"
 
 cat > "$OUT" << PLIST
@@ -21,13 +28,15 @@ cat > "$OUT" << PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>zh-Hans</string>
+    <string>en</string>
     <key>CFBundleExecutable</key>
     <string>ReceiptPrinter</string>
     <key>CFBundleIdentifier</key>
-    <string>com.receiptprinter.app</string>
+    <string>${BUNDLE_ID}</string>
     <key>CFBundleName</key>
-    <string>ReceiptPrinter</string>
+    <string>${APP_NAME}</string>
+    <key>CFBundleDisplayName</key>
+    <string>${APP_NAME}</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>
@@ -45,7 +54,7 @@ cat > "$OUT" << PLIST
         <dict>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>com.receiptprinter</string>
+                <string>${URL_SCHEME}</string>
             </array>
             <key>CFBundleURLName</key>
             <string>OAuth Redirect</string>
@@ -55,4 +64,4 @@ cat > "$OUT" << PLIST
 </plist>
 PLIST
 
-echo "Info.plist → ${MARKETING_VERSION} (${BUILD_NUMBER})"
+echo "Info.plist → ${MARKETING_VERSION} (${BUILD_NUMBER}) id=${BUNDLE_ID}"

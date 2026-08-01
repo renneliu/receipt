@@ -8,9 +8,7 @@ final class POSReceiptTemplateStore {
     private let root: URL
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        root = appSupport.appendingPathComponent("ReceiptPrinter/POSReceiptTemplates", isDirectory: true)
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        root = AppPaths.subdirectory("POSReceiptTemplates")
     }
 
     func folder(for id: UUID) -> URL {
@@ -39,6 +37,7 @@ final class POSReceiptTemplateStore {
             let migrated: Data
             if var obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                 if obj["nameCharsPerLine"] == nil { obj["nameCharsPerLine"] = 8 }
+                if obj["lineSpacingExtraDots"] == nil { obj["lineSpacingExtraDots"] = 0 }
                 // Element-level defaults for older templates.
                 if var elements = obj["elements"] as? [[String: Any]] {
                     let nameY: CGFloat = {
