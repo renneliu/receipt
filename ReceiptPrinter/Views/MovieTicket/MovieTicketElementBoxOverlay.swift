@@ -116,18 +116,23 @@ struct MovieTicketElementBoxOverlay: View {
                     let rowH = printLineHeight > 0
                         ? printLineHeight
                         : max(11, fontSize * 1.15)
+                    let maxChars = max(1, lines.map(\.count).max() ?? 1)
+                    let cellW = frame.width / CGFloat(maxChars)
+                    let glyph = min(min(fontSize, rowH * 0.85), max(6, cellW * 1.35))
+                    let lineH = min(rowH, frame.height / CGFloat(max(1, lines.count)))
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                            Text(line.isEmpty ? " " : line)
-                                .font(.system(size: min(fontSize, rowH * 0.85), design: .monospaced))
+                            let display = line.isEmpty ? " " : line
+                            Text(display)
+                                .font(.system(size: glyph, design: .monospaced))
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
                                 .minimumScaleFactor(1)
                                 .truncationMode(.tail)
-                                .frame(maxWidth: .infinity, minHeight: rowH, maxHeight: rowH, alignment: frameAlignment)
+                                .frame(width: frame.width, height: lineH, alignment: frameAlignment)
                         }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(width: frame.width, height: frame.height, alignment: .topLeading)
                     .clipped()
                 } else {
                     Text(previewText.isEmpty ? " " : previewText)

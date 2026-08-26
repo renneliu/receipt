@@ -21,6 +21,9 @@ enum MovieTicketIMAXESCPOS {
         var x: CGFloat
         var style: FieldStyle
         var label: String
+        /// Canvas box width when text was fitted/clipped to an element frame.
+        var boxWidth: CGFloat = 0
+        var boxConstrained: Bool = false
     }
 
     /// Text or QR fragment inside a side-by-side strip (only same-Y text left of QR).
@@ -31,7 +34,7 @@ enum MovieTicketIMAXESCPOS {
 
     private enum BlockKind {
         case logo
-        case barcode(payload: String, heightDots: UInt8, moduleWidth: UInt8)
+        case barcode(payload: String, heightDots: UInt8, moduleWidth: UInt8, printHRI: Bool, hriIncludeAsterisks: Bool)
         case qr(payload: String, sizeDots: Int)
         case text(String)
         /// Same-line type + price; `leftX` / `rightX` are canvas points → column placement.
@@ -112,7 +115,7 @@ enum MovieTicketIMAXESCPOS {
                 } else {
                     printedDots = canvasPointsToDots(block.height, paperWidth: paperW, dotsPerLine: config.dotsPerLine)
                 }
-            case .barcode(let payload, let heightDots, let moduleWidth):
+            case .barcode(let payload, let heightDots, let moduleWidth, let printHRI, let hriIncludeAsterisks):
                 let code = payload.isEmpty ? "000000" : payload
                 placeRaster(
                     builder: builder,
@@ -127,9 +130,13 @@ enum MovieTicketIMAXESCPOS {
                         printHRI: false
                     )
                 }
-                apply(builder, FieldStyle(widthScale: 1, heightScale: 1, bold: false, align: .center))
-                builder.text(spacedHRI(code)).newline()
-                printedDots = Int(heightDots) + lineDots
+                if printHRI {
+                    apply(builder, FieldStyle(widthScale: 1, heightScale: 1, bold: false, align: .center))
+                    builder.text(spacedHRI(code, includeAsterisks: hriIncludeAsterisks)).newline()
+                    printedDots = Int(heightDots) + lineDots
+                } else {
+                    printedDots = Int(heightDots)
+                }
             case .qr(let payload, let sizeDots):
                 let content = payload.trimmingCharacters(in: .whitespacesAndNewlines)
                 let body = content.isEmpty ? "0" : content
@@ -163,17 +170,36 @@ enum MovieTicketIMAXESCPOS {
                     lines = [emitText]
                 }
                 if block.style.inverted { builder.reversePrint(true) }
-                for line in lines {
-                    placeTextOrigin(
-                        builder: builder,
-                        style: block.style,
-                        x: block.x,
+                if block.boxConstrained {
+                    // Keep every wrapped line inside the element box (not paper-centered).
+                    let cols = MovieTicketPrintMetrics.boxColumns(
+                        frameWidth: block.width,
                         paperWidth: paperW,
-                        config: config
+                        config: config,
+                        widthScale: block.style.widthScale
                     )
-                    if block.boxConstrained {
-                        builder.appendRawTextLine(line).newline()
-                    } else {
+                    let xDots = canvasPointsToDots(
+                        block.x, paperWidth: paperW, dotsPerLine: config.dotsPerLine
+                    )
+                    builder.align(.left)
+                    for line in lines {
+                        let padded = MovieTicketPrintMetrics.padLine(
+                            line, columns: cols, align: block.style.align
+                        )
+                        if xDots > 0 {
+                            builder.setAbsoluteHorizontalPosition(dots: xDots)
+                        }
+                        builder.appendRawTextLine(padded).newline()
+                    }
+                } else {
+                    for line in lines {
+                        placeTextOrigin(
+                            builder: builder,
+                            style: block.style,
+                            x: block.x,
+                            paperWidth: paperW,
+                            config: config
+                        )
                         builder.text(line).newline()
                     }
                 }
@@ -271,7 +297,7 @@ enum MovieTicketIMAXESCPOS {
                             hints: [.interpolation: NSImageInterpolation.none]
                         )
                     }
-                case .barcode(let payload, let heightDots, _):
+                case .barcode(let payload, let heightDots, _, let printHRI, let hriIncludeAsterisks):
                     let code = payload.isEmpty ? "000000" : payload
                     let barH = CGFloat(heightDots)
                     let barW = width * 0.88
@@ -293,13 +319,15 @@ enum MovieTicketIMAXESCPOS {
                             hints: [.interpolation: NSImageInterpolation.none]
                         )
                     }
-                    var hriY = y + barH + 4
-                    drawText(
-                        spacedHRI(code),
-                        style: FieldStyle(align: .center),
-                        widthDots: widthDots,
-                        y: &hriY
-                    )
+                    if printHRI {
+                        var hriY = y + barH + 4
+                        drawText(
+                            spacedHRI(code, includeAsterisks: hriIncludeAsterisks),
+                            style: FieldStyle(align: .center),
+                            widthDots: widthDots,
+                            y: &hriY
+                        )
+                    }
                 case .qr(let payload, let sizeDots):
                     let content = payload.trimmingCharacters(in: .whitespacesAndNewlines)
                     let body = content.isEmpty ? "0" : content
@@ -322,18 +350,38 @@ enum MovieTicketIMAXESCPOS {
                     }
                 case .text(let text):
                     var ty = y
-                    let absX: CGFloat? = block.style.align == .left ? block.x * scale : nil
+                    let boxX = block.x * scale
                     let boxW = max(1, block.width * scale)
                     let boxH = max(1, block.height * scale)
-                    let clipRect = NSRect(x: absX ?? 0, y: y, width: boxW, height: boxH)
+                    // Always clip to the element frame (not paper-left when centered).
+                    let clipRect = NSRect(x: boxX, y: y, width: boxW, height: boxH)
                     if block.boxConstrained, let ctx = NSGraphicsContext.current?.cgContext {
                         ctx.saveGState()
                         ctx.clip(to: clipRect)
                     }
                     let lines = text.components(separatedBy: "\n")
                     for line in lines {
+                        let body = paddedIfInverted(line, inverted: block.style.inverted)
+                        let inkW = MovieTicketPrintMetrics.inkWidthDots(
+                            text: body,
+                            widthScale: block.style.widthScale,
+                            characterSpacing: block.style.characterSpacing
+                        )
+                        let absX: CGFloat?
+                        if block.boxConstrained {
+                            switch block.style.align {
+                            case .center:
+                                absX = boxX + max(0, (boxW - inkW) / 2)
+                            case .right:
+                                absX = boxX + max(0, boxW - inkW)
+                            case .left:
+                                absX = boxX
+                            }
+                        } else {
+                            absX = block.style.align == .left ? boxX : nil
+                        }
                         drawText(
-                            paddedIfInverted(line, inverted: block.style.inverted),
+                            body,
                             style: block.style,
                             widthDots: widthDots,
                             y: &ty,
@@ -397,11 +445,21 @@ enum MovieTicketIMAXESCPOS {
            abs(typeEl.frame.y - priceEl.frame.y) <= sameRowYTolerance {
             skipIds.insert(priceEl.id)
         }
-        // Skip serial under barcode (HRI is emitted with barcode).
-        if let barcodeEl, let serialEl = firstField(template, .serialNumber) {
+        // Skip serial under barcode (HRI is emitted with barcode) — unless wrap is on,
+        // in which case the serial element box must own the multi-line HRI.
+        var suppressBarcodeHRI = false
+        let serialEl = firstField(template, .serialNumber)
+        let serialHRIAsterisks = serialEl?.includesSerialHRIAsterisks ?? true
+        if let barcodeEl, let serialEl {
             let under = serialEl.frame.y >= barcodeEl.frame.y
                 && serialEl.frame.y <= barcodeEl.frame.y + barcodeEl.frame.height + serialUnderBarcodeSlop
-            if under { skipIds.insert(serialEl.id) }
+            if under {
+                if serialEl.allowsTextWrap {
+                    suppressBarcodeHRI = true
+                } else {
+                    skipIds.insert(serialEl.id)
+                }
+            }
         }
 
         var blocks: [Block] = []
@@ -447,7 +505,9 @@ enum MovieTicketIMAXESCPOS {
                         kind: .barcode(
                             payload: code,
                             heightDots: dots,
-                            moduleWidth: barcodeModuleWidth
+                            moduleWidth: barcodeModuleWidth,
+                            printHRI: !suppressBarcodeHRI,
+                            hriIncludeAsterisks: serialHRIAsterisks
                         ),
                         label: "barcode",
                         x: el.frame.x,
@@ -524,7 +584,10 @@ enum MovieTicketIMAXESCPOS {
                         value = seatLine(value, template: template, draft: draft)
                     }
                     if kind == .serialNumber {
-                        value = spacedHRI(barcodePayload(from: value.isEmpty ? payload : value))
+                        value = spacedHRI(
+                            barcodePayload(from: value.isEmpty ? payload : value),
+                            includeAsterisks: el.includesSerialHRIAsterisks
+                        )
                     }
                     if kind == .timeRange || kind == .startTime {
                         // Keep Thur spelling for IMAX-style ranges.
@@ -559,8 +622,12 @@ enum MovieTicketIMAXESCPOS {
             }
             return $0.y < $1.y
         }
-        let merged = mergeSameRowBlocks(sorted)
-        return merged
+        return mergeSameRowBlocks(sorted)
+    }
+
+    private static func isMultilineBoxText(_ block: Block) -> Bool {
+        guard block.boxConstrained, case .text(let t) = block.kind else { return false }
+        return t.contains("\n")
     }
 
     /// QR-centric: text/typePrice that intersects the QR frame and sits left/right of it
@@ -583,6 +650,8 @@ enum MovieTicketIMAXESCPOS {
             for (i, b) in blocks.enumerated() where i != qi && !consumed.contains(i) {
                 switch b.kind {
                 case .text, .typePrice:
+                    // Keep beside-QR merge so side-by-side layout survives; box wrap is
+                    // honored inside emitCompositeRow (not by skipping the merge).
                     break
                 default:
                     continue
@@ -610,7 +679,10 @@ enum MovieTicketIMAXESCPOS {
                 switch b.kind {
                 case .text(let t):
                     items.append(.text(
-                        RowItem(text: t, x: b.x, style: b.style, label: b.label),
+                        RowItem(
+                            text: t, x: b.x, style: b.style, label: b.label,
+                            boxWidth: b.width, boxConstrained: b.boxConstrained
+                        ),
                         canvasY: b.y
                     ))
                 case .typePrice(let left, let right, let leftX, let rightX):
@@ -670,6 +742,12 @@ enum MovieTicketIMAXESCPOS {
         var i = 0
         while i < blocks.count {
             let block = blocks[i]
+            // Multi-line box text cannot share a single ESC/POS inline row.
+            if isMultilineBoxText(block) {
+                result.append(block)
+                i += 1
+                continue
+            }
             guard case .text(let text0) = block.kind else {
                 result.append(block)
                 i += 1
@@ -679,7 +757,8 @@ enum MovieTicketIMAXESCPOS {
             var j = i + 1
             while j < blocks.count {
                 let next = blocks[j]
-                guard case .text(let tj) = next.kind,
+                guard !isMultilineBoxText(next),
+                      case .text(let tj) = next.kind,
                       abs(next.y - block.y) <= sameRowYTolerance
                 else { break }
                 group.append((next, tj))
@@ -690,7 +769,12 @@ enum MovieTicketIMAXESCPOS {
             } else {
                 let items = group
                     .sorted { $0.0.x < $1.0.x }
-                    .map { RowItem(text: $0.1, x: $0.0.x, style: $0.0.style, label: $0.0.label) }
+                    .map {
+                        RowItem(
+                            text: $0.1, x: $0.0.x, style: $0.0.style, label: $0.0.label,
+                            boxWidth: $0.0.width, boxConstrained: $0.0.boxConstrained
+                        )
+                    }
                 let tallest = items.map(\.style.heightScale).max() ?? block.style.heightScale
                 var rowStyle = block.style
                 rowStyle.heightScale = tallest
@@ -899,7 +983,9 @@ enum MovieTicketIMAXESCPOS {
                 let top = canvasPointsToDots(
                     canvasY - bandMinY, paperWidth: paperWidth, dotsPerLine: config.dotsPerLine
                 )
-                let th = lineDots * max(1, row.style.heightScale)
+                let lineCount = max(1, paddedIfInverted(row.text, inverted: row.style.inverted)
+                    .components(separatedBy: "\n").count)
+                let th = lineDots * max(1, row.style.heightScale) * lineCount
                 heightDots = max(heightDots, top + th)
             case .qr(_, let sizeDots, _, let canvasY):
                 let top = canvasPointsToDots(
@@ -924,15 +1010,23 @@ enum MovieTicketIMAXESCPOS {
                     let absX = canvasPointsToDots(
                         row.x, paperWidth: paperWidth, dotsPerLine: config.dotsPerLine
                     )
-                    // Font A cell is 24 dots tall at 1× — not preview's ~17pt approximation.
-                    drawText(
-                        text,
-                        style: row.style,
-                        widthDots: paperDots,
-                        y: &ty,
-                        baseSize: MovieTicketPrintMetrics.fontACellDots.height,
-                        absoluteX: CGFloat(absX)
-                    )
+                    let lines = text.components(separatedBy: "\n")
+                    let boxWDots: CGFloat? = row.boxConstrained && row.boxWidth > 0
+                        ? CGFloat(canvasPointsToDots(
+                            row.boxWidth, paperWidth: paperWidth, dotsPerLine: config.dotsPerLine
+                        ))
+                        : nil
+                    for line in lines {
+                        drawText(
+                            line,
+                            style: row.style,
+                            widthDots: paperDots,
+                            y: &ty,
+                            baseSize: MovieTicketPrintMetrics.fontACellDots.height,
+                            absoluteX: CGFloat(absX),
+                            clipWidthDots: boxWDots
+                        )
+                    }
                 case .qr(let payload, let sizeDots, let x, let canvasY):
                     let body = payload.trimmingCharacters(in: .whitespacesAndNewlines)
                     let content = body.isEmpty ? "0" : body
@@ -1029,13 +1123,22 @@ enum MovieTicketIMAXESCPOS {
                 let absX = CGFloat(canvasPointsToDots(
                     row.x, paperWidth: paperWidth, dotsPerLine: config.dotsPerLine
                 ))
-                drawText(
-                    text,
-                    style: row.style,
-                    widthDots: widthDots,
-                    y: &ty,
-                    absoluteX: absX
-                )
+                let lines = text.components(separatedBy: "\n")
+                let boxWDots: CGFloat? = row.boxConstrained && row.boxWidth > 0
+                    ? CGFloat(canvasPointsToDots(
+                        row.boxWidth, paperWidth: paperWidth, dotsPerLine: config.dotsPerLine
+                    ))
+                    : nil
+                for line in lines {
+                    drawText(
+                        line,
+                        style: row.style,
+                        widthDots: widthDots,
+                        y: &ty,
+                        absoluteX: absX,
+                        clipWidthDots: boxWDots
+                    )
+                }
             case .qr(let payload, let sizeDots, let x, let canvasY):
                 let body = payload.trimmingCharacters(in: .whitespacesAndNewlines)
                 let content = body.isEmpty ? "0" : body
@@ -1267,10 +1370,8 @@ enum MovieTicketIMAXESCPOS {
         return filtered.isEmpty ? String(serial.filter(\.isNumber)) : String(filtered)
     }
 
-    private static func spacedHRI(_ code: String) -> String {
-        let chars = Array(code)
-        guard !chars.isEmpty else { return "" }
-        return "* " + chars.map(String.init).joined(separator: " ") + " *"
+    private static func spacedHRI(_ code: String, includeAsterisks: Bool = true) -> String {
+        MovieTicketPrintMetrics.spacedSerialHRI(code, includeAsterisks: includeAsterisks)
     }
 
     private static func apply(_ builder: ESCPOSBuilder, _ style: FieldStyle) {
@@ -1332,7 +1433,8 @@ enum MovieTicketIMAXESCPOS {
         widthDots: Int,
         y: inout CGFloat,
         baseSize: CGFloat = 17,
-        absoluteX: CGFloat? = nil
+        absoluteX: CGFloat? = nil,
+        clipWidthDots: CGFloat? = nil
     ) {
         let wScale = max(1, style.widthScale)
         let hScale = max(1, style.heightScale)
@@ -1357,6 +1459,9 @@ enum MovieTicketIMAXESCPOS {
         let fg = style.inverted ? NSColor.white : NSColor.black
         if let ctx = NSGraphicsContext.current?.cgContext {
             ctx.saveGState()
+            if let clipW = clipWidthDots, clipW > 0 {
+                ctx.clip(to: CGRect(x: x, y: y, width: clipW, height: cellH + 2))
+            }
             ctx.translateBy(x: x, y: y)
             ctx.scaleBy(x: CGFloat(wScale), y: CGFloat(hScale))
             if style.inverted {

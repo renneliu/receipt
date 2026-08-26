@@ -209,11 +209,16 @@ enum MovieTicketPrintMetrics {
             return max(24, el.frame.height)
         }
         let scale = MovieTicketRitzESCPOS.printScale(for: el)
-        return lineHeightPoints(
+        let one = lineHeightPoints(
             heightScale: scale.height,
             paperWidth: paperWidth,
             dotsPerLine: config.dotsPerLine
         )
+        // Wrap-enabled boxes are multi-line print regions — never collapse them to 1× ink height.
+        if el.allowsTextWrap {
+            return max(el.frame.height, one)
+        }
+        return one
     }
 
     /// Snap every non-logo element's frame height to its printed block height.
@@ -262,6 +267,24 @@ enum MovieTicketPrintMetrics {
         return max(1, Int((frameHeight / max(1, lineH)).rounded(.down)))
     }
 
+    /// Pad / clip one printer line so it occupies exactly `columns` (for in-box alignment).
+    static func padLine(_ text: String, columns: Int, align: ESCPOSAlign) -> String {
+        let cols = max(1, columns)
+        let clipped = ReceiptTextLayout.clip(text, maxColumns: cols)
+        let width = ReceiptTextLayout.displayWidth(clipped)
+        let pad = max(0, cols - width)
+        guard pad > 0 else { return clipped }
+        switch align {
+        case .left:
+            return clipped
+        case .center:
+            let left = pad / 2
+            return String(repeating: " ", count: left) + clipped
+        case .right:
+            return String(repeating: " ", count: pad) + clipped
+        }
+    }
+
     /// Fit text into an element box: single-line clip, or wrap within width and clip by height.
     /// Always emit via `appendRawTextLine` (do not re-wrap to full paper width).
     static func fitTextToElementBox(
@@ -292,5 +315,13 @@ enum MovieTicketPrintMetrics {
         let wrapped = ReceiptTextLayout.wrap(text, maxColumns: cols)
         let lines = Array(wrapped.prefix(maxLines))
         return lines.isEmpty ? [" "] : lines.map { $0.isEmpty ? " " : $0 }
+    }
+
+    /// Spaced serial / barcode HRI: `1 2 3` or `* 1 2 3 *`.
+    static func spacedSerialHRI(_ code: String, includeAsterisks: Bool = true) -> String {
+        let chars = Array(code)
+        guard !chars.isEmpty else { return "" }
+        let body = chars.map(String.init).joined(separator: " ")
+        return includeAsterisks ? "* \(body) *" : body
     }
 }

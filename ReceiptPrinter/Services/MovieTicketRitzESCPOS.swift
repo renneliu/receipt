@@ -50,6 +50,7 @@ enum MovieTicketRitzESCPOS {
         var barcodeHeight: UInt8
         var dashStyle: FieldStyle
         var dashContent: String
+        var serialHRIIncludeAsterisks: Bool
     }
 
     private static func resolve(
@@ -83,6 +84,7 @@ enum MovieTicketRitzESCPOS {
         let hallText = hallEl?.resolvedHallText(from: draft)
             ?? draft.hall.trimmingCharacters(in: .whitespacesAndNewlines)
         let barcodeEl = firstField(template, .barcode)
+        let serialEl = firstField(template, .serialNumber)
         let barcodeRaw: String = {
             if let barcodeEl {
                 return barcodeEl.resolvedCodePayload(from: draft)
@@ -117,7 +119,8 @@ enum MovieTicketRitzESCPOS {
             titleClipCols: nil,
             barcodeHeight: barcodeHeightDots(barcodeEl),
             dashStyle: dashStyle,
-            dashContent: dashContent
+            dashContent: dashContent,
+            serialHRIIncludeAsterisks: serialEl?.includesSerialHRIAsterisks ?? true
         )
     }
 
@@ -150,7 +153,8 @@ enum MovieTicketRitzESCPOS {
             includeBarcode: false,
             titleClipCols: ticket.titleClipCols,
             styles: ticket.styles,
-            barcodeHeight: ticket.barcodeHeight
+            barcodeHeight: ticket.barcodeHeight,
+            serialHRIIncludeAsterisks: ticket.serialHRIIncludeAsterisks
         )
 
         builder
@@ -174,7 +178,8 @@ enum MovieTicketRitzESCPOS {
             includeBarcode: true,
             titleClipCols: ticket.titleClipCols,
             styles: ticket.styles,
-            barcodeHeight: ticket.barcodeHeight
+            barcodeHeight: ticket.barcodeHeight,
+            serialHRIIncludeAsterisks: ticket.serialHRIIncludeAsterisks
         )
 
         builder.selectFontA()
@@ -321,7 +326,12 @@ enum MovieTicketRitzESCPOS {
             y += barH + 4
             var serialStyle = ticket.styles.serial
             serialStyle.bold = false
-            drawTextLine(spacedHRI(code), style: serialStyle, widthDots: widthDots, y: &y)
+            drawTextLine(
+                spacedHRI(code, includeAsterisks: ticket.serialHRIIncludeAsterisks),
+                style: serialStyle,
+                widthDots: widthDots,
+                y: &y
+            )
         } else {
             var serialStyle = ticket.styles.serial
             serialStyle.bold = false
@@ -403,7 +413,8 @@ enum MovieTicketRitzESCPOS {
         includeBarcode: Bool,
         titleClipCols: Int?,
         styles: TicketStyles,
-        barcodeHeight: UInt8
+        barcodeHeight: UInt8,
+        serialHRIIncludeAsterisks: Bool
     ) {
         apply(builder, styles.cinema)
         builder.text(cinema.isEmpty ? "Ritz Cinemas" : cinema).newline()
@@ -430,7 +441,9 @@ enum MovieTicketRitzESCPOS {
             let code = barcodePayload.isEmpty ? "000000" : barcodePayload
             builder.barcode(type: .code128, content: code, height: barcodeHeight, width: 3, printHRI: false)
             apply(builder, styles.serial)
-            builder.bold(false).text(spacedHRI(code)).newline()
+            builder.bold(false)
+                .text(spacedHRI(code, includeAsterisks: serialHRIIncludeAsterisks))
+                .newline()
         } else {
             apply(builder, styles.serial)
             builder.bold(false).text(serial.isEmpty ? " " : serial).newline()
@@ -595,9 +608,7 @@ enum MovieTicketRitzESCPOS {
         return filtered.isEmpty ? String(serial.filter(\.isNumber)) : String(filtered)
     }
 
-    private static func spacedHRI(_ code: String) -> String {
-        let chars = Array(code)
-        guard !chars.isEmpty else { return "" }
-        return "* " + chars.map(String.init).joined(separator: " ") + " *"
+    private static func spacedHRI(_ code: String, includeAsterisks: Bool = true) -> String {
+        MovieTicketPrintMetrics.spacedSerialHRI(code, includeAsterisks: includeAsterisks)
     }
 }

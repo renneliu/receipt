@@ -513,26 +513,28 @@ struct MovieTicketTemplateView: View {
             )
         }
 
+        let wrapPreview = el.supportsTextWrapControl
+        let previewFont = MovieTicketPrintMetrics.fontSize(forWidthScale: textScale.width)
         return AnyView(
             MovieTicketElementBoxOverlay(
                 frame: binding,
                 isSelected: selected,
                 title: elementTitle(el),
-                previewText: el.kind == .textBox
+                previewText: wrapPreview
                     ? canvasPrintAccurateText(el, paper: paper)
                     : elementPlaceholderLabel(el),
-                fontSize: el.fontSize,
+                fontSize: previewFont,
                 textAlignment: el.alignment,
                 paperSize: paper,
                 gridEnabled: gridOn,
                 gridSize: gridSize,
                 accent: accent(for: el),
                 chromeOnly: false,
-                placeholderMode: el.kind != .textBox,
+                placeholderMode: false,
                 isLocked: el.isLocked,
-                singleLineClip: el.singleLineClip == true,
-                printAccurateLines: el.kind == .textBox,
-                printLineHeight: el.kind == .textBox ? textLineH : 0,
+                singleLineClip: !el.allowsTextWrap,
+                printAccurateLines: wrapPreview,
+                printLineHeight: wrapPreview ? textLineH : 0,
                 minSize: CGSize(width: 12, height: minH),
                 onFrameChanged: nil,
                 onInteractionChanged: { active in
@@ -1047,6 +1049,71 @@ struct MovieTicketTemplateView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
+                    // Wrap control sits high in the inspector so date/time fields find it easily.
+                    if el.supportsTextWrapControl {
+                        Toggle(L10n.ui("允许换行"), isOn: Binding(
+                            get: {
+                                session.editingTemplate?.elements
+                                    .first(where: { $0.id == elementId })?.allowsTextWrap ?? true
+                            },
+                            set: { v in
+                                updateElement(id: elementId) { el in
+                                    el.singleLineClip = v ? false : true
+                                    if v {
+                                        // Existing fields often still have fontSize 28 → 3× line height.
+                                        // Prefer 1× print so a normal box can show wrapped lines.
+                                        if MovieTicketRitzESCPOS.printScale(for: el).height >= 2,
+                                           el.frame.height < 48 {
+                                            el.fontSize = MovieTicketPrintMetrics.fontSize(forWidthScale: 1)
+                                            el.printHeightScale = 1
+                                        }
+                                        let scale = MovieTicketRitzESCPOS.printScale(for: el)
+                                        let lineH = MovieTicketPrintMetrics.lineHeightPoints(
+                                            heightScale: scale.height,
+                                            paperWidth: session.editingTemplate?.paperSize.width ?? 302,
+                                            dotsPerLine: appState.settings.printerConfig.dotsPerLine
+                                        )
+                                        if el.frame.height < lineH * 2 {
+                                            el.frame.height = (lineH * 2).rounded(.up)
+                                        }
+                                    }
+                                }
+                            }
+                        ))
+                        Text(
+                            (session.editingTemplate?.elements
+                                .first(where: { $0.id == elementId })?.allowsTextWrap ?? true)
+                            ? L10n.ui("开启：在元素框内按宽度自动换行；超出框高度的行不打印。请把框拉高以容纳多行。")
+                            : L10n.ui("关闭：只打一行（单行裁切），超出框宽度的文字不打印。")
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if el.fieldKind == .serialNumber {
+                        Toggle(L10n.ui("流水号两侧加 *"), isOn: Binding(
+                            get: {
+                                session.editingTemplate?.elements
+                                    .first(where: { $0.id == elementId })?
+                                    .includesSerialHRIAsterisks ?? true
+                            },
+                            set: { v in
+                                updateElement(id: elementId) {
+                                    $0.serialHRIIncludeAsterisks = v
+                                }
+                            }
+                        ))
+                        Text(
+                            (session.editingTemplate?.elements
+                                .first(where: { $0.id == elementId })?
+                                .includesSerialHRIAsterisks ?? true)
+                            ? L10n.ui("开启：打印为 * 1 2 3 *（常见条码下方人眼可读样式）。")
+                            : L10n.ui("关闭：打印为 1 2 3（不加星号）。")
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
                     if el.fieldKind != .barcode && el.fieldKind != .qrCode {
                         Toggle(L10n.ui("粗体"), isOn: Binding(
                             get: { elementValue(id: elementId, \.isBold, default: false) },
@@ -1087,26 +1154,6 @@ struct MovieTicketTemplateView: View {
                             get: { elementValue(id: elementId, \.isInverted, default: false) },
                             set: { v in updateElement(id: elementId) { $0.isInverted = v } }
                         ))
-                    }
-                    if el.kind == .textBox
-                        || el.kind == .currentDate
-                        || el.kind == .currentTime
-                        || (el.kind == .fieldPlaceholder && el.fieldKind.map { ![.barcode, .qrCode].contains($0) } ?? false) {
-                        Toggle(L10n.ui("单行裁切（超出框不打印）"), isOn: Binding(
-                            get: {
-                                session.editingTemplate?.elements
-                                    .first(where: { $0.id == elementId })?.singleLineClip == true
-                            },
-                            set: { v in updateElement(id: elementId) { $0.singleLineClip = v } }
-                        ))
-                        Text(
-                            (session.editingTemplate?.elements
-                                .first(where: { $0.id == elementId })?.singleLineClip == true)
-                            ? L10n.ui("开启：只打一行，超出元素框宽度的文字不打印。关闭：在框内自动换行，超出高度的行不打印。")
-                            : L10n.ui("关闭：在元素框内自动换行；超出框高度的行不打印。开启则为单行裁切。")
-                        )
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
                     }
                     if el.fieldKind == .hall {
                         Picker(L10n.ui("影厅显示"), selection: Binding(
@@ -1163,7 +1210,7 @@ struct MovieTicketTemplateView: View {
                                     .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
                             )
                         }
-                        Text(L10n.ui("可直接回车换行；关闭「单行裁切」时也会按元素框宽度自动折行打印。"))
+                        Text(L10n.ui("可直接回车换行；开启「允许换行」时也会按元素框宽度自动折行打印。"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1472,11 +1519,32 @@ struct MovieTicketTemplateView: View {
         return "[\(elementTitle(el))]"
     }
 
-    /// Canvas preview for text boxes using the same wrap/clip as ESC/POS print.
+    /// Canvas preview using the same wrap/clip as ESC/POS print (text, date, fields…).
     private func canvasPrintAccurateText(_ el: MovieTicketElement, paper: CGSize) -> String {
-        let raw = el.content
+        let template = session.editingTemplate
+        var raw: String = {
+            if let template {
+                return el.resolvedPrintableText(from: session.draft, template: template)
+            }
+            return el.content
+        }()
+        // Match IMAX print: serial HRI is spaced ("* 1 2 3 *" or "1 2 3") and needs box wrap.
+        if el.fieldKind == .serialNumber {
+            if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // Template editor often has an empty draft — still show wrap inside the box.
+                raw = "12345678901"
+            }
+            let digits = raw.filter { $0.isNumber || $0 == "/" }
+            let code = digits.isEmpty ? raw : String(digits)
+            if !code.isEmpty {
+                raw = MovieTicketPrintMetrics.spacedSerialHRI(
+                    code,
+                    includeAsterisks: el.includesSerialHRIAsterisks
+                )
+            }
+        }
         guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "[\(L10n.ui("文字"))]"
+            return "[\(elementTitle(el))]"
         }
         let config = appState.settings.printerConfig
         let scale = MovieTicketRitzESCPOS.printScale(for: el)
@@ -1487,7 +1555,7 @@ struct MovieTicketTemplateView: View {
             config: config,
             widthScale: scale.width,
             heightScale: scale.height,
-            singleLineClip: el.singleLineClip == true
+            singleLineClip: !el.allowsTextWrap
         )
         return lines.joined(separator: "\n")
     }
@@ -1852,6 +1920,7 @@ struct MovieTicketTemplateView: View {
             if isTitle { return max(160, paperW - 24) }
             return 160
         }()
+        let isDateOrTime = kind == .showDate || kind == .startTime || kind == .endTime || kind == .timeRange
         let fieldHeight: CGFloat = {
             if kind == .qrCode { return 140 }
             if kind == .barcode { return 56 }
@@ -1859,6 +1928,11 @@ struct MovieTicketTemplateView: View {
                 return MovieTicketPrintMetrics.lineHeightPoints(
                     heightScale: 2, paperWidth: paperW, dotsPerLine: dots
                 )
+            }
+            if isDateOrTime {
+                return MovieTicketPrintMetrics.lineHeightPoints(
+                    heightScale: 1, paperWidth: paperW, dotsPerLine: dots
+                ) * 2
             }
             return defaultH
         }()
@@ -1871,11 +1945,12 @@ struct MovieTicketTemplateView: View {
                 height: fieldHeight
             ),
             zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1,
-            fontSize: isTitle ? 14 : AttributedTextView.defaultFontSize,
+            fontSize: isTitle ? 14 : 11,
             isBold: isTitle,
             fieldKind: kind,
-            // New titles wrap by default so a short box cannot silently eat the name.
-            singleLineClip: isTitle ? false : nil
+            // Wrap by default for title / date / time so short boxes don't silently clip.
+            singleLineClip: (isTitle || isDateOrTime) ? false : nil,
+            printHeightScale: isTitle ? 2 : 1
         )
         t.elements.append(el)
         session.editingTemplate = t
@@ -1903,10 +1978,16 @@ struct MovieTicketTemplateView: View {
     private func addCurrentDate() {
         guard var t = session.editingTemplate else { return }
         pushUndoSnapshot()
+        let paperW = t.paperSize.width
+        let dots = appState.settings.printerConfig.dotsPerLine
+        let lineH = MovieTicketPrintMetrics.lineHeightPoints(
+            heightScale: 1, paperWidth: paperW, dotsPerLine: dots
+        )
         let el = MovieTicketElement(
             kind: .currentDate,
-            frame: SequencePlaceholderFrame(x: 12, y: 400, width: 180, height: 24),
-            zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1
+            frame: SequencePlaceholderFrame(x: 12, y: 400, width: 180, height: lineH * 2),
+            zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1,
+            singleLineClip: false
         )
         t.elements.append(el)
         session.editingTemplate = t
@@ -1917,10 +1998,16 @@ struct MovieTicketTemplateView: View {
     private func addCurrentTime() {
         guard var t = session.editingTemplate else { return }
         pushUndoSnapshot()
+        let paperW = t.paperSize.width
+        let dots = appState.settings.printerConfig.dotsPerLine
+        let lineH = MovieTicketPrintMetrics.lineHeightPoints(
+            heightScale: 1, paperWidth: paperW, dotsPerLine: dots
+        )
         let el = MovieTicketElement(
             kind: .currentTime,
-            frame: SequencePlaceholderFrame(x: 200, y: 400, width: 90, height: 24),
-            zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1
+            frame: SequencePlaceholderFrame(x: 200, y: 400, width: 120, height: lineH * 2),
+            zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1,
+            singleLineClip: false
         )
         t.elements.append(el)
         session.editingTemplate = t

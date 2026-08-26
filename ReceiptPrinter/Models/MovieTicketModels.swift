@@ -606,7 +606,7 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
     var zIndex: Int = 0
     var displayName: String = ""
     var content: String = ""
-    var fontSize: CGFloat = AttributedTextView.defaultFontSize
+    var fontSize: CGFloat = 11
     var isBold: Bool = false
     var alignment: Int = 0
     /// Extra right-side character spacing in ESC/POS dots (`ESC SP n`). 0 = default.
@@ -639,6 +639,75 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
     var hallNumberPrefix: String? = nil
     /// QR/barcode payload source. `nil` = `.serialNumber` (legacy).
     var codeContentSource: MovieTicketCodeContentSource? = nil
+    /// Serial HRI style: wrap digits with `* … *`. `nil` = true (legacy IMAX/Ritz).
+    var serialHRIIncludeAsterisks: Bool? = nil
+
+    /// Text / date / time fields that expose the wrap control (not logo / QR / barcode).
+    var supportsTextWrapControl: Bool {
+        switch kind {
+        case .textBox, .currentDate, .currentTime:
+            return true
+        case .fieldPlaceholder:
+            guard let fieldKind else { return true }
+            return fieldKind != .qrCode && fieldKind != .barcode
+        case .logo:
+            return false
+        }
+    }
+
+    /// `true` when the box may wrap (default for nil `singleLineClip`).
+    var allowsTextWrap: Bool { singleLineClip != true }
+
+    /// Whether spaced serial HRI includes leading/trailing `*` (default on for older templates).
+    var includesSerialHRIAsterisks: Bool { serialHRIIncludeAsterisks != false }
+
+    /// Resolved printable string for canvas / inspector preview (mirrors IMAX field resolve).
+    func resolvedPrintableText(
+        from draft: MovieTicketDraft,
+        template: MovieTicketTemplate,
+        now: Date = Date()
+    ) -> String {
+        switch kind {
+        case .textBox:
+            return content
+        case .currentDate:
+            return dateFormat.format(now)
+        case .currentTime:
+            return timeFormat.format(now)
+        case .logo:
+            return ""
+        case .fieldPlaceholder:
+            guard let fieldKind else { return "" }
+            switch fieldKind {
+            case .movieTitle:
+                return draft.printedMovieTitle
+            case .showDate:
+                return dateFormat.format(draft.showDate)
+            case .startTime:
+                return timeFormat.format(draft.combinedStart)
+            case .endTime:
+                let body = timeFormat.format(draft.showEndTime)
+                return content.isEmpty ? body : content + body
+            case .timeRange:
+                let a = rangeStartFormat.format(draft.combinedStart)
+                let b = rangeEndFormat.format(draft.showEndTime)
+                return "\(a)\(rangeConnector)\(b)"
+            case .seatArea:
+                if draft.seatModeUnallocated { return template.unallocatedSeatLabel }
+                return draft.seatArea
+            case .ticketPrice:
+                return draft.formattedPrice
+            case .ticketType:
+                return draft.ticketType
+            case .serialNumber:
+                return draft.serialNumber
+            case .hall:
+                return resolvedHallText(from: draft)
+            case .qrCode, .barcode:
+                return resolvedCodePayload(from: draft)
+            }
+        }
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, kind, frame, zIndex, displayName, content, fontSize, isBold, alignment
@@ -647,7 +716,7 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
         case rangeStartFormat, rangeEndFormat, rangeConnector, imageFilename
         case logoScalePercent, logoBaseWidth, logoBaseHeight
         case singleLineClip, printHeightScale, hallDisplayMode, hallNumberPrefix
-        case codeContentSource
+        case codeContentSource, serialHRIIncludeAsterisks
     }
 
     init(
@@ -657,7 +726,7 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
         zIndex: Int = 0,
         displayName: String = "",
         content: String = "",
-        fontSize: CGFloat = AttributedTextView.defaultFontSize,
+        fontSize: CGFloat = 11,
         isBold: Bool = false,
         alignment: Int = 0,
         characterSpacing: Int = 0,
@@ -677,7 +746,8 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
         printHeightScale: Int? = nil,
         hallDisplayMode: MovieTicketHallDisplayMode? = nil,
         hallNumberPrefix: String? = nil,
-        codeContentSource: MovieTicketCodeContentSource? = nil
+        codeContentSource: MovieTicketCodeContentSource? = nil,
+        serialHRIIncludeAsterisks: Bool? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -706,6 +776,7 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
         self.hallDisplayMode = hallDisplayMode
         self.hallNumberPrefix = hallNumberPrefix
         self.codeContentSource = codeContentSource
+        self.serialHRIIncludeAsterisks = serialHRIIncludeAsterisks
     }
 
     init(from decoder: Decoder) throws {
@@ -716,7 +787,7 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
         zIndex = try c.decodeIfPresent(Int.self, forKey: .zIndex) ?? 0
         displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? ""
         content = try c.decodeIfPresent(String.self, forKey: .content) ?? ""
-        fontSize = try c.decodeIfPresent(CGFloat.self, forKey: .fontSize) ?? AttributedTextView.defaultFontSize
+        fontSize = try c.decodeIfPresent(CGFloat.self, forKey: .fontSize) ?? 11
         isBold = try c.decodeIfPresent(Bool.self, forKey: .isBold) ?? false
         alignment = try c.decodeIfPresent(Int.self, forKey: .alignment) ?? 0
         characterSpacing = max(0, min(32, try c.decodeIfPresent(Int.self, forKey: .characterSpacing) ?? 0))
@@ -741,6 +812,7 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
         hallDisplayMode = try c.decodeIfPresent(MovieTicketHallDisplayMode.self, forKey: .hallDisplayMode)
         hallNumberPrefix = try c.decodeIfPresent(String.self, forKey: .hallNumberPrefix)
         codeContentSource = try c.decodeIfPresent(MovieTicketCodeContentSource.self, forKey: .codeContentSource)
+        serialHRIIncludeAsterisks = try c.decodeIfPresent(Bool.self, forKey: .serialHRIIncludeAsterisks)
     }
 
     /// Digits from a hall string (`Screen 2` / `Cinema 1` / `IMAX 1` → `2` / `1` / `1`).
