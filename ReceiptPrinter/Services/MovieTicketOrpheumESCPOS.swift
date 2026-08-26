@@ -11,6 +11,7 @@ enum MovieTicketOrpheumESCPOS {
         var widthScale: Int = 1
         var heightScale: Int = 1
         var bold: Bool = false
+        var characterSpacing: Int = 0
     }
 
     static func render(
@@ -167,11 +168,20 @@ enum MovieTicketOrpheumESCPOS {
         let serial = draft.serialNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         let digits = serial.filter(\.isNumber)
         let barcode: String = {
+            if let barcodeEl, (barcodeEl.codeContentSource ?? .serialNumber) == .custom {
+                let raw = barcodeEl.resolvedCodePayload(from: draft)
+                let customDigits = raw.filter { $0.isNumber || $0.isLetter }
+                return customDigits.isEmpty ? (raw.isEmpty ? "00000000000" : raw) : String(customDigits)
+            }
             if digits.count >= 11 { return String(digits.suffix(11)) }
             if digits.isEmpty { return "00000000000" }
             return digits
         }()
         let labelCore: String = {
+            if let barcodeEl, (barcodeEl.codeContentSource ?? .serialNumber) == .custom {
+                let raw = barcodeEl.resolvedCodePayload(from: draft)
+                return raw.isEmpty ? barcode : raw
+            }
             if digits.count >= 11 {
                 let base = String(digits.dropLast(3).suffix(8))
                 let ser = String(digits.suffix(3))
@@ -222,17 +232,20 @@ enum MovieTicketOrpheumESCPOS {
         let serialStyle = style(from: serialEl, fallbackW: 1, fallbackH: 1, fallbackBold: false)
 
         let rawTitle = draft.printedMovieTitle
-        let clipCols = titleClipColumns(
-            element: titleEl,
-            config: config,
-            widthScale: titleStyle.widthScale,
-            paperWidth: template.paperSize.width
-        )
-        let forceSingle = titleEl?.singleLineClip != false && clipCols != nil
         let movie: String = {
-            guard forceSingle, let clipCols else { return rawTitle }
-            return ReceiptTextLayout.clip(rawTitle, maxColumns: clipCols)
+            guard let titleEl else { return rawTitle }
+            let lines = MovieTicketPrintMetrics.fitTextToElementBox(
+                rawTitle.isEmpty ? " " : rawTitle,
+                frame: titleEl.frame,
+                paperWidth: template.paperSize.width,
+                config: config,
+                widthScale: titleStyle.widthScale,
+                heightScale: titleStyle.heightScale,
+                singleLineClip: titleEl.singleLineClip == true
+            )
+            return lines.joined(separator: "\n")
         }()
+        let forceSingle = titleEl?.singleLineClip == true
 
         let barcodeHeight: UInt8 = {
             let h = barcodeEl?.frame.height ?? 72
@@ -274,11 +287,12 @@ enum MovieTicketOrpheumESCPOS {
         guard let el else {
             return LineStyle(widthScale: fallbackW, heightScale: fallbackH, bold: fallbackBold)
         }
-        let scale = MovieTicketRitzESCPOS.printScale(fontSize: el.fontSize, boxHeight: el.frame.height)
+        let scale = MovieTicketRitzESCPOS.printScale(for: el)
         return LineStyle(
             widthScale: scale.width,
             heightScale: scale.height,
-            bold: el.isBold
+            bold: el.isBold,
+            characterSpacing: MovieTicketPrintMetrics.clampedCharacterSpacing(el.characterSpacing)
         )
     }
 
@@ -286,8 +300,15 @@ enum MovieTicketOrpheumESCPOS {
         LineStyle(
             widthScale: max(a.widthScale, b.widthScale),
             heightScale: max(a.heightScale, b.heightScale),
-            bold: a.bold || b.bold
+            bold: a.bold || b.bold,
+            characterSpacing: max(a.characterSpacing, b.characterSpacing)
         )
+    }
+
+    private static func apply(_ builder: ESCPOSBuilder, _ style: LineStyle) {
+        builder.bold(style.bold)
+            .characterSpacing(UInt8(MovieTicketPrintMetrics.clampedCharacterSpacing(style.characterSpacing)))
+            .applyMagnification(width: style.widthScale, height: style.heightScale)
     }
 
     /// Columns the movie title may occupy on one line (Font A × width scale).
@@ -297,7 +318,7 @@ enum MovieTicketOrpheumESCPOS {
         widthScale: Int,
         paperWidth: CGFloat
     ) -> Int? {
-        guard let element, element.singleLineClip != false else { return nil }
+        guard let element, element.singleLineClip == true else { return nil }
         let scale = CGFloat(max(1, widthScale))
         let paperW = max(1, paperWidth)
         let charDots = CGFloat(config.dotsPerLine) / CGFloat(max(1, config.columnsPerLine)) * scale
@@ -329,22 +350,25 @@ enum MovieTicketOrpheumESCPOS {
 
         let title = fields.movie.isEmpty ? " " : fields.movie
         builder.align(.center)
-            .bold(fields.titleStyle.bold)
-            .applyMagnification(width: fields.titleStyle.widthScale, height: fields.titleStyle.heightScale)
+        apply(builder, fields.titleStyle)
         if fields.titleForceSingleLine {
             builder.appendRawTextLine(title).newline()
         } else {
-            builder.text(title).newline()
+            // Box-constrained wrap: lines are pre-fitted in resolve (joined with \n).
+            for line in title.components(separatedBy: "\n") {
+                builder.appendRawTextLine(line).newline()
+            }
         }
         builder.bold(false)
+            .characterSpacing(0)
             .applyMagnification(width: 1, height: 1)
 
         builder.align(.left)
-            .bold(fields.whenStyle.bold)
-            .applyMagnification(width: fields.whenStyle.widthScale, height: fields.whenStyle.heightScale)
-            .text(fields.when)
+        apply(builder, fields.whenStyle)
+        builder.text(fields.when)
             .newline()
             .bold(false)
+            .characterSpacing(0)
             .applyMagnification(width: 1, height: 1)
 
         let right = [fields.ticketType, fields.price].filter { !$0.isEmpty }.joined(separator: " ")
@@ -370,19 +394,19 @@ enum MovieTicketOrpheumESCPOS {
                 printHRI: false
             )
             builder.align(.center)
-                .bold(fields.serialStyle.bold)
-                .applyMagnification(width: fields.serialStyle.widthScale, height: fields.serialStyle.heightScale)
-                .text(fields.barcodeLabel)
+            apply(builder, fields.serialStyle)
+            builder.text(fields.barcodeLabel)
                 .newline()
                 .bold(false)
+                .characterSpacing(0)
                 .applyMagnification(width: 1, height: 1)
         } else {
             builder.align(.center)
-                .bold(fields.serialStyle.bold)
-                .applyMagnification(width: fields.serialStyle.widthScale, height: fields.serialStyle.heightScale)
-                .text(fields.ticketCode)
+            apply(builder, fields.serialStyle)
+            builder.text(fields.ticketCode)
                 .newline()
                 .bold(false)
+                .characterSpacing(0)
                 .applyMagnification(width: 1, height: 1)
         }
     }
@@ -398,6 +422,7 @@ enum MovieTicketOrpheumESCPOS {
         heightScale: Int,
         bold: Bool,
         color: NSColor = .black,
+        characterSpacing: Int = 0,
         draw: Bool = true
     ) -> CGSize {
         let wScale = max(1, widthScale)
@@ -405,18 +430,39 @@ enum MovieTicketOrpheumESCPOS {
         let fontSize: CGFloat = 11
         let font = NSFont(name: bold ? "Menlo-Bold" : "Menlo-Regular", size: fontSize)
             ?? .monospacedSystemFont(ofSize: fontSize, weight: bold ? .bold : .regular)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
-        let natural = (text as NSString).size(withAttributes: attrs)
-        let ink = CGSize(width: natural.width * CGFloat(wScale), height: natural.height * CGFloat(hScale))
+        let inkW = MovieTicketPrintMetrics.inkWidthDots(
+            text: text,
+            widthScale: wScale,
+            characterSpacing: characterSpacing
+        )
+        // Preview font is ~11pt ≈ Font A cell; scale height via context.
+        let naturalH = (text as NSString).size(withAttributes: [.font: font]).height
+        let ink = CGSize(width: inkW, height: naturalH * CGFloat(hScale))
         guard draw else { return ink }
         if let ctx = NSGraphicsContext.current?.cgContext {
             ctx.saveGState()
             ctx.translateBy(x: origin.x, y: origin.y)
             ctx.scaleBy(x: CGFloat(wScale), y: CGFloat(hScale))
-            (text as NSString).draw(at: .zero, withAttributes: attrs)
+            MovieTicketPrintMetrics.drawSpacedFontAText(
+                text,
+                at: .zero,
+                font: font,
+                color: color,
+                widthScale: wScale,
+                characterSpacing: characterSpacing,
+                contextAlreadyScaled: true
+            )
             ctx.restoreGState()
         } else {
-            (text as NSString).draw(in: NSRect(origin: origin, size: ink), withAttributes: attrs)
+            MovieTicketPrintMetrics.drawSpacedFontAText(
+                text,
+                at: origin,
+                font: font,
+                color: color,
+                widthScale: wScale,
+                characterSpacing: characterSpacing,
+                contextAlreadyScaled: false
+            )
         }
         return ink
     }
@@ -438,6 +484,7 @@ enum MovieTicketOrpheumESCPOS {
             widthScale: fields.titleStyle.widthScale,
             heightScale: fields.titleStyle.heightScale,
             bold: fields.titleStyle.bold,
+            characterSpacing: fields.titleStyle.characterSpacing,
             draw: false
         )
         _ = drawScaledText(
@@ -445,7 +492,8 @@ enum MovieTicketOrpheumESCPOS {
             at: NSPoint(x: max(0, (CGFloat(widthDots) - titleInk.width) / 2), y: y),
             widthScale: fields.titleStyle.widthScale,
             heightScale: fields.titleStyle.heightScale,
-            bold: fields.titleStyle.bold
+            bold: fields.titleStyle.bold,
+            characterSpacing: fields.titleStyle.characterSpacing
         )
         y += max(titleAdvance, titleInk.height) + 4
 
@@ -456,7 +504,8 @@ enum MovieTicketOrpheumESCPOS {
             at: NSPoint(x: 8, y: y),
             widthScale: fields.whenStyle.widthScale,
             heightScale: fields.whenStyle.heightScale,
-            bold: fields.whenStyle.bold
+            bold: fields.whenStyle.bold,
+            characterSpacing: fields.whenStyle.characterSpacing
         )
         y += max(whenAdvance, whenInk.height) + 4
 
@@ -468,7 +517,8 @@ enum MovieTicketOrpheumESCPOS {
             at: NSPoint(x: 8, y: y),
             widthScale: fields.admitStyle.widthScale,
             heightScale: fields.admitStyle.heightScale,
-            bold: fields.admitStyle.bold
+            bold: fields.admitStyle.bold,
+            characterSpacing: fields.admitStyle.characterSpacing
         )
         let rightInk = drawScaledText(
             right,
@@ -476,6 +526,7 @@ enum MovieTicketOrpheumESCPOS {
             widthScale: fields.typeStyle.widthScale,
             heightScale: fields.typeStyle.heightScale,
             bold: fields.typeStyle.bold,
+            characterSpacing: fields.typeStyle.characterSpacing,
             draw: false
         )
         _ = drawScaledText(
@@ -483,7 +534,8 @@ enum MovieTicketOrpheumESCPOS {
             at: NSPoint(x: CGFloat(widthDots) - rightInk.width - 8, y: y),
             widthScale: fields.typeStyle.widthScale,
             heightScale: fields.typeStyle.heightScale,
-            bold: fields.typeStyle.bold
+            bold: fields.typeStyle.bold,
+            characterSpacing: fields.typeStyle.characterSpacing
         )
         y += rowH + 6
 
@@ -512,6 +564,7 @@ enum MovieTicketOrpheumESCPOS {
                 widthScale: fields.serialStyle.widthScale,
                 heightScale: fields.serialStyle.heightScale,
                 bold: fields.serialStyle.bold,
+                characterSpacing: fields.serialStyle.characterSpacing,
                 draw: false
             )
             _ = drawScaledText(
@@ -519,7 +572,8 @@ enum MovieTicketOrpheumESCPOS {
                 at: NSPoint(x: max(0, (CGFloat(widthDots) - serialInk.width) / 2), y: y),
                 widthScale: fields.serialStyle.widthScale,
                 heightScale: fields.serialStyle.heightScale,
-                bold: fields.serialStyle.bold
+                bold: fields.serialStyle.bold,
+                characterSpacing: fields.serialStyle.characterSpacing
             )
             y += max(serialAdvance, serialInk.height)
         } else {
@@ -531,6 +585,7 @@ enum MovieTicketOrpheumESCPOS {
                 widthScale: fields.serialStyle.widthScale,
                 heightScale: fields.serialStyle.heightScale,
                 bold: fields.serialStyle.bold,
+                characterSpacing: fields.serialStyle.characterSpacing,
                 draw: false
             )
             _ = drawScaledText(
@@ -538,7 +593,8 @@ enum MovieTicketOrpheumESCPOS {
                 at: NSPoint(x: max(0, (CGFloat(widthDots) - serialInk.width) / 2), y: y),
                 widthScale: fields.serialStyle.widthScale,
                 heightScale: fields.serialStyle.heightScale,
-                bold: fields.serialStyle.bold
+                bold: fields.serialStyle.bold,
+                characterSpacing: fields.serialStyle.characterSpacing
             )
             y += max(serialAdvance, serialInk.height)
         }

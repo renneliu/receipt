@@ -19,7 +19,12 @@ MACOS="${CONTENTS}/MacOS"
 RESOURCES="${CONTENTS}/Resources"
 ENTITLEMENTS="ReceiptPrinter/ReceiptPrinterAppStore.entitlements"
 
+# shellcheck source=version-lib.sh
+source "$(dirname "$0")/version-lib.sh"
+read_version
+
 echo "━━━ App Store 发布构建 ━━━"
+echo "版本: ${MARKETING_VERSION} (build ${BUILD_NUMBER})"
 echo "清理旧产物…"
 rm -rf "${APP_DIR}"
 # 避免与本地 release 二进制互相覆盖混淆：仍用同一 target 名，但用 -DAPPSTORE

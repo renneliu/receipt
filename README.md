@@ -132,9 +132,20 @@ swift test
 脚本会：
 
 1. **备份用户数据**（模板、PDF 规则、设置 plist 等）到 `backups/`
-2. 更新 `VERSION`、打包 `dist/ReceiptPrinter.app`
-3. 再备份一份带新版本号的用户数据
-4. 提交并打标签 `v*`
+2. 更新 `VERSION`
+3. 打包本地正式版 `dist/ReceiptPrinter.app`
+4. **同步发行版**：按 `VERSION` 重新生成 `ReceiptPrinterStore.xcodeproj`，并构建 `dist/ReceiptPrinterStore.app`
+5. 再备份一份带新版本号的用户数据
+6. 提交并打标签 `v*`
+
+本地与发行版共用 `ReceiptPrinter/` 源码；版本号只维护 `VERSION` 一处。改完 `VERSION` 或 `project.yml` 后也可单独同步工程：
+
+```bash
+./scripts/generate-store-xcodeproj.sh
+./scripts/build-appstore.sh
+```
+
+上架请用 Xcode Archive（`open ReceiptPrinterStore.xcodeproj`），`build-appstore.sh` 为 ad-hoc 试跑包。
 
 推送到 GitHub：
 

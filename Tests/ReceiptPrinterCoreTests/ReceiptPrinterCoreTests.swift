@@ -1242,6 +1242,33 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         )
     }
 
+    /// Runtime evidence: "Edit your watchlist…" scored 132 vs "Full Metal Jacket" 131 near SHOWING.
+    func testWebTicketPrefersFullMetalJacketOverWatchlistChrome() {
+        let page = """
+        Account Overview
+        Full Metal Jacket
+        Membership
+        Tax invoice
+        Thank you for your order!
+        TICKETS
+        SHOWING
+        Edit your watchlist and favorite movies
+        Full Metal Jacket
+        Manage Marketing Preferences
+        August 13th, 6:30 pm (Ends at 8:47 pm)
+        Cinema 3
+        Adult Event
+        """
+        XCTAssertEqual(
+            MovieTicketPDFFieldRecognizer.detectFromPageText(.movieTitle, text: page),
+            "Full Metal Jacket"
+        )
+        XCTAssertFalse(
+            (MovieTicketPDFFieldRecognizer.detectFromPageText(.movieTitle, text: page) ?? "")
+                .localizedCaseInsensitiveContains("watchlist")
+        )
+    }
+
     /// Runtime evidence: "👋 Hi, XIAOYU" scored above "A Clockwork Orange" — must prefer the film.
     func testWebTicketPrefersClockworkOrangeOverGreeting() {
         let page = """
@@ -1348,13 +1375,13 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         XCTAssertTrue(payload.contains(Data("Ends at ".utf8)))
 
         // Cinema/seat at stock 2×3 (GS ! 0x12) fits one line; title mirrors that.
-        let titleEl = template.elements.first { $0.fieldKind == .movieTitle }!
-        let hallEl = template.elements.first { $0.fieldKind == .hall }!
+        var migrated = template
+        MovieTicketRitzESCPOS.migratePrintHeightScales(in: &migrated)
         let titleScale = MovieTicketRitzESCPOS.printScale(
-            fontSize: titleEl.fontSize, boxHeight: titleEl.frame.height
+            for: migrated.elements.first { $0.fieldKind == .movieTitle }!
         )
         let hallScale = MovieTicketRitzESCPOS.printScale(
-            fontSize: hallEl.fontSize, boxHeight: hallEl.frame.height
+            for: migrated.elements.first { $0.fieldKind == .hall }!
         )
         XCTAssertEqual(titleScale.width, 2)
         XCTAssertEqual(titleScale.height, 3)
@@ -1368,10 +1395,11 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         let year = Calendar.current.component(.year, from: draft.showDate)
         XCTAssertTrue(payload.contains(Data(", \(year), ".utf8)) || payload.contains(Data("\(year),".utf8)))
 
-        var small = template
+        var small = migrated
         for kind: MovieTicketFieldKind in [.movieTitle, .hall, .seatArea] {
             if let i = small.elements.firstIndex(where: { $0.fieldKind == kind }) {
                 small.elements[i].fontSize = 11
+                small.elements[i].printHeightScale = 1
                 small.elements[i].frame.height = 13
             }
         }
@@ -1446,4 +1474,117 @@ final class ReceiptPrinterCoreTests: XCTestCase {
         ])
         XCTAssertEqual(TMDBMovieMetadataProvider.preferredCertification(from: payload), "M")
     }
+
+    /// IMAX custom: QR X is baked into a full-width GS v 0 strip; beside-text shares that strip.
+    func testIMAXQRPaddedStripAndBesideTextComposite() {
+        var template = MovieTicketTemplate.makeBlank(name: "QR layout")
+        template.layoutStyle = "imaxSydney"
+        let seat = MovieTicketElement(
+            kind: .fieldPlaceholder,
+            frame: SequencePlaceholderFrame(x: 0, y: 100, width: 120, height: 28),
+            alignment: 0,
+            fieldKind: .seatArea
+        )
+        let date = MovieTicketElement(
+            kind: .fieldPlaceholder,
+            frame: SequencePlaceholderFrame(x: 0, y: 140, width: 100, height: 20),
+            alignment: 0,
+            fieldKind: .showDate
+        )
+        let qr = MovieTicketElement(
+            kind: .fieldPlaceholder,
+            frame: SequencePlaceholderFrame(x: 200, y: 100, width: 68, height: 68),
+            alignment: 0,
+            fieldKind: .qrCode
+        )
+        template.elements = [seat, date, qr]
+        var draft = MovieTicketDraft.imaxSydneySample().draftForTicket(at: 0)
+        draft.bookingCode = "QRROW"
+        let config = PrinterConfig.default80mm
+        let payload = MovieTicketIMAXESCPOS.render(template: template, draft: draft, config: config)
+        XCTAssertFalse(payload.isEmpty)
+        let gsv0 = payload.range(of: Data([0x1D, 0x76, 0x30]))
+        XCTAssertNotNil(gsv0)
+        if let r = gsv0 {
+            let header = payload.subdata(in: r.lowerBound..<(r.lowerBound + 8))
+            // Full-width strip: widthBytes == dotsPerLine/8
+            XCTAssertEqual(header[4], UInt8(config.dotsPerLine / 8))
+            XCTAssertEqual(header[5], 0)
+        }
+    }
+
+    /// Quick print: mixed CJK+ASCII wraps re-assert FS & after LF; job starts with USB pad.
+    func testQuickPrintMixedCJKKeepsFSAndAndJobPadding() {
+        let plain = """
+        晓宇，东京分社下半年报了一个重点专题，“日本西南方向备W逻辑对T海威胁探析”，现正式启动。诚邀澳洲分社加盟提供素材，问题清单我发给兄弟过目。个人认为，这种搜集素材工作可交给新宇、艳雯老师或佳琳协助，培养他们对调研的感觉。具体请兄弟定夺，盼支持[Rose]
+
+        选题背景：日本正在为TW海峡爆发武力冲突的情形进行军事应对和民防准备，包括演练向西南方向调兵、以沖縄为前沿强化“战时医疗”体制等，形成了一条清晰的备W逻辑。
+        """
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: AttributedTextView.defaultFontSize)
+        ]
+        let attributed = NSAttributedString(string: plain, attributes: attrs)
+        let config = PrinterConfig.default80mm
+        let payload = RichTextPrintRenderer.renderESCPOS(attributedString: attributed, config: config)
+        XCTAssertFalse(payload.isEmpty)
+        XCTAssertTrue(payload.contains(Data([0x1D, 0x21, 0x11])), "default 28pt → GS ! double")
+        // Leading NUL padding so first USB bulk packet does not eat init + paragraph-1 start.
+        XCTAssertTrue(payload.prefix(96).allSatisfy { $0 == 0 }, "jobStartPadding 96 NULs")
+
+        // Count LF followed by high-bit GBK without FS & / FS . (printer may lose Chinese mode).
+        var rawAfterLF = 0
+        var i = 0
+        let bytes = [UInt8](payload)
+        while i < bytes.count {
+            if bytes[i] == 0x0A, i + 1 < bytes.count {
+                let n = bytes[i + 1]
+                if n >= 0x80 {
+                    rawAfterLF += 1
+                }
+            }
+            i += 1
+        }
+        // Post-fix: mixed wrap lines must re-assert FS & after every LF.
+        XCTAssertEqual(rawAfterLF, 0, "no RAW high-bit after LF (FS& re-asserted)")
+    }
+
+    func testMovieTicketBoxTextFitClipAndWrap() {
+        let config = PrinterConfig.default80mm
+        let paperW: CGFloat = 576
+        let frame = SequencePlaceholderFrame(x: 0, y: 0, width: 120, height: 48)
+        let long = String(repeating: "测", count: 40)
+        let clipped = MovieTicketPrintMetrics.fitTextToElementBox(
+            long,
+            frame: frame,
+            paperWidth: paperW,
+            config: config,
+            widthScale: 1,
+            heightScale: 1,
+            singleLineClip: true
+        )
+        XCTAssertEqual(clipped.count, 1)
+        XCTAssertLessThan(
+            ReceiptTextLayout.displayWidth(clipped[0]),
+            ReceiptTextLayout.displayWidth(long)
+        )
+
+        let wrapped = MovieTicketPrintMetrics.fitTextToElementBox(
+            long,
+            frame: frame,
+            paperWidth: paperW,
+            config: config,
+            widthScale: 1,
+            heightScale: 1,
+            singleLineClip: false
+        )
+        XCTAssertGreaterThan(wrapped.count, 1)
+        let maxLines = MovieTicketPrintMetrics.boxMaxLines(
+            frameHeight: frame.height,
+            paperWidth: paperW,
+            config: config,
+            heightScale: 1
+        )
+        XCTAssertLessThanOrEqual(wrapped.count, maxLines)
+    }
+
 }

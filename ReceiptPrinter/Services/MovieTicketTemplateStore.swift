@@ -318,6 +318,8 @@ final class MovieTicketTemplateStore {
             t.pdfRuleId = old.pdfRuleId
             t.backgroundImageFilename = old.backgroundImageFilename
             t.backgroundScalePercent = old.backgroundScalePercent
+            t.backgroundOffsetX = old.backgroundOffsetX
+            t.backgroundOffsetY = old.backgroundOffsetY
             t.feedLinesBeforeCut = old.feedLinesBeforeCut ?? made.feedLinesBeforeCut
             saveMeta(t)
         } else {
@@ -344,6 +346,8 @@ final class MovieTicketTemplateStore {
             t.pdfRuleId = old.pdfRuleId
             t.backgroundImageFilename = old.backgroundImageFilename
             t.backgroundScalePercent = old.backgroundScalePercent
+            t.backgroundOffsetX = old.backgroundOffsetX
+            t.backgroundOffsetY = old.backgroundOffsetY
             t.feedLinesBeforeCut = old.feedLinesBeforeCut ?? made.feedLinesBeforeCut
             saveMeta(t)
         } else {

@@ -68,6 +68,31 @@ struct MovieTicketMainView: View {
         return session.activeTemplate
     }
 
+    /// QR/barcode elements that need a custom payload field on the main form.
+    private var customCodeElements: [MovieTicketElement] {
+        (template?.elements ?? [])
+            .filter(\.usesCustomCodePayload)
+            .sorted { $0.zIndex < $1.zIndex }
+    }
+
+    private func customCodeFieldTitle(_ el: MovieTicketElement) -> String {
+        let custom = el.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !custom.isEmpty { return custom }
+        switch el.fieldKind {
+        case .qrCode: return L10n.ui("二维码内容")
+        case .barcode: return L10n.ui("条码内容")
+        default: return L10n.ui("扫码内容")
+        }
+    }
+
+    private func customCodeBinding(for id: UUID) -> Binding<String> {
+        let key = id.uuidString
+        return Binding(
+            get: { session.draft.customCodePayloads[key] ?? "" },
+            set: { session.draft.customCodePayloads[key] = $0 }
+        )
+    }
+
     var body: some View {
         GeometryReader { geo in
             HSplitView {
@@ -331,6 +356,17 @@ struct MovieTicketMainView: View {
                         }
                     }
                 }
+
+                ForEach(customCodeElements) { el in
+                    labeled(customCodeFieldTitle(el)) {
+                        TextField(
+                            L10n.ui("扫码内容"),
+                            text: customCodeBinding(for: el.id)
+                        )
+                        .textFieldStyle(.roundedBorder)
+                    }
+                }
+
                 labeled(L10n.ui("日期")) {
                     DatePicker("", selection: $session.draft.showDate, displayedComponents: .date)
                         .labelsHidden()

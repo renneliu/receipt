@@ -84,8 +84,10 @@ final class MovieTicketSession: ObservableObject {
     }
 
     func beginEditing(_ template: MovieTicketTemplate) {
-        editingTemplate = template
-        loadImages(for: template)
+        var t = template
+        MovieTicketRitzESCPOS.migratePrintHeightScales(in: &t)
+        editingTemplate = t
+        loadImages(for: t)
         markEditingClean()
     }
 

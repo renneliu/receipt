@@ -29,11 +29,11 @@ case "$KIND" in
         ;;
 esac
 
-echo "━━━ 0/5 备份用户配置与模板 ━━━"
+echo "━━━ 0/6 备份用户配置与模板 ━━━"
 ./scripts/backup-userdata.sh --label "pre-release-${KIND}"
 
 echo ""
-echo "━━━ 1/5 更新版本号 ━━━"
+echo "━━━ 1/6 更新版本号 ━━━"
 ./scripts/bump-version.sh "$KIND"
 # shellcheck source=version-lib.sh
 source scripts/version-lib.sh
@@ -41,15 +41,21 @@ read_version
 TAG="v${MARKETING_VERSION}"
 
 echo ""
-echo "━━━ 2/5 打包正式版 ━━━"
+echo "━━━ 2/6 打包本地正式版 ━━━"
 ./scripts/build-app.sh
 
 echo ""
-echo "━━━ 3/5 再次备份（带新版本号） ━━━"
+echo "━━━ 3/6 同步发行版（Store）工程与构建 ━━━"
+# 同一套 ReceiptPrinter/ 源码；重新生成 xcodeproj 写入 VERSION，并打 App Store 定义包
+./scripts/generate-store-xcodeproj.sh
+./scripts/build-appstore.sh
+
+echo ""
+echo "━━━ 4/6 再次备份（带新版本号） ━━━"
 ./scripts/backup-userdata.sh --label "release"
 
 echo ""
-echo "━━━ 4/5 提交到 Git ━━━"
+echo "━━━ 5/6 提交到 Git ━━━"
 git add -A
 # userdata 压缩包在 .gitignore；不要误加
 git reset -q -- backups/ReceiptPrinter-userdata-*.tar.gz 2>/dev/null || true
@@ -69,14 +75,16 @@ else
 fi
 
 echo ""
-echo "━━━ 5/5 推送到 GitHub ━━━"
+echo "━━━ 6/6 推送到 GitHub ━━━"
 echo "请执行（或复制到终端）："
 echo ""
 echo "  git push origin main"
 echo "  git push origin ${TAG}"
 echo ""
 echo "完成！应用版本: ${MARKETING_VERSION} (build ${BUILD_NUMBER})"
-echo "安装包: dist/ReceiptPrinter.app"
+echo "本地包:   dist/ReceiptPrinter.app"
+echo "发行包:   dist/ReceiptPrinterStore.app  （ad-hoc；上架请用 Xcode Archive）"
 echo "用户数据备份: backups/ReceiptPrinter-userdata-*.tar.gz"
 echo ""
 echo "记得在 CHANGELOG.md 顶部补一行本次更新说明。"
+echo "上架: open ReceiptPrinterStore.xcodeproj → Product → Archive"

@@ -21,6 +21,7 @@ enum MovieTicketRitzESCPOS {
         var heightScale: Int = 1
         var bold: Bool = false
         var align: ESCPOSAlign = .left
+        var characterSpacing: Int = 0
     }
 
     private struct TicketStyles {
@@ -81,21 +82,40 @@ enum MovieTicketRitzESCPOS {
         let hallEl = firstField(template, .hall)
         let hallText = hallEl?.resolvedHallText(from: draft)
             ?? draft.hall.trimmingCharacters(in: .whitespacesAndNewlines)
+        let barcodeEl = firstField(template, .barcode)
+        let barcodeRaw: String = {
+            if let barcodeEl {
+                return barcodeEl.resolvedCodePayload(from: draft)
+            }
+            return serial
+        }()
         return ResolvedTicket(
             cinema: cinemaName(from: template),
             hall: hallText,
-            title: draft.printedMovieTitle,
+            title: {
+                let raw = draft.printedMovieTitle
+                guard let titleEl = firstField(template, .movieTitle) else {
+                    return raw.isEmpty ? " " : raw
+                }
+                return MovieTicketPrintMetrics.fitTextToElementBox(
+                    raw.isEmpty ? " " : raw,
+                    frame: titleEl.frame,
+                    paperWidth: template.paperSize.width,
+                    config: config,
+                    widthScale: styles.title.widthScale,
+                    heightScale: styles.title.heightScale,
+                    singleLineClip: titleEl.singleLineClip == true
+                ).joined(separator: "\n")
+            }(),
             startLine: startDateTime(draft: draft, template: template),
             endLine: endDateTime(draft: draft, template: template),
             seat: seatText(draft: draft, template: template),
             typePrice: typeAndPrice(draft: draft),
             serial: serial,
-            barcodePayload: barcodePayload(from: serial),
+            barcodePayload: barcodePayload(from: barcodeRaw),
             styles: styles,
-            titleClipCols: titleClipColumns(
-                template: template, config: config, widthScale: styles.title.widthScale
-            ),
-            barcodeHeight: barcodeHeightDots(firstField(template, .barcode)),
+            titleClipCols: nil,
+            barcodeHeight: barcodeHeightDots(barcodeEl),
             dashStyle: dashStyle,
             dashContent: dashContent
         )
@@ -329,8 +349,11 @@ enum MovieTicketRitzESCPOS {
         let font = NSFont(name: style.bold ? "Menlo-Bold" : "Menlo-Regular", size: baseSize)
             ?? .monospacedSystemFont(ofSize: baseSize, weight: style.bold ? .bold : .regular)
 
-        let colWidth = max(1, ReceiptTextLayout.displayWidth(text))
-        let inkW = CGFloat(colWidth) * MovieTicketPrintMetrics.fontACellDots.width * CGFloat(wScale)
+        let inkW = MovieTicketPrintMetrics.inkWidthDots(
+            text: text,
+            widthScale: wScale,
+            characterSpacing: style.characterSpacing
+        )
         var x: CGFloat = 0
         switch style.align {
         case .center: x = max(0, (CGFloat(widthDots) - inkW) / 2)
@@ -338,20 +361,29 @@ enum MovieTicketRitzESCPOS {
         case .left: x = 0
         }
 
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor.black
-        ]
         if let ctx = NSGraphicsContext.current?.cgContext {
             ctx.saveGState()
             ctx.translateBy(x: x, y: y)
             ctx.scaleBy(x: CGFloat(wScale), y: CGFloat(hScale))
-            (text as NSString).draw(at: .zero, withAttributes: attrs)
+            MovieTicketPrintMetrics.drawSpacedFontAText(
+                text,
+                at: .zero,
+                font: font,
+                color: .black,
+                widthScale: wScale,
+                characterSpacing: style.characterSpacing,
+                contextAlreadyScaled: true
+            )
             ctx.restoreGState()
         } else {
-            (text as NSString).draw(
-                in: NSRect(x: x, y: y, width: inkW, height: cellH),
-                withAttributes: attrs
+            MovieTicketPrintMetrics.drawSpacedFontAText(
+                text,
+                at: CGPoint(x: x, y: y),
+                font: font,
+                color: .black,
+                widthScale: wScale,
+                characterSpacing: style.characterSpacing,
+                contextAlreadyScaled: false
             )
         }
         y += cellH
@@ -381,11 +413,8 @@ enum MovieTicketRitzESCPOS {
 
         apply(builder, styles.title)
         let titleText = title.isEmpty ? " " : title
-        if let cols = titleClipCols {
-            // Single line: clip to the box width, no wrap to a second line.
-            builder.appendRawTextLine(ReceiptTextLayout.clip(titleText, maxColumns: cols)).newline()
-        } else {
-            builder.text(titleText).newline()
+        for line in titleText.components(separatedBy: "\n") {
+            builder.appendRawTextLine(line).newline()
         }
 
         apply(builder, styles.start)
@@ -413,6 +442,7 @@ enum MovieTicketRitzESCPOS {
     private static func apply(_ builder: ESCPOSBuilder, _ style: FieldStyle) {
         builder.align(style.align)
             .bold(style.bold)
+            .characterSpacing(UInt8(MovieTicketPrintMetrics.clampedCharacterSpacing(style.characterSpacing)))
             .applyMagnification(width: style.widthScale, height: style.heightScale)
     }
 
@@ -426,15 +456,49 @@ enum MovieTicketRitzESCPOS {
 
     /// Printed magnification (width, height) the built-in font will use for an element.
     /// The built-in font only scales in whole steps, so this is always 1…3 per axis.
-    /// - width comes from the font size (×1/×2/×3),
-    /// - height follows the box height but is clamped to `[width, width+1]` so text is
-    ///   never distorted (e.g. never a thin-tall ×1 wide / ×3 tall), while still letting
-    ///   a deliberately tall box give the movie title its ×2 wide / ×3 tall stretch.
-    static func printScale(fontSize: CGFloat, boxHeight: CGFloat) -> (width: Int, height: Int) {
+    /// - width comes from `fontSize` (×1/×2/×3),
+    /// - height comes from `printHeightScale` when set; otherwise legacy box-height inference
+    ///   (used only until migration persists an explicit value).
+    /// Height is clamped to `[width, width+1]` so text is never badly distorted.
+    static func printScale(
+        fontSize: CGFloat,
+        boxHeight: CGFloat,
+        printHeightScale: Int? = nil
+    ) -> (width: Int, height: Int) {
         let w: Int = fontSize <= 11 ? 1 : (fontSize <= 16 ? 2 : 3)
-        let boxHS = max(1, min(3, Int((boxHeight / 12).rounded())))
-        let h = max(w, min(min(3, boxHS), w + 1))
+        let rawH: Int
+        if let stored = printHeightScale {
+            rawH = max(1, min(3, stored))
+        } else {
+            rawH = max(1, min(3, Int((boxHeight / 12).rounded())))
+        }
+        let h = max(w, min(min(3, rawH), w + 1))
         return (w, h)
+    }
+
+    /// Preferred entry: uses explicit `printHeightScale` when present.
+    static func printScale(for el: MovieTicketElement) -> (width: Int, height: Int) {
+        printScale(
+            fontSize: el.fontSize,
+            boxHeight: el.frame.height,
+            printHeightScale: el.printHeightScale
+        )
+    }
+
+    /// Persist legacy box→height inference so later box edits no longer change GS ! height.
+    static func migratePrintHeightScales(in template: inout MovieTicketTemplate) {
+        for i in template.elements.indices {
+            let el = template.elements[i]
+            guard el.kind != .logo,
+                  el.fieldKind != .barcode,
+                  el.fieldKind != .qrCode,
+                  el.printHeightScale == nil else { continue }
+            template.elements[i].printHeightScale = printScale(
+                fontSize: el.fontSize,
+                boxHeight: el.frame.height,
+                printHeightScale: nil
+            ).height
+        }
     }
 
     private static func escAlign(_ alignment: Int) -> ESCPOSAlign {
@@ -447,12 +511,13 @@ enum MovieTicketRitzESCPOS {
 
     private static func fieldStyle(_ el: MovieTicketElement?) -> FieldStyle {
         guard let el else { return FieldStyle() }
-        let scale = printScale(fontSize: el.fontSize, boxHeight: el.frame.height)
+        let scale = printScale(for: el)
         return FieldStyle(
             widthScale: scale.width,
             heightScale: scale.height,
             bold: el.isBold,
-            align: escAlign(el.alignment)
+            align: escAlign(el.alignment),
+            characterSpacing: MovieTicketPrintMetrics.clampedCharacterSpacing(el.characterSpacing)
         )
     }
 
@@ -469,10 +534,10 @@ enum MovieTicketRitzESCPOS {
     private static func titleClipColumns(
         template: MovieTicketTemplate, config: PrinterConfig, widthScale: Int
     ) -> Int? {
-        // Title defaults to single-line clip; only an explicit `false` re-enables wrap.
+        // Title single-line clip only when explicitly enabled; nil = wrap.
         guard let el = template.elements.first(where: {
             $0.kind == .fieldPlaceholder && $0.fieldKind == .movieTitle
-        }), el.singleLineClip != false else { return nil }
+        }), el.singleLineClip == true else { return nil }
         let scale = CGFloat(max(1, widthScale))
         let paperW = max(1, template.paperSize.width)
         let charDots = CGFloat(config.dotsPerLine) / CGFloat(max(1, config.columnsPerLine)) * scale

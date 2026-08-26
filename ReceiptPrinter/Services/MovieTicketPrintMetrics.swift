@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Paper-point sizes for ESC/POS Font A blocks, matching what the printer actually emits.
@@ -64,6 +65,63 @@ enum MovieTicketPrintMetrics {
         if width < (w1 + w2) / 2 { return 1 }
         if width < (w2 + w3) / 2 { return 2 }
         return 3
+    }
+
+    /// Clamp template `characterSpacing` to the ESC SP range used by printers.
+    static func clampedCharacterSpacing(_ value: Int) -> Int {
+        max(0, min(32, value))
+    }
+
+    /// Total ink width in dots for Font A text including right-side spacing after each glyph.
+    static func inkWidthDots(
+        text: String,
+        widthScale: Int,
+        characterSpacing: Int
+    ) -> CGFloat {
+        let wScale = CGFloat(max(1, widthScale))
+        let cellW = fontACellDots.width * wScale
+        let gap = CGFloat(clampedCharacterSpacing(characterSpacing))
+        var width: CGFloat = 0
+        for ch in text {
+            let cols = max(1, ReceiptTextLayout.displayWidth(String(ch)))
+            width += CGFloat(cols) * cellW + gap
+        }
+        return width
+    }
+
+    /// Draw Font A–style text; `characterSpacing` matches ESC SP (absolute dots after each glyph).
+    /// When `contextAlreadyScaled` is true, the CGContext already has width/height magnification —
+    /// glyphs use 1× cell metrics and spacing is divided by widthScale so final dots stay absolute.
+    static func drawSpacedFontAText(
+        _ text: String,
+        at origin: CGPoint,
+        font: NSFont,
+        color: NSColor,
+        widthScale: Int,
+        characterSpacing: Int,
+        contextAlreadyScaled: Bool
+    ) {
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: color
+        ]
+        let wScale = max(1, widthScale)
+        let cellW: CGFloat
+        let gap: CGFloat
+        if contextAlreadyScaled {
+            cellW = fontACellDots.width
+            gap = CGFloat(clampedCharacterSpacing(characterSpacing)) / CGFloat(wScale)
+        } else {
+            cellW = fontACellDots.width * CGFloat(wScale)
+            gap = CGFloat(clampedCharacterSpacing(characterSpacing))
+        }
+        var x = origin.x
+        for ch in text {
+            let s = String(ch)
+            (s as NSString).draw(at: CGPoint(x: x, y: origin.y), withAttributes: attrs)
+            let cols = max(1, ReceiptTextLayout.displayWidth(s))
+            x += CGFloat(cols) * cellW + gap
+        }
     }
 
     /// Typical column count used when sizing a hall invert badge.
@@ -150,9 +208,7 @@ enum MovieTicketPrintMetrics {
         if el.kind == .logo {
             return max(24, el.frame.height)
         }
-        let scale = MovieTicketRitzESCPOS.printScale(
-            fontSize: el.fontSize, boxHeight: el.frame.height
-        )
+        let scale = MovieTicketRitzESCPOS.printScale(for: el)
         return lineHeightPoints(
             heightScale: scale.height,
             paperWidth: paperWidth,
@@ -172,5 +228,69 @@ enum MovieTicketPrintMetrics {
             let h = placeholderHeight(for: el, paperWidth: paperW, config: config)
             template.elements[i].frame.height = h
         }
+    }
+
+    // MARK: - Element box = printable region
+
+    /// How many Font A columns fit in the element box width at the given print width scale.
+    static func boxColumns(
+        frameWidth: CGFloat,
+        paperWidth: CGFloat,
+        config: PrinterConfig,
+        widthScale: Int
+    ) -> Int {
+        let scale = CGFloat(max(1, widthScale))
+        let paperW = max(1, paperWidth)
+        let charDots = CGFloat(config.dotsPerLine) / CGFloat(max(1, config.columnsPerLine)) * scale
+        let boxDots = frameWidth * CGFloat(config.dotsPerLine) / paperW
+        let cols = Int((boxDots / max(1, charDots)).rounded(.down))
+        return max(1, min(cols, config.columnsPerLine / max(1, Int(scale))))
+    }
+
+    /// How many printed text lines fit in the element box height at the given height scale.
+    static func boxMaxLines(
+        frameHeight: CGFloat,
+        paperWidth: CGFloat,
+        config: PrinterConfig,
+        heightScale: Int
+    ) -> Int {
+        let lineH = lineHeightPoints(
+            heightScale: heightScale,
+            paperWidth: paperWidth,
+            dotsPerLine: config.dotsPerLine
+        )
+        return max(1, Int((frameHeight / max(1, lineH)).rounded(.down)))
+    }
+
+    /// Fit text into an element box: single-line clip, or wrap within width and clip by height.
+    /// Always emit via `appendRawTextLine` (do not re-wrap to full paper width).
+    static func fitTextToElementBox(
+        _ text: String,
+        frame: SequencePlaceholderFrame,
+        paperWidth: CGFloat,
+        config: PrinterConfig,
+        widthScale: Int,
+        heightScale: Int,
+        singleLineClip: Bool
+    ) -> [String] {
+        let cols = boxColumns(
+            frameWidth: frame.width,
+            paperWidth: paperWidth,
+            config: config,
+            widthScale: widthScale
+        )
+        if singleLineClip {
+            let clipped = ReceiptTextLayout.clip(text, maxColumns: cols)
+            return [clipped.isEmpty ? " " : clipped]
+        }
+        let maxLines = boxMaxLines(
+            frameHeight: frame.height,
+            paperWidth: paperWidth,
+            config: config,
+            heightScale: heightScale
+        )
+        let wrapped = ReceiptTextLayout.wrap(text, maxColumns: cols)
+        let lines = Array(wrapped.prefix(maxLines))
+        return lines.isEmpty ? [" "] : lines.map { $0.isEmpty ? " " : $0 }
     }
 }

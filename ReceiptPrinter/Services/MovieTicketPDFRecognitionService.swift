@@ -771,9 +771,16 @@ enum MovieTicketPDFRecognitionService {
     }
 
     private static func containsClockTime(_ s: String) -> Bool {
-        s.range(
+        if s.range(
             of: #"\d{1,2}:\d{2}\s*[AP]M"#,
             options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            return true
+        }
+        // 24-hour clocks (Event / some cinema PDFs): "18:30"
+        return s.range(
+            of: #"\b([01]?\d|2[0-3]):[0-5]\d\b"#,
+            options: .regularExpression
         ) != nil
     }
 
@@ -1562,17 +1569,18 @@ enum MovieTicketPDFRecognitionService {
     }
 
     private static func firstClockOnlyMatch(in text: String) -> String? {
+        let patterns = [
+            #"(?i)\d{1,2}:\d{2}\s*[AP]M"#,
+            #"\b([01]?\d|2[0-3]):[0-5]\d\b"#
+        ]
         // Prefer the clock right after a "Time" label (IMAX ticket body).
         if let range = firstMatchRange(of: "Time", in: text) {
             let after = String(text[range.upperBound...])
-            if let clock = firstRegexMatch(
-                in: after,
-                patterns: [#"(?i)\d{1,2}:\d{2}\s*[AP]M"#]
-            ) {
+            if let clock = firstRegexMatch(in: after, patterns: patterns) {
                 return clock
             }
         }
-        return firstRegexMatch(in: text, patterns: [#"(?i)\d{1,2}:\d{2}\s*[AP]M"#])
+        return firstRegexMatch(in: text, patterns: patterns)
     }
 
     private static func normalizeClockToken(_ time: String) -> String {
@@ -1598,6 +1606,7 @@ enum MovieTicketPDFRecognitionService {
         ]
         if allowClockOnly {
             patterns.append(#"(?i)\d{1,2}:\d{2}\s*(?:[AP]M|am|pm)\b"#)
+            patterns.append(#"\b([01]?\d|2[0-3]):[0-5]\d\b"#)
         }
         return firstRegexMatch(in: text, patterns: patterns)
     }

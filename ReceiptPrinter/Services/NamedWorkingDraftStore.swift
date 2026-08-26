@@ -85,7 +85,7 @@ enum NamedWorkingDraftStore {
         backgroundScalePercent: Double,
         autoNumber: QuickPrintAutoNumber
     ) -> NamedWorkingDraft {
-        var record = NamedWorkingDraft(
+        let record = NamedWorkingDraft(
             module: "quickPrint",
             name: name,
             previewText: previewText.isEmpty ? L10n.ui("（空白）") : String(previewText.prefix(120)),
@@ -117,7 +117,6 @@ enum NamedWorkingDraftStore {
         if let data = try? JSONEncoder().encode(meta) {
             try? data.write(to: dir.appendingPathComponent("meta.json"), options: .atomic)
         }
-        record.payloadJSON = nil
         var all = loadAll(module: "quickPrint")
         all.insert(record, at: 0)
         saveIndex(all, module: "quickPrint")
@@ -153,7 +152,7 @@ enum NamedWorkingDraftStore {
         body: NSAttributedString,
         metaJSON: Data?
     ) -> NamedWorkingDraft {
-        var record = NamedWorkingDraft(
+        let record = NamedWorkingDraft(
             module: module,
             name: name,
             previewText: previewText.isEmpty ? L10n.ui("（空白）") : String(previewText.prefix(120)),
@@ -204,7 +203,7 @@ enum NamedWorkingDraftStore {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let json = try? encoder.encode(cart)
-        var record = NamedWorkingDraft(
+        let record = NamedWorkingDraft(
             module: "posReceipt",
             name: name,
             previewText: previewText.isEmpty ? L10n.ui("（空白）") : String(previewText.prefix(120)),
@@ -242,7 +241,7 @@ enum NamedWorkingDraftStore {
         editorFontSize: Double
     ) -> NamedWorkingDraft {
         let dirPlaceholder = UUID()
-        var record = NamedWorkingDraft(
+        let record = NamedWorkingDraft(
             module: "spreadsheetSequence",
             name: name,
             previewText: previewText.isEmpty ? L10n.ui("（空白）") : String(previewText.prefix(120)),
@@ -277,7 +276,6 @@ enum NamedWorkingDraftStore {
         if let data = try? JSONEncoder().encode(meta) {
             try? data.write(to: dir.appendingPathComponent("meta.json"), options: .atomic)
         }
-        record.payloadJSON = nil
         if let sizeData = try? JSONEncoder().encode(["editorFontSize": editorFontSize]) {
             try? sizeData.write(to: dir.appendingPathComponent("extra.json"), options: .atomic)
         }

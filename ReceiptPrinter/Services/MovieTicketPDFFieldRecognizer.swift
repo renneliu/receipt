@@ -222,7 +222,6 @@ enum MovieTicketPDFFieldRecognizer {
             extractKeyword: ""
         )
     }
-
     private static func looksLikeSessionOrVenueLine(_ line: String) -> Bool {
         if MovieTicketPDFRecognitionService.dateOnly(from: line) != nil { return true }
         if MovieTicketPDFRecognitionService.clockOnly(from: line) != nil { return true }
@@ -240,6 +239,8 @@ enum MovieTicketPDFFieldRecognizer {
         let words = line.split(whereSeparator: { $0.isWhitespace })
         if words.count >= 2 { score += 8 }
         if words.count >= 3 { score += 10 }
+        if words.count >= 6 { score -= 25 } // Long instructional chrome, not film titles.
+        if words.count >= 8 { score -= 20 }
         if line.range(
             of: #"^(The|A|An)\s+"#,
             options: [.regularExpression, .caseInsensitive]
@@ -251,6 +252,10 @@ enum MovieTicketPDFFieldRecognizer {
         // Single generic two-word UI labels stay weak even if not blacklisted yet.
         if words.count == 2, line.allSatisfy({ $0.isLetter || $0.isWhitespace || $0 == "," }) {
             score -= 5
+        }
+        let lower = line.lowercased()
+        if lower.contains(" your ") || lower.hasPrefix("your ") {
+            score -= 30
         }
         return score
     }
@@ -561,10 +566,11 @@ enum MovieTicketPDFFieldRecognizer {
             "SHOWING", "SESSION", "SESSION DATE", "SESSION TIME", "TICKETS", "ORDERS",
             "HOME", "LOGOUT", "TAX INVOICE", "INVOICE", "ORDER", "ORDERS",
             "ACCOUNT OVERVIEW", "ACCOUNT", "OVERVIEW", "MY ACCOUNT", "MY TICKETS",
-            "ORDER HISTORY", "ORDER DETAILS", "PAYMENT", "CHECKOUT", "CART",
+            "MY MOVIES", "ORDER HISTORY", "ORDER DETAILS", "PAYMENT", "CHECKOUT", "CART",
             "SIGN IN", "SIGN OUT", "LOG IN", "LOG OUT", "PROFILE", "SETTINGS",
             "HELP", "SUPPORT", "MEMBERSHIP", "GIFT CARDS", "LOCATIONS",
-            "CURRENT UPCOMING", "CURRENT", "UPCOMING"
+            "CURRENT UPCOMING", "CURRENT", "UPCOMING", "PAST",
+            "PAYMENT INFORMATION", "ACCOUNT INFORMATION", "ORDER HISTORY 1"
         ]
         if labels.contains(upper) || upper.hasPrefix("THANK YOU") || upper.contains("% OFF") {
             return false
@@ -591,6 +597,16 @@ enum MovieTicketPDFFieldRecognizer {
             || upper.contains("CURRENT UPCOMING") || upper.hasPrefix("CURRENT ")
             || upper.contains("USHER") || upper.contains("POPCORN")
             || t.contains("👋") {
+            return false
+        }
+        // Imperative / settings chrome from Dendy account sidebar (runtime: beat film titles).
+        let lower = t.lowercased()
+        if lower.hasPrefix("edit ") || lower.hasPrefix("manage ") || lower.hasPrefix("view ")
+            || lower.contains("watchlist") || lower.contains("favorite movies")
+            || lower.contains("marketing preferences") || lower.contains("contact information")
+            || lower.contains("payment information") || lower.contains("gift cards")
+            || lower.contains("past purchases") || lower.contains("saved credit")
+            || lower.contains("order history") {
             return false
         }
         // Must contain at least one letter (reject icon-only / digit-only runs).

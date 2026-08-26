@@ -290,7 +290,11 @@ enum RichTextPrintRenderer {
     /// Native-text ESC/POS from the shared layout line list (the path that prints Chinese on this POS-80).
     static func renderESCPOS(attributedString: NSAttributedString, config: PrinterConfig) -> Data {
         let lines = layoutLines(from: attributedString, config: config)
-        let builder = ESCPOSBuilder(config: config).initialize()
+        // POS-80 drops the first ~64-byte USB bulk packet (movie/POS paths already pad).
+        // Without padding, quick-print loses init + start of paragraph 1 (diag 20260825-184858).
+        let builder = ESCPOSBuilder(config: config)
+            .jobStartPadding(bytes: 96)
+            .initialize()
         // Same-style soft wraps as one block. Encoding restored to proven FS ./FS & path
         // (successful diag 20260714-224905) with CJK-leading mixed-line exception.
         emitBatched(lines, into: builder, config: config)
@@ -316,6 +320,7 @@ enum RichTextPrintRenderer {
         paperWidthPoints: CGFloat = 0
     ) -> Data {
         let builder = ESCPOSBuilder(config: config)
+        builder.jobStartPadding(bytes: 96)
         let feedBeforeCut = max(config.feedLinesBeforeCut, minimumFeedsBeforeCut)
         let paperW = paperWidthPoints > 1
             ? paperWidthPoints

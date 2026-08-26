@@ -73,7 +73,12 @@ struct MovieTicketTemplateView: View {
                 session.beginEditing(t)
                 undoStack = []
             }
-            syncPlaceholderSizesToPrint(recordUndo: false)
+            // Do not auto-snap box sizes to print metrics — the frame is the print
+            // region and must stay independent of 打印宽/高.
+            if var t = session.editingTemplate {
+                MovieTicketRitzESCPOS.migratePrintHeightScales(in: &t)
+                session.editingTemplate = t
+            }
             session.markEditingClean()
         }
         .onChange(of: showPDFRegionEditor) { _, isOpen in
@@ -140,8 +145,8 @@ struct MovieTicketTemplateView: View {
             templateChrome
             toolBar
             Text(session.editingTemplate?.usesIMAXSydneyLayout == true
-                 ? L10n.ui("IMAX：Y 控制行序；票型+票价同行，左右位置跟画布 X。列表 ⌘/⇧ 多选。")
-                 : L10n.ui("列表支持 ⌘加减选 / ⇧连选；多选后可用方向键微调；拖拽可批量移动。"))
+                 ? L10n.ui("IMAX：Y 控制行序；票型+票价同行，左右位置跟画布 X。列表 ⌘/⇧ 多选。拖拽时按住 ⌥ 可关闭网格吸附。")
+                 : L10n.ui("列表支持 ⌘加减选 / ⇧连选；多选后可用方向键微调；拖拽可批量移动。拖拽时按住 ⌥ 可关闭网格吸附。"))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             if selectedElementIds.count > 1 {
@@ -333,17 +338,40 @@ struct MovieTicketTemplateView: View {
             Rectangle()
                 .fill(Color.white)
                 .frame(width: paper.width, height: paper.height)
+            // Same underlay as POS designer / print compose — was missing, so imports
+            // lived in session.backgroundImage but never appeared on the editor canvas.
+            if let bg = session.backgroundImage {
+                let scale = max(
+                    SequenceLogoItem.minScalePercent,
+                    min(SequenceLogoItem.maxScalePercent, session.editingTemplate?.backgroundScalePercent ?? 100)
+                ) / 100
+                let ox = session.editingTemplate?.backgroundOffsetX ?? 0
+                let oy = session.editingTemplate?.backgroundOffsetY ?? 0
+                Image(nsImage: bg)
+                    .resizable()
+                    .interpolation(.none)
+                    .scaledToFit()
+                    .scaleEffect(scale, anchor: .topLeading)
+                    .frame(width: paper.width, height: paper.height)
+                    .offset(x: ox, y: oy)
+                    .opacity(0.9)
+                    .allowsHitTesting(false)
+            }
             if gridOn {
                 MovieTicketGridBackground(size: paper, step: gridSize)
             }
             ForEach(session.editingTemplate?.elements.sorted(by: { $0.zIndex < $1.zIndex }) ?? []) { el in
                 elementOverlay(el, paper: paper)
                     .id(el.id)
+                    // Float selected boxes above others for hit-testing without changing print z-order.
+                    .zIndex(selectedElementIds.contains(el.id) ? 10_000 + Double(el.zIndex) : Double(el.zIndex))
             }
         }
+        .coordinateSpace(name: MovieTicketCanvasSpace.name)
         .frame(width: paper.width, height: paper.height)
         .clipped()
         .border(Color.secondary.opacity(0.4))
+        .contentShape(Rectangle())
         .onTapGesture { clearSelection() }
     }
 
@@ -388,9 +416,6 @@ struct MovieTicketTemplateView: View {
                 updateElement(id: el.id, recordUndo: false) { $0.frame = newFrame }
             }
         )
-        let syncPrintFromBox: () -> Void = {
-            syncPrintScaleFromBoxWidth(id: el.id)
-        }
         let selected = Binding<Bool>(
             get: { selectedElementIds.contains(el.id) },
             set: { if $0 { selectElement(el.id, additive: false) } }
@@ -400,6 +425,12 @@ struct MovieTicketTemplateView: View {
         let config = appState.settings.printerConfig
         let minH = MovieTicketPrintMetrics.lineHeightPoints(
             heightScale: 1, paperWidth: paper.width, dotsPerLine: config.dotsPerLine
+        )
+        let textScale = MovieTicketRitzESCPOS.printScale(for: el)
+        let textLineH = MovieTicketPrintMetrics.lineHeightPoints(
+            heightScale: textScale.height,
+            paperWidth: paper.width,
+            dotsPerLine: config.dotsPerLine
         )
 
         if el.kind == .logo {
@@ -411,9 +442,7 @@ struct MovieTicketTemplateView: View {
                         frame: binding,
                         isSelected: selected,
                         paperSize: paper,
-                        onFrameChanged: {
-                            syncLogoScaleFromFrame(id: el.id)
-                        },
+                        onFrameChanged: nil,
                         onInteractionChanged: { active in
                             noteCanvasInteraction(active)
                         },
@@ -442,8 +471,8 @@ struct MovieTicketTemplateView: View {
                         },
                         onTranslateEnded: {
                             endGroupTranslate()
-                            syncLogoScaleFromFrame(id: el.id)
-                        }
+                        },
+                        gestureCoordinateSpaceName: MovieTicketCanvasSpace.name
                     )
                 )
             }
@@ -462,6 +491,7 @@ struct MovieTicketTemplateView: View {
                     chromeOnly: false,
                     placeholderMode: true,
                     isLocked: el.isLocked,
+                    singleLineClip: false,
                     minSize: CGSize(width: 12, height: minH),
                     onInteractionChanged: { active in
                         noteCanvasInteraction(active)
@@ -488,7 +518,9 @@ struct MovieTicketTemplateView: View {
                 frame: binding,
                 isSelected: selected,
                 title: elementTitle(el),
-                previewText: elementPlaceholderLabel(el),
+                previewText: el.kind == .textBox
+                    ? canvasPrintAccurateText(el, paper: paper)
+                    : elementPlaceholderLabel(el),
                 fontSize: el.fontSize,
                 textAlignment: el.alignment,
                 paperSize: paper,
@@ -496,10 +528,13 @@ struct MovieTicketTemplateView: View {
                 gridSize: gridSize,
                 accent: accent(for: el),
                 chromeOnly: false,
-                placeholderMode: true,
+                placeholderMode: el.kind != .textBox,
                 isLocked: el.isLocked,
+                singleLineClip: el.singleLineClip == true,
+                printAccurateLines: el.kind == .textBox,
+                printLineHeight: el.kind == .textBox ? textLineH : 0,
                 minSize: CGSize(width: 12, height: minH),
-                onFrameChanged: syncPrintFromBox,
+                onFrameChanged: nil,
                 onInteractionChanged: { active in
                     noteCanvasInteraction(active)
                 },
@@ -517,7 +552,6 @@ struct MovieTicketTemplateView: View {
                 },
                 onTranslateEnded: {
                     endGroupTranslate()
-                    syncPrintFromBox()
                 }
             )
         )
@@ -526,26 +560,35 @@ struct MovieTicketTemplateView: View {
     // MARK: - Inspector
 
     private var inspectorColumn: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                templateProps
-                Divider()
-                if selectedElementIds.count > 1 {
-                    multiSelectInspector
-                } else if let id = lastSelectedId ?? selectedElementIds.first,
-                          session.editingTemplate?.elements.contains(where: { $0.id == id }) == true {
-                    elementInspector(elementId: id)
-                } else {
-                    Text(L10n.ui("从画布或下方列表选中元素以编辑属性；⌘点击可多选"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            // Element list stays pinned at the top so selection never jumps the panel down.
+            elementListSection
+                .padding(.horizontal)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+                .frame(maxHeight: 220, alignment: .top)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    templateProps
+                    Divider()
+                    if selectedElementIds.count > 1 {
+                        multiSelectInspector
+                    } else if let id = lastSelectedId ?? selectedElementIds.first,
+                              session.editingTemplate?.elements.contains(where: { $0.id == id }) == true {
+                        elementInspector(elementId: id)
+                    } else {
+                        Text(L10n.ui("从画布或上方列表选中元素以编辑属性；⌘点击可多选"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Divider()
+                    pdfRulesSection
                 }
-                Divider()
-                elementListSection
-                Divider()
-                pdfRulesSection
+                .padding()
             }
-            .padding()
         }
     }
 
@@ -599,6 +642,81 @@ struct MovieTicketTemplateView: View {
                 Text(L10n.ui("打印结束后再走纸再切刀；数值越小票尾越短，过小可能裁到内容。"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+
+                if session.backgroundImage != nil {
+                    Divider()
+                    Text(L10n.ui("背景图位置")).font(.subheadline.weight(.semibold))
+                    HStack {
+                        labeled(L10n.ui("X")) {
+                            NumericStepperField(
+                                value: Double(session.editingTemplate?.backgroundOffsetX ?? 0),
+                                range: -600...600,
+                                step: 1
+                            ) { v in
+                                session.editingTemplate?.backgroundOffsetX = CGFloat(v)
+                                session.markEditingDirty()
+                            }
+                        }
+                        labeled(L10n.ui("Y")) {
+                            NumericStepperField(
+                                value: Double(session.editingTemplate?.backgroundOffsetY ?? 0),
+                                range: -600...600,
+                                step: 1
+                            ) { v in
+                                session.editingTemplate?.backgroundOffsetY = CGFloat(v)
+                                session.markEditingDirty()
+                            }
+                        }
+                    }
+                    labeled(L10n.ui("缩放 %")) {
+                        HStack(spacing: 8) {
+                            TextField(
+                                "",
+                                value: Binding(
+                                    get: {
+                                        session.editingTemplate?.backgroundScalePercent ?? 100
+                                    },
+                                    set: { v in
+                                        let p = min(
+                                            SequenceLogoItem.maxScalePercent,
+                                            max(SequenceLogoItem.minScalePercent, v.rounded())
+                                        )
+                                        session.editingTemplate?.backgroundScalePercent = p
+                                        session.markEditingDirty()
+                                    }
+                                ),
+                                format: .number.precision(.fractionLength(0))
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 56)
+                            Text("%")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Stepper(
+                                "",
+                                value: Binding(
+                                    get: {
+                                        session.editingTemplate?.backgroundScalePercent ?? 100
+                                    },
+                                    set: { v in
+                                        let p = min(
+                                            SequenceLogoItem.maxScalePercent,
+                                            max(SequenceLogoItem.minScalePercent, v)
+                                        )
+                                        session.editingTemplate?.backgroundScalePercent = p
+                                        session.markEditingDirty()
+                                    }
+                                ),
+                                in: SequenceLogoItem.minScalePercent...SequenceLogoItem.maxScalePercent,
+                                step: 5
+                            )
+                            .labelsHidden()
+                        }
+                    }
+                    Text(L10n.ui("以画布左上角为原点平移背景；缩放以左上角为锚点。"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -673,21 +791,25 @@ struct MovieTicketTemplateView: View {
             if elements.isEmpty {
                 Text(L10n.ui("暂无元素")).font(.caption).foregroundStyle(.secondary)
             } else {
-                ForEach(elements) { el in
-                    Button {
-                        selectElementWithModifiers(el.id)
-                    } label: {
-                        HStack {
-                            Circle().fill(accent(for: el)).frame(width: 8, height: 8)
-                            Text(elementTitle(el)).lineLimit(1)
-                            Spacer()
-                            if selectedElementIds.contains(el.id) {
-                                Image(systemName: "checkmark.circle.fill")
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(elements) { el in
+                            Button {
+                                selectElementWithModifiers(el.id)
+                            } label: {
+                                HStack {
+                                    Circle().fill(accent(for: el)).frame(width: 8, height: 8)
+                                    Text(elementTitle(el)).lineLimit(1)
+                                    Spacer()
+                                    if selectedElementIds.contains(el.id) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                    }
+                                }
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
                         }
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -767,8 +889,86 @@ struct MovieTicketTemplateView: View {
                             .foregroundStyle(.secondary)
                     }
                 } else {
-                    let isBarcodeOrQR = el.fieldKind == .barcode || el.fieldKind == .qrCode
-                    if isBarcodeOrQR {
+                    if el.fieldKind == .qrCode {
+                        let paperW = session.editingTemplate?.paperSize.width ?? 302
+                        let dots = appState.settings.printerConfig.dotsPerLine
+                        let side = max(el.frame.width, el.frame.height)
+                        let printDots = MovieTicketIMAXESCPOS.qrPrintSizeDots(
+                            sidePoints: side,
+                            paperWidth: paperW,
+                            dotsPerLine: dots
+                        )
+                        labeled(L10n.ui("内容来源")) {
+                            Picker("", selection: Binding(
+                                get: {
+                                    session.editingTemplate?.elements
+                                        .first(where: { $0.id == elementId })?.codeContentSource
+                                        ?? .serialNumber
+                                },
+                                set: { v in
+                                    updateElement(id: elementId) { $0.codeContentSource = v }
+                                }
+                            )) {
+                                ForEach(MovieTicketCodeContentSource.allCases) { src in
+                                    Text(src.displayName).tag(src)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                        }
+                        Text(
+                            (session.editingTemplate?.elements
+                                .first(where: { $0.id == elementId })?.codeContentSource
+                                ?? .serialNumber) == .custom
+                            ? L10n.ui("主页面将出现「二维码内容」输入框。")
+                            : L10n.ui("使用主页面流水号（若填写了 booking code 则优先）。")
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        labeled(L10n.ui("二维码边长")) {
+                            NumericStepperField(
+                                value: Double(side),
+                                range: 40...280,
+                                step: 4
+                            ) { v in
+                                updateElement(id: elementId) { el in
+                                    let s = CGFloat(v)
+                                    el.frame.width = s
+                                    el.frame.height = s
+                                }
+                            }
+                        }
+                        Text("\(L10n.ui("打印约")) \(printDots) \(L10n.ui("点（正方形；画布拖角缩放会同步为正方形）"))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } else if el.fieldKind == .barcode {
+                        labeled(L10n.ui("内容来源")) {
+                            Picker("", selection: Binding(
+                                get: {
+                                    session.editingTemplate?.elements
+                                        .first(where: { $0.id == elementId })?.codeContentSource
+                                        ?? .serialNumber
+                                },
+                                set: { v in
+                                    updateElement(id: elementId) { $0.codeContentSource = v }
+                                }
+                            )) {
+                                ForEach(MovieTicketCodeContentSource.allCases) { src in
+                                    Text(src.displayName).tag(src)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                        }
+                        Text(
+                            (session.editingTemplate?.elements
+                                .first(where: { $0.id == elementId })?.codeContentSource
+                                ?? .serialNumber) == .custom
+                            ? L10n.ui("主页面将出现「条码内容」输入框。")
+                            : L10n.ui("使用主页面流水号生成条码。")
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                         HStack {
                             labeled(L10n.ui("宽")) {
                                 NumericStepperField(
@@ -789,16 +989,12 @@ struct MovieTicketTemplateView: View {
                                 }
                             }
                         }
-                        Text(el.fieldKind == .barcode
-                             ? L10n.ui("条码高度由上方「高」控制，会随保存保留；与文字 1×/2×/3× 无关。")
-                             : L10n.ui("二维码尺寸由宽高控制。"))
+                        Text(L10n.ui("条码高度由上方「高」控制，会随保存保留；与文字 1×/2×/3× 无关。"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     } else {
-                        // Print scale first — this is what Orpheum/Ritz actually emit (GS !).
-                        let printScale = MovieTicketRitzESCPOS.printScale(
-                            fontSize: el.fontSize, boxHeight: el.frame.height
-                        )
+                        // Print scale first — independent of the element box (print region).
+                        let printScale = MovieTicketRitzESCPOS.printScale(for: el)
                         Text("\(L10n.ui("当前打印字号")) \(printScale.width)×\(printScale.height)")
                             .font(.headline)
                         labeled(L10n.ui("打印宽")) {
@@ -823,7 +1019,7 @@ struct MovieTicketTemplateView: View {
                                 }
                             }
                         }
-                        Text(L10n.ui("「宽」= Cinema 旁反色黑框总宽度；「打印宽」= 黑框内数字倍率。改完请打开打印预览。"))
+                        Text(L10n.ui("打印宽/高只改字号倍率；元素框宽高只控制打印区域（裁切/换行），互不影响。"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
 
@@ -834,9 +1030,7 @@ struct MovieTicketTemplateView: View {
                                     range: 12...2000,
                                     step: 1
                                 ) { v in
-                                    updateElement(id: elementId) { el in
-                                        applyBoxWidthDrivingPrintScale(&el, requestedWidth: CGFloat(v))
-                                    }
+                                    updateElement(id: elementId) { $0.frame.width = CGFloat(v) }
                                 }
                             }
                             labeled(L10n.ui("高")) {
@@ -849,15 +1043,32 @@ struct MovieTicketTemplateView: View {
                                 }
                             }
                         }
-                        Text(L10n.ui("宽高可独立调整（非等比例）"))
+                        Text(L10n.ui("宽高=打印区域；可用「对齐打印尺寸」把框收到当前字高。"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
-                    if !isBarcodeOrQR {
+                    if el.fieldKind != .barcode && el.fieldKind != .qrCode {
                         Toggle(L10n.ui("粗体"), isOn: Binding(
                             get: { elementValue(id: elementId, \.isBold, default: false) },
                             set: { v in updateElement(id: elementId) { $0.isBold = v } }
                         ))
+                        labeled(L10n.ui("字间距")) {
+                            Stepper(
+                                "\(elementValue(id: elementId, \.characterSpacing, default: 0)) \(L10n.ui("点"))",
+                                value: Binding(
+                                    get: { elementValue(id: elementId, \.characterSpacing, default: 0) },
+                                    set: { v in
+                                        updateElement(id: elementId) {
+                                            $0.characterSpacing = MovieTicketPrintMetrics.clampedCharacterSpacing(v)
+                                        }
+                                    }
+                                ),
+                                in: 0...32
+                            )
+                        }
+                        Text(L10n.ui("打印时使用 ESC/POS 字间距（点）；0 为默认紧排。改完请打开打印预览核对。"))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
                     labeled(L10n.ui("对齐")) {
                         Picker("", selection: Binding(
@@ -877,15 +1088,23 @@ struct MovieTicketTemplateView: View {
                             set: { v in updateElement(id: elementId) { $0.isInverted = v } }
                         ))
                     }
-                    if el.fieldKind == .movieTitle {
-                        Toggle(L10n.ui("片名限制单行（超出隐藏）"), isOn: Binding(
+                    if el.kind == .textBox
+                        || el.kind == .currentDate
+                        || el.kind == .currentTime
+                        || (el.kind == .fieldPlaceholder && el.fieldKind.map { ![.barcode, .qrCode].contains($0) } ?? false) {
+                        Toggle(L10n.ui("单行裁切（超出框不打印）"), isOn: Binding(
                             get: {
                                 session.editingTemplate?.elements
-                                    .first(where: { $0.id == elementId })?.singleLineClip != false
+                                    .first(where: { $0.id == elementId })?.singleLineClip == true
                             },
                             set: { v in updateElement(id: elementId) { $0.singleLineClip = v } }
                         ))
-                        Text(L10n.ui("开启后，片名只显示一行，超出元素框的部分不打印"))
+                        Text(
+                            (session.editingTemplate?.elements
+                                .first(where: { $0.id == elementId })?.singleLineClip == true)
+                            ? L10n.ui("开启：只打一行，超出元素框宽度的文字不打印。关闭：在框内自动换行，超出高度的行不打印。")
+                            : L10n.ui("关闭：在元素框内自动换行；超出框高度的行不打印。开启则为单行裁切。")
+                        )
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -928,11 +1147,26 @@ struct MovieTicketTemplateView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     }
                     if el.kind == .textBox {
-                        TextField(L10n.ui("文字内容"), text: Binding(
-                            get: { elementValue(id: elementId, \.content, default: "") },
-                            set: { v in updateElement(id: elementId) { $0.content = v } }
-                        ))
-                        .textFieldStyle(.roundedBorder)
+                        labeled(L10n.ui("文字内容")) {
+                            TextEditor(text: Binding(
+                                get: { elementValue(id: elementId, \.content, default: "") },
+                                set: { v in updateElement(id: elementId, recordUndo: false) { $0.content = v } }
+                            ))
+                            .font(.body)
+                            .scrollContentBackground(.hidden)
+                            .padding(6)
+                            .frame(minHeight: 88, maxHeight: 160)
+                            .background(Color(nsColor: .textBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
+                            )
+                        }
+                        Text(L10n.ui("可直接回车换行；关闭「单行裁切」时也会按元素框宽度自动折行打印。"))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     if el.kind == .currentDate || el.fieldKind == .showDate {
                         Picker(L10n.ui("日期格式"), selection: Binding(
@@ -1229,9 +1463,33 @@ struct MovieTicketTemplateView: View {
         }
     }
 
-    /// Short label shown inside placeholder boxes (not a print-style preview).
+    /// Label / preview text inside canvas boxes.
     private func elementPlaceholderLabel(_ el: MovieTicketElement) -> String {
-        "[\(elementTitle(el))]"
+        if el.kind == .textBox {
+            let t = el.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? "[\(L10n.ui("文字"))]" : el.content
+        }
+        return "[\(elementTitle(el))]"
+    }
+
+    /// Canvas preview for text boxes using the same wrap/clip as ESC/POS print.
+    private func canvasPrintAccurateText(_ el: MovieTicketElement, paper: CGSize) -> String {
+        let raw = el.content
+        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "[\(L10n.ui("文字"))]"
+        }
+        let config = appState.settings.printerConfig
+        let scale = MovieTicketRitzESCPOS.printScale(for: el)
+        let lines = MovieTicketPrintMetrics.fitTextToElementBox(
+            raw,
+            frame: el.frame,
+            paperWidth: paper.width,
+            config: config,
+            widthScale: scale.width,
+            heightScale: scale.height,
+            singleLineClip: el.singleLineClip == true
+        )
+        return lines.joined(separator: "\n")
     }
 
     private func accent(for el: MovieTicketElement) -> Color {
@@ -1267,90 +1525,19 @@ struct MovieTicketTemplateView: View {
     private func setPrintWidthScale(elementId: UUID, level: Int) {
         let w = max(1, min(3, level))
         updateElement(id: elementId) { el in
-            applyPrintWidthScale(w, to: &el)
+            el.fontSize = MovieTicketPrintMetrics.fontSize(forWidthScale: w)
+            // Keep height scale legal relative to the new width (clamp rule).
+            let currentH = el.printHeightScale
+                ?? MovieTicketRitzESCPOS.printScale(for: el).height
+            el.printHeightScale = max(w, min(min(3, currentH), w + 1))
         }
     }
 
     private func setPrintHeightScale(elementId: UUID, level: Int) {
-        let paperW = session.editingTemplate?.paperSize.width ?? 302
-        let dots = appState.settings.printerConfig.dotsPerLine
         updateElement(id: elementId) { el in
-            let currentW = MovieTicketRitzESCPOS.printScale(
-                fontSize: el.fontSize, boxHeight: el.frame.height
-            ).width
+            let currentW = MovieTicketRitzESCPOS.printScale(for: el).width
             let h = max(1, min(3, max(level, currentW)))
-            el.frame.height = MovieTicketPrintMetrics.lineHeightPoints(
-                heightScale: h, paperWidth: paperW, dotsPerLine: dots
-            )
-        }
-    }
-
-    private func applyPrintWidthScale(_ level: Int, to el: inout MovieTicketElement) {
-        let paper = session.editingTemplate?.paperSize ?? CGSize(width: 302, height: 400)
-        let config = appState.settings.printerConfig
-        let fs = MovieTicketPrintMetrics.fontSize(forWidthScale: level)
-        el.fontSize = fs
-        let scale = MovieTicketRitzESCPOS.printScale(fontSize: fs, boxHeight: el.frame.height)
-        el.frame.height = MovieTicketPrintMetrics.lineHeightPoints(
-            heightScale: scale.height,
-            paperWidth: paper.width,
-            dotsPerLine: config.dotsPerLine
-        )
-        let cols = MovieTicketPrintMetrics.estimatedTextColumns(for: el)
-        var f = el.frame
-        f.width = MovieTicketPrintMetrics.inkWidthPoints(
-            columns: cols,
-            widthScale: scale.width,
-            paperWidth: paper.width,
-            dotsPerLine: config.dotsPerLine,
-            columnsPerLine: config.columnsPerLine
-        )
-        if f.x + f.width > paper.width {
-            f.x = max(0, paper.width - f.width)
-        }
-        el.frame = f.clamped(to: paper, minSize: CGSize(width: 12, height: 12))
-    }
-
-    private func applyBoxWidthDrivingPrintScale(
-        _ el: inout MovieTicketElement,
-        requestedWidth: CGFloat
-    ) {
-        let paper = session.editingTemplate?.paperSize ?? CGSize(width: 302, height: 400)
-        let config = appState.settings.printerConfig
-        var f = el.frame
-        f.width = requestedWidth
-        if f.x + f.width > paper.width {
-            f.x = max(0, paper.width - f.width)
-        }
-        el.frame = f.clamped(to: paper, minSize: CGSize(width: 12, height: 12))
-        // Hall black badge width tracks frame.width directly (Orpheum invert pad).
-        // Do not remap 「宽」→ GS ! for hall — use 「打印宽」 for that.
-        if el.fieldKind == .hall { return }
-        let cols = MovieTicketPrintMetrics.estimatedTextColumns(for: el)
-        let wScale = MovieTicketPrintMetrics.widthScale(
-            fromFrameWidth: el.frame.width,
-            textColumns: cols,
-            paperWidth: paper.width,
-            dotsPerLine: config.dotsPerLine,
-            columnsPerLine: config.columnsPerLine
-        )
-        el.fontSize = MovieTicketPrintMetrics.fontSize(forWidthScale: wScale)
-        let scale = MovieTicketRitzESCPOS.printScale(
-            fontSize: el.fontSize, boxHeight: el.frame.height
-        )
-        el.frame.height = MovieTicketPrintMetrics.lineHeightPoints(
-            heightScale: scale.height,
-            paperWidth: paper.width,
-            dotsPerLine: config.dotsPerLine
-        )
-    }
-
-    /// After canvas resize ends, map box width → print width scale (hall: frame only).
-    private func syncPrintScaleFromBoxWidth(id: UUID) {
-        guard let el = session.editingTemplate?.elements.first(where: { $0.id == id }) else { return }
-        if el.kind == .logo || el.fieldKind == .barcode || el.fieldKind == .qrCode { return }
-        updateElement(id: id, recordUndo: true) { el in
-            applyBoxWidthDrivingPrintScale(&el, requestedWidth: el.frame.width)
+            el.printHeightScale = max(currentW, min(min(3, h), currentW + 1))
         }
     }
 
@@ -1371,14 +1558,17 @@ struct MovieTicketTemplateView: View {
                 && !edited.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             guard sameField || sameLabel else { continue }
             template.elements[i].fontSize = edited.fontSize
+            template.elements[i].printHeightScale = edited.printHeightScale
             template.elements[i].frame.width = edited.frame.width
             template.elements[i].frame.height = edited.frame.height
             template.elements[i].isBold = edited.isBold
             template.elements[i].alignment = edited.alignment
+            template.elements[i].characterSpacing = edited.characterSpacing
             template.elements[i].isInverted = edited.isInverted
             template.elements[i].singleLineClip = edited.singleLineClip
             template.elements[i].hallDisplayMode = edited.hallDisplayMode
             template.elements[i].hallNumberPrefix = edited.hallNumberPrefix
+            template.elements[i].codeContentSource = edited.codeContentSource
         }
     }
 
@@ -1513,19 +1703,12 @@ struct MovieTicketTemplateView: View {
         }
         guard !groupDragOrigins.isEmpty, var t = session.editingTemplate else { return }
 
-        func snap(_ value: CGFloat) -> CGFloat {
-            guard gridEnabled, gridSize > 0 else { return value }
-            return (value / gridSize).rounded() * gridSize
-        }
-
-        let anchorOrigin = groupDragOrigins[anchorId]
-            ?? groupDragOrigins[lastSelectedId ?? anchorId]
-            ?? groupDragOrigins.values.first!
-        let proposedDx = snap(anchorOrigin.x + translation.width) - anchorOrigin.x
-        let proposedDy = snap(anchorOrigin.y + translation.height) - anchorOrigin.y
-
-        var dx = proposedDx
-        var dy = proposedDy
+        // Live drag uses raw pointer deltas (1pt steps). Grid snap applies on release.
+        let paperDelta = CGSize(width: translation.width, height: translation.height)
+        _ = gridEnabled
+        _ = gridSize
+        var dx = paperDelta.width
+        var dy = paperDelta.height
         for (id, origin) in groupDragOrigins {
             guard let el = t.elements.first(where: { $0.id == id }), !el.isLocked else { continue }
             dx = min(dx, paper.width - origin.width - origin.x)
@@ -1547,6 +1730,24 @@ struct MovieTicketTemplateView: View {
     }
 
     private func endGroupTranslate() {
+        // Snap to grid once on release (precise live drag, tidy final placement).
+        if let t0 = session.editingTemplate,
+           t0.gridEnabled,
+           t0.gridSize > 0,
+           !selectedElementIds.isEmpty,
+           !NSEvent.modifierFlags.contains(.option) {
+            let grid = t0.gridSize
+            var t = t0
+            let paper = CGSize(width: t.paperSize.width, height: t.canvasHeight)
+            for i in t.elements.indices where selectedElementIds.contains(t.elements[i].id) && !t.elements[i].isLocked {
+                var f = t.elements[i].frame
+                f.x = (f.x / grid).rounded() * grid
+                f.y = (f.y / grid).rounded() * grid
+                t.elements[i].frame = f.clamped(to: paper, minSize: CGSize(width: 12, height: 12))
+            }
+            session.editingTemplate = t
+            session.markEditingDirty()
+        }
         groupDragOrigins = [:]
     }
 
@@ -1643,16 +1844,38 @@ struct MovieTicketTemplateView: View {
         let defaultH = MovieTicketPrintMetrics.lineHeightPoints(
             heightScale: 1, paperWidth: paperW, dotsPerLine: dots
         )
+        let isTitle = kind == .movieTitle
+        let fieldWidth: CGFloat = {
+            if kind == .qrCode { return 140 }
+            if kind == .barcode { return 200 }
+            // Title needs near-full paper width; a 160pt box at 2–3× clips to ~8 chars.
+            if isTitle { return max(160, paperW - 24) }
+            return 160
+        }()
+        let fieldHeight: CGFloat = {
+            if kind == .qrCode { return 140 }
+            if kind == .barcode { return 56 }
+            if isTitle {
+                return MovieTicketPrintMetrics.lineHeightPoints(
+                    heightScale: 2, paperWidth: paperW, dotsPerLine: dots
+                )
+            }
+            return defaultH
+        }()
         let el = MovieTicketElement(
             kind: .fieldPlaceholder,
             frame: SequencePlaceholderFrame(
                 x: 12,
                 y: 200,
-                width: kind == .barcode || kind == .qrCode ? 200 : 160,
-                height: kind == .barcode || kind == .qrCode ? 56 : defaultH
+                width: fieldWidth,
+                height: fieldHeight
             ),
             zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1,
-            fieldKind: kind
+            fontSize: isTitle ? 14 : AttributedTextView.defaultFontSize,
+            isBold: isTitle,
+            fieldKind: kind,
+            // New titles wrap by default so a short box cannot silently eat the name.
+            singleLineClip: isTitle ? false : nil
         )
         t.elements.append(el)
         session.editingTemplate = t
@@ -1665,9 +1888,11 @@ struct MovieTicketTemplateView: View {
         pushUndoSnapshot()
         let el = MovieTicketElement(
             kind: .textBox,
-            frame: SequencePlaceholderFrame(x: 12, y: 20, width: 160, height: 28),
+            frame: SequencePlaceholderFrame(x: 12, y: 20, width: 200, height: 48),
             zIndex: (t.elements.map(\.zIndex).max() ?? 0) + 1,
-            content: L10n.ui("文本")
+            content: L10n.ui("文本"),
+            // Free text wraps in the print region by default.
+            singleLineClip: false
         )
         t.elements.append(el)
         session.editingTemplate = t

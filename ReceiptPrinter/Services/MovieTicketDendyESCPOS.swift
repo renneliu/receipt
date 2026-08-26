@@ -15,6 +15,7 @@ enum MovieTicketDendyESCPOS {
         var heightScale: Int
         var bold: Bool
         var align: ESCPOSAlign
+        var characterSpacing: Int = 0
     }
 
     private struct Fields {
@@ -248,7 +249,13 @@ enum MovieTicketDendyESCPOS {
             }
             return text
         }()
-        let qrPayload = booking.isEmpty ? (serial.isEmpty ? codeDigits : serial) : booking
+        let qrPayload: String = {
+            if let qrEl, (qrEl.codeContentSource ?? .serialNumber) == .custom {
+                let raw = qrEl.resolvedCodePayload(from: draft)
+                return raw.isEmpty ? "0" : raw
+            }
+            return booking.isEmpty ? (serial.isEmpty ? codeDigits : serial) : booking
+        }()
 
         let paperW = max(1, template.paperSize.width)
         let qrSize: Int = {
@@ -404,6 +411,7 @@ enum MovieTicketDendyESCPOS {
     private static func apply(_ builder: ESCPOSBuilder, _ style: LineStyle) {
         builder.align(style.align)
             .bold(style.bold)
+            .characterSpacing(UInt8(MovieTicketPrintMetrics.clampedCharacterSpacing(style.characterSpacing)))
             .applyMagnification(width: style.widthScale, height: style.heightScale)
     }
 
@@ -416,21 +424,16 @@ enum MovieTicketDendyESCPOS {
         style: LineStyle
     ) {
         let cell = MovieTicketPrintMetrics.fontACellDots
-        let wScale = CGFloat(max(1, style.widthScale))
         let hScale = CGFloat(max(1, style.heightScale))
         let fontSize = cell.height * hScale * 0.72
         let font = style.bold
             ? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
             : NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor.black
-        ]
-        let ns = text as NSString
-        let natural = ns.size(withAttributes: attrs)
-        let targetWidth = CGFloat(ReceiptTextLayout.displayWidth(text)) * cell.width * wScale
-        let scaleX = natural.width > 0.5 ? targetWidth / natural.width : 1
-        let drawWidth = natural.width * scaleX
+        let drawWidth = MovieTicketPrintMetrics.inkWidthDots(
+            text: text,
+            widthScale: style.widthScale,
+            characterSpacing: style.characterSpacing
+        )
         let x: CGFloat = {
             switch style.align {
             case .left: return 0
@@ -439,13 +442,15 @@ enum MovieTicketDendyESCPOS {
             }
         }()
 
-        NSGraphicsContext.saveGraphicsState()
-        let t = NSAffineTransform()
-        t.translateX(by: x, yBy: y)
-        t.scaleX(by: scaleX, yBy: 1)
-        t.concat()
-        ns.draw(at: .zero, withAttributes: attrs)
-        NSGraphicsContext.restoreGraphicsState()
+        MovieTicketPrintMetrics.drawSpacedFontAText(
+            text,
+            at: CGPoint(x: x, y: y),
+            font: font,
+            color: .black,
+            widthScale: style.widthScale,
+            characterSpacing: style.characterSpacing,
+            contextAlreadyScaled: false
+        )
 
         y += cell.height * hScale
     }
@@ -469,15 +474,17 @@ enum MovieTicketDendyESCPOS {
                 widthScale: fallbackW,
                 heightScale: fallbackH,
                 bold: fallbackBold,
-                align: .center
+                align: .center,
+                characterSpacing: 0
             )
         }
-        let scale = MovieTicketRitzESCPOS.printScale(fontSize: el.fontSize, boxHeight: el.frame.height)
+        let scale = MovieTicketRitzESCPOS.printScale(for: el)
         return LineStyle(
             widthScale: scale.width,
             heightScale: scale.height,
             bold: el.isBold,
-            align: escAlign(el.alignment)
+            align: escAlign(el.alignment),
+            characterSpacing: MovieTicketPrintMetrics.clampedCharacterSpacing(el.characterSpacing)
         )
     }
 
@@ -486,7 +493,8 @@ enum MovieTicketDendyESCPOS {
             widthScale: max(a.widthScale, b.widthScale),
             heightScale: max(a.heightScale, b.heightScale),
             bold: a.bold || b.bold,
-            align: a.align
+            align: a.align,
+            characterSpacing: max(a.characterSpacing, b.characterSpacing)
         )
     }
 

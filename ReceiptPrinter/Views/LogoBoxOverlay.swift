@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 
 /// Draggable / resizable logo box on the sequence-print canvas (above body, under placeholders).
+/// Uses the same bottom-right resize handle as `PlaceholderBoxOverlay` (macOS-reliable).
 struct LogoBoxOverlay: View {
     var title: String = "Logo"
     var image: NSImage
@@ -22,9 +23,14 @@ struct LogoBoxOverlay: View {
     /// When set, position drag reports translation from gesture start (parent moves selection).
     var onTranslateChanged: ((CGSize) -> Void)? = nil
     var onTranslateEnded: (() -> Void)? = nil
+    /// When set, drag/resize use this named coordinate space (avoids center-position feedback loop).
+    var gestureCoordinateSpaceName: String? = nil
 
     @State private var dragStart: SequencePlaceholderFrame?
     @State private var resizeStart: SequencePlaceholderFrame?
+    @State private var isResizing = false
+
+    private let minBox = CGSize(width: 36, height: 24)
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -76,34 +82,46 @@ struct LogoBoxOverlay: View {
                 .padding(4)
 
                 VStack {
-                    Spacer()
+                    Spacer(minLength: 0)
                     HStack {
-                        Spacer()
+                        Spacer(minLength: 0)
                         Circle()
                             .fill(Color.orange)
                             .frame(width: 10, height: 10)
-                            .padding(2)
+                            .padding(6)
+                            .contentShape(Rectangle())
                             .gesture(resizeGesture)
+                            .help(L10n.ui("拖动右下角调整大小"))
                     }
                 }
             }
         }
-        .frame(width: frame.width, height: frame.height)
+        .frame(width: frame.width, height: frame.height, alignment: .topLeading)
         .contentShape(Rectangle())
-        .position(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+        .offset(x: frame.x, y: frame.y)
         .gesture(dragGesture)
-        .onTapGesture {
-            if let onSelectRequest {
-                onSelectRequest(NSEvent.modifierFlags.contains(.command))
-            } else {
-                isSelected = true
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                if let onSelectRequest {
+                    onSelectRequest(NSEvent.modifierFlags.contains(.command))
+                } else {
+                    isSelected = true
+                }
             }
+        )
+    }
+
+    private func makeDragGesture(minimumDistance: CGFloat) -> DragGesture {
+        if let name = gestureCoordinateSpaceName {
+            return DragGesture(minimumDistance: minimumDistance, coordinateSpace: .named(name))
         }
+        return DragGesture(minimumDistance: minimumDistance)
     }
 
     private var dragGesture: some Gesture {
-        DragGesture()
+        makeDragGesture(minimumDistance: 3)
             .onChanged { value in
+                if isResizing || resizeStart != nil { return }
                 if dragStart == nil {
                     if let onSelectRequest {
                         if !isSelected { onSelectRequest(false) }
@@ -122,7 +140,7 @@ struct LogoBoxOverlay: View {
                 var next = start
                 next.x = start.x + value.translation.width
                 next.y = start.y + value.translation.height
-                frame = next.clamped(to: paperSize, minSize: CGSize(width: 36, height: 24))
+                frame = next.clamped(to: paperSize, minSize: minBox)
             }
             .onEnded { _ in
                 guard dragStart != nil else { return }
@@ -137,20 +155,25 @@ struct LogoBoxOverlay: View {
     }
 
     private var resizeGesture: some Gesture {
-        DragGesture()
+        makeDragGesture(minimumDistance: 1)
             .onChanged { value in
                 if resizeStart == nil {
+                    isResizing = true
                     resizeStart = frame
+                    dragStart = nil
                     onInteractionChanged?(true)
                 }
                 guard let start = resizeStart else { return }
                 var next = start
-                next.width = start.width + value.translation.width
-                next.height = start.height + value.translation.height
-                frame = next.clamped(to: paperSize, minSize: CGSize(width: 36, height: 24))
+                next.width = max(minBox.width, start.width + value.translation.width)
+                next.height = max(minBox.height, start.height + value.translation.height)
+                next.x = start.x
+                next.y = start.y
+                frame = next.clamped(to: paperSize, minSize: minBox)
             }
             .onEnded { _ in
                 resizeStart = nil
+                isResizing = false
                 onInteractionChanged?(false)
                 onFrameChanged?()
             }

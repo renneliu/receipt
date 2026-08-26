@@ -119,6 +119,7 @@ final class ESCPOSBuilder {
         underline(false)
         reversePrint(false)
         bold(false)
+        characterSpacing(0)
         applyTextSize(.normal)
         align(.left)
         return self
@@ -148,6 +149,14 @@ final class ESCPOSBuilder {
         return self
     }
 
+    /// ESC $ — absolute horizontal print position in dots (from left edge).
+    @discardableResult
+    func setAbsoluteHorizontalPosition(dots: Int) -> Self {
+        let d = max(0, min(dots, max(0, config.dotsPerLine - 1)))
+        data.append(contentsOf: [0x1B, 0x24, UInt8(d & 0xFF), UInt8((d >> 8) & 0xFF)])
+        return self
+    }
+
     @discardableResult
     func resetLineSpacing() -> Self {
         data.append(contentsOf: [0x1B, 0x32])
@@ -163,6 +172,13 @@ final class ESCPOSBuilder {
     @discardableResult
     func bold(_ on: Bool) -> Self {
         data.append(contentsOf: [0x1B, 0x45, on ? 1 : 0])
+        return self
+    }
+
+    /// Right-side character spacing in dots (`ESC SP n`). 0 = default tight spacing.
+    @discardableResult
+    func characterSpacing(_ dots: UInt8) -> Self {
+        data.append(contentsOf: [0x1B, 0x20, dots])
         return self
     }
 
@@ -220,7 +236,7 @@ final class ESCPOSBuilder {
                 appendEncoded(line)
             }
             if index < lines.count - 1 {
-                data.append(0x0A)
+                appendLineFeed()
             }
         }
         return self
@@ -302,8 +318,15 @@ final class ESCPOSBuilder {
 
     @discardableResult
     func newline(_ count: Int = 1) -> Self {
-        for _ in 0..<count { data.append(0x0A) }
+        for _ in 0..<count { appendLineFeed() }
         return self
+    }
+
+    /// LF + clear Chinese-mode cache. POS-80 can drop `FS &` across line feeds
+    /// (esp. under `GS !` double); next CJK/mixed line must re-assert (diag 20260825-183833).
+    private func appendLineFeed() {
+        data.append(0x0A)
+        chineseModeActive = false
     }
 
     @discardableResult
@@ -340,7 +363,7 @@ final class ESCPOSBuilder {
             } else {
                 appendEncoded(leftPart)
             }
-            data.append(0x0A)
+            appendLineFeed()
         }
         return self
     }
@@ -416,7 +439,7 @@ final class ESCPOSBuilder {
             align(.left)
             bold(leftBold).applyMagnification(width: lw, height: lh)
             appendEncoded(left)
-            data.append(0x0A)
+            appendLineFeed()
             resetStyle()
 
             align(.right)
@@ -428,7 +451,7 @@ final class ESCPOSBuilder {
                 appendEncoded(highlightText)
                 reversePrint(false)
             }
-            data.append(0x0A)
+            appendLineFeed()
             resetStyle()
             return self
         }
@@ -446,7 +469,7 @@ final class ESCPOSBuilder {
             appendEncoded(highlightText)
             reversePrint(false)
         }
-        data.append(0x0A)
+        appendLineFeed()
         resetStyle()
         return self
     }
@@ -488,21 +511,26 @@ final class ESCPOSBuilder {
     }
 
     @discardableResult
-    func qrCodeImage(_ content: String, maxWidth: Int? = nil) -> Self {
+    func qrCodeImage(_ content: String, maxWidth: Int? = nil, trailingFeed: Bool = true) -> Self {
         let qrSize = maxWidth ?? min(config.dotsPerLine, 200)
         guard let qrImage = BarcodeGenerator.makeQRCode(content, size: qrSize) else {
             return self
         }
-        return self.image(qrImage, maxWidth: qrSize)
+        return self.image(qrImage, maxWidth: qrSize, trailingFeed: trailingFeed)
     }
 
     @discardableResult
-    func image(_ nsImage: NSImage, maxWidth: Int? = nil, scaleToWidth: Bool = false) -> Self {
+    func image(
+        _ nsImage: NSImage,
+        maxWidth: Int? = nil,
+        scaleToWidth: Bool = false,
+        trailingFeed: Bool = true
+    ) -> Self {
         let targetWidth = maxWidth ?? config.dotsPerLine
         guard let raster = BarcodeGenerator.rasterizeImage(
             nsImage, maxWidth: targetWidth, scaleToWidth: scaleToWidth
         ) else { return self }
-        appendRasterImage(raster)
+        appendRasterImageBanded(raster, bandHeight: raster.height, trailingFeed: trailingFeed)
         return self
     }
 
@@ -513,13 +541,14 @@ final class ESCPOSBuilder {
         _ nsImage: NSImage,
         maxWidth: Int? = nil,
         bandHeight: Int = 160,
-        scaleToWidth: Bool = false
+        scaleToWidth: Bool = false,
+        trailingFeed: Bool = true
     ) -> Self {
         let targetWidth = maxWidth ?? config.dotsPerLine
         guard let raster = BarcodeGenerator.rasterizeImage(
             nsImage, maxWidth: targetWidth, scaleToWidth: scaleToWidth
         ) else { return self }
-        appendRasterImageBanded(raster, bandHeight: max(24, bandHeight), trailingFeed: true)
+        appendRasterImageBanded(raster, bandHeight: max(24, bandHeight), trailingFeed: trailingFeed)
         return self
     }
 

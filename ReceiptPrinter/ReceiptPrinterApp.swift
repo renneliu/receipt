@@ -3,8 +3,16 @@ import Combine
 import SwiftUI
 import UserNotifications
 
+/// Single-window utility: closing the main window quits (App Store Guideline 4).
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+}
+
 @main
 struct ReceiptPrinterApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
 
     var body: some Scene {
@@ -24,6 +32,7 @@ struct ReceiptPrinterApp: App {
                 }
         }
         .commands {
+            // No document-based "New"; this is a single-window utility.
             CommandGroup(replacing: .newItem) {}
         }
     }

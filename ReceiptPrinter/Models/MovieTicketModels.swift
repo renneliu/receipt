@@ -129,6 +129,8 @@ struct MovieTicketDraft: Codable, Equatable {
     var ticketType: String = ""
     var hall: String = ""
     var ticketPrice: String = ""
+    /// Custom QR/barcode payloads keyed by element UUID string (when element uses `.custom` source).
+    var customCodePayloads: [String: String] = [:]
 
     /// Title as printed on the stub (optionally appends mapped classification).
     var printedMovieTitle: String {
@@ -248,7 +250,7 @@ struct MovieTicketDraft: Codable, Equatable {
         case movieTitle, contentRating, printContentRating
         case movieDurationMinutes, adDurationMinutes
         case seatModeUnallocated, seatArea, seatAreas, serialNumber, bookingCode, ticketCount
-        case showDate, showStartTime, ticketType, hall, ticketPrice
+        case showDate, showStartTime, ticketType, hall, ticketPrice, customCodePayloads
     }
 
     init(
@@ -267,7 +269,8 @@ struct MovieTicketDraft: Codable, Equatable {
         showStartTime: Date = Date(),
         ticketType: String = "",
         hall: String = "",
-        ticketPrice: String = ""
+        ticketPrice: String = "",
+        customCodePayloads: [String: String] = [:]
     ) {
         self.movieTitle = movieTitle
         self.contentRating = contentRating
@@ -285,6 +288,7 @@ struct MovieTicketDraft: Codable, Equatable {
         self.ticketType = ticketType
         self.hall = hall
         self.ticketPrice = ticketPrice
+        self.customCodePayloads = customCodePayloads
         syncSeatArrays()
     }
 
@@ -310,6 +314,7 @@ struct MovieTicketDraft: Codable, Equatable {
         ticketType = try c.decodeIfPresent(String.self, forKey: .ticketType) ?? ""
         hall = try c.decodeIfPresent(String.self, forKey: .hall) ?? ""
         ticketPrice = try c.decodeIfPresent(String.self, forKey: .ticketPrice) ?? ""
+        customCodePayloads = try c.decodeIfPresent([String: String].self, forKey: .customCodePayloads) ?? [:]
         syncSeatArrays()
     }
 
@@ -509,6 +514,21 @@ enum MovieTicketFieldKind: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Where QR / barcode payload comes from on the main page.
+enum MovieTicketCodeContentSource: String, Codable, CaseIterable, Identifiable {
+    case serialNumber
+    case custom
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .serialNumber: return L10n.ui("流水号")
+        case .custom: return L10n.ui("自定义")
+        }
+    }
+}
+
 enum MovieTicketElementKind: String, Codable {
     case textBox
     case fieldPlaceholder
@@ -589,6 +609,8 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
     var fontSize: CGFloat = AttributedTextView.defaultFontSize
     var isBold: Bool = false
     var alignment: Int = 0
+    /// Extra right-side character spacing in ESC/POS dots (`ESC SP n`). 0 = default.
+    var characterSpacing: Int = 0
     var isInverted: Bool = false
     var isLocked: Bool = false
     var fieldKind: MovieTicketFieldKind?
@@ -603,22 +625,29 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
     var logoScalePercent: Double = 100
     var logoBaseWidth: CGFloat = 120
     var logoBaseHeight: CGFloat = 60
-    /// When true (used for the movie title): keep the value on a single line and
-    /// clip whatever overflows the element box instead of wrapping to a new line.
-    /// Optional so older saved templates decode unchanged (nil = wrap, legacy).
+    /// When true: keep text on a single line and clip overflow past the element box width.
+    /// When false/nil: wrap within the box width and clip lines that exceed the box height.
+    /// Optional so older saved templates decode unchanged.
     var singleLineClip: Bool? = nil
+    /// Explicit GS ! height magnification (1…3). Independent of the element box (print region).
+    /// `nil` = legacy templates; inferred once from box height then persisted via migration.
+    var printHeightScale: Int? = nil
     /// Hall print shape. `nil` defaults to `.cinemaNumber` for `.hall` elements.
     var hallDisplayMode: MovieTicketHallDisplayMode? = nil
     /// Prefix before the hall number when `hallDisplayMode == .customPrefix`.
     /// Optional so older saved templates (without this key) still decode.
     var hallNumberPrefix: String? = nil
+    /// QR/barcode payload source. `nil` = `.serialNumber` (legacy).
+    var codeContentSource: MovieTicketCodeContentSource? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, kind, frame, zIndex, displayName, content, fontSize, isBold, alignment
+        case characterSpacing
         case isInverted, isLocked, fieldKind, dateFormat, timeFormat
         case rangeStartFormat, rangeEndFormat, rangeConnector, imageFilename
         case logoScalePercent, logoBaseWidth, logoBaseHeight
-        case singleLineClip, hallDisplayMode, hallNumberPrefix
+        case singleLineClip, printHeightScale, hallDisplayMode, hallNumberPrefix
+        case codeContentSource
     }
 
     init(
@@ -631,6 +660,7 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
         fontSize: CGFloat = AttributedTextView.defaultFontSize,
         isBold: Bool = false,
         alignment: Int = 0,
+        characterSpacing: Int = 0,
         isInverted: Bool = false,
         isLocked: Bool = false,
         fieldKind: MovieTicketFieldKind? = nil,
@@ -644,8 +674,10 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
         logoBaseWidth: CGFloat = 120,
         logoBaseHeight: CGFloat = 60,
         singleLineClip: Bool? = nil,
+        printHeightScale: Int? = nil,
         hallDisplayMode: MovieTicketHallDisplayMode? = nil,
-        hallNumberPrefix: String? = nil
+        hallNumberPrefix: String? = nil,
+        codeContentSource: MovieTicketCodeContentSource? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -656,6 +688,7 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
         self.fontSize = fontSize
         self.isBold = isBold
         self.alignment = alignment
+        self.characterSpacing = max(0, min(32, characterSpacing))
         self.isInverted = isInverted
         self.isLocked = isLocked
         self.fieldKind = fieldKind
@@ -669,8 +702,10 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
         self.logoBaseWidth = logoBaseWidth
         self.logoBaseHeight = logoBaseHeight
         self.singleLineClip = singleLineClip
+        self.printHeightScale = printHeightScale.map { max(1, min(3, $0)) }
         self.hallDisplayMode = hallDisplayMode
         self.hallNumberPrefix = hallNumberPrefix
+        self.codeContentSource = codeContentSource
     }
 
     init(from decoder: Decoder) throws {
@@ -684,6 +719,7 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
         fontSize = try c.decodeIfPresent(CGFloat.self, forKey: .fontSize) ?? AttributedTextView.defaultFontSize
         isBold = try c.decodeIfPresent(Bool.self, forKey: .isBold) ?? false
         alignment = try c.decodeIfPresent(Int.self, forKey: .alignment) ?? 0
+        characterSpacing = max(0, min(32, try c.decodeIfPresent(Int.self, forKey: .characterSpacing) ?? 0))
         isInverted = try c.decodeIfPresent(Bool.self, forKey: .isInverted) ?? false
         isLocked = try c.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
         fieldKind = try c.decodeIfPresent(MovieTicketFieldKind.self, forKey: .fieldKind)
@@ -697,8 +733,14 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
         logoBaseWidth = try c.decodeIfPresent(CGFloat.self, forKey: .logoBaseWidth) ?? 120
         logoBaseHeight = try c.decodeIfPresent(CGFloat.self, forKey: .logoBaseHeight) ?? 60
         singleLineClip = try c.decodeIfPresent(Bool.self, forKey: .singleLineClip)
+        if let h = try c.decodeIfPresent(Int.self, forKey: .printHeightScale) {
+            printHeightScale = max(1, min(3, h))
+        } else {
+            printHeightScale = nil
+        }
         hallDisplayMode = try c.decodeIfPresent(MovieTicketHallDisplayMode.self, forKey: .hallDisplayMode)
         hallNumberPrefix = try c.decodeIfPresent(String.self, forKey: .hallNumberPrefix)
+        codeContentSource = try c.decodeIfPresent(MovieTicketCodeContentSource.self, forKey: .codeContentSource)
     }
 
     /// Digits from a hall string (`Screen 2` / `Cinema 1` / `IMAX 1` → `2` / `1` / `1`).
@@ -736,6 +778,25 @@ struct MovieTicketElement: Codable, Identifiable, Equatable {
             return prefix + " " + n
         }
     }
+
+    /// Raw payload for QR/barcode before layout-specific formatting (e.g. barcode digit filter).
+    func resolvedCodePayload(from draft: MovieTicketDraft) -> String {
+        switch codeContentSource ?? .serialNumber {
+        case .custom:
+            let key = id.uuidString
+            return (draft.customCodePayloads[key] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        case .serialNumber:
+            let booking = draft.bookingCode.trimmingCharacters(in: .whitespacesAndNewlines)
+            if fieldKind == .qrCode, !booking.isEmpty { return booking }
+            return draft.serialNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    var usesCustomCodePayload: Bool {
+        (fieldKind == .qrCode || fieldKind == .barcode)
+            && (codeContentSource ?? .serialNumber) == .custom
+    }
 }
 
 struct MovieTicketTemplate: Codable, Identifiable, Equatable {
@@ -749,6 +810,9 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
     var gridSize: CGFloat = 20
     var backgroundImageFilename: String?
     var backgroundScalePercent: Double = 100
+    /// Background image offset in paper points (top-leading origin). Optional for old templates.
+    var backgroundOffsetX: CGFloat? = nil
+    var backgroundOffsetY: CGFloat? = nil
     /// Shown on ticket when main page selects 无特定座位.
     var unallocatedSeatLabel: String = "ADMIT"
     var pdfRuleId: UUID?
@@ -810,6 +874,8 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
             t.pdfRuleId = meta.pdfRuleId
             t.backgroundImageFilename = meta.backgroundImageFilename
             t.backgroundScalePercent = meta.backgroundScalePercent
+            t.backgroundOffsetX = meta.backgroundOffsetX
+            t.backgroundOffsetY = meta.backgroundOffsetY
             t.feedLinesBeforeCut = meta.feedLinesBeforeCut
             return (t, made.logoElementId)
         }
@@ -820,6 +886,8 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
             t.pdfRuleId = meta.pdfRuleId
             t.backgroundImageFilename = meta.backgroundImageFilename
             t.backgroundScalePercent = meta.backgroundScalePercent
+            t.backgroundOffsetX = meta.backgroundOffsetX
+            t.backgroundOffsetY = meta.backgroundOffsetY
             t.feedLinesBeforeCut = meta.feedLinesBeforeCut
             t.unallocatedSeatLabel = meta.unallocatedSeatLabel.isEmpty ? t.unallocatedSeatLabel : meta.unallocatedSeatLabel
             return (t, nil)
@@ -831,6 +899,8 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
             t.pdfRuleId = meta.pdfRuleId
             t.backgroundImageFilename = meta.backgroundImageFilename
             t.backgroundScalePercent = meta.backgroundScalePercent
+            t.backgroundOffsetX = meta.backgroundOffsetX
+            t.backgroundOffsetY = meta.backgroundOffsetY
             t.feedLinesBeforeCut = meta.feedLinesBeforeCut
             t.unallocatedSeatLabel = meta.unallocatedSeatLabel.isEmpty ? t.unallocatedSeatLabel : meta.unallocatedSeatLabel
             return (t, nil)
@@ -841,6 +911,8 @@ struct MovieTicketTemplate: Codable, Identifiable, Equatable {
         t.pdfRuleId = meta.pdfRuleId
         t.backgroundImageFilename = meta.backgroundImageFilename
         t.backgroundScalePercent = meta.backgroundScalePercent
+        t.backgroundOffsetX = meta.backgroundOffsetX
+        t.backgroundOffsetY = meta.backgroundOffsetY
         t.feedLinesBeforeCut = meta.feedLinesBeforeCut
         t.unallocatedSeatLabel = meta.unallocatedSeatLabel.isEmpty ? t.unallocatedSeatLabel : meta.unallocatedSeatLabel
         return (t, nil)
